@@ -1,0 +1,24 @@
+{
+  "name": "hubtel-engineering-harness",
+  "version": "1.3.0",
+  "description": "Hubtel plugin for building and auditing harnesses around AI coding agents.",
+  "author": {
+    "name": "Hubtel Enablement Team",
+    "email": "engineering@hubtel.com"
+  },
+  "keywords": [
+    "hubtel",
+    "harness",
+    "engineering",
+    "workflow",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Hubtel Engineering Harness",
+    "category": "Core Engineering",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
+  }
+}

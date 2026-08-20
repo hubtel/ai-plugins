@@ -1,0 +1,36 @@
+{
+  "name": "hubtel",
+  "interface": {
+    "displayName": "Hubtel"
+  },
+  "plugins": [
+    {
+      "name": "hubtel-docs-as-code",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hubtel-docs-as-code"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering",
+      "description": "Generate, update, validate, or analyze complete DAC-compliant documentation for a Hubtel project",
+      "version": "1.4.0"
+    },
+    {
+      "name": "hubtel-engineering-harness",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hubtel-engineering-harness"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Core Engineering",
+      "description": "Hubtel plugin for building and auditing harnesses around AI coding agents.",
+      "version": "1.3.0"
+    }
+  ]
+}

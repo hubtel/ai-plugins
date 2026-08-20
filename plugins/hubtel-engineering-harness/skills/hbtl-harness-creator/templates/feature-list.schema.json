@@ -1,0 +1,149 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Feature List",
+  "description": "Track task implementation state for agent-driven development. Tasks are the atomic work items created on Azure; they are grouped by featId into features planned by the planning subagent.",
+  "type": "object",
+  "properties": {
+    "sprintPlanner": {
+      "type": "object",
+      "description": "Azure sprint tracking config captured at scaffold. Mandatory: every harness tracks work on Azure.",
+      "required": ["sprintBoardUrl", "parentStory"],
+      "properties": {
+        "sprintBoardUrl": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Azure DevOps sprint board URL captured via get_active_sprint_boards"
+        },
+        "parentStory": {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Parent user story id that tasks are linked under"
+            },
+            "title": {
+              "type": "string",
+              "description": "Parent user story title (optional)"
+            }
+          }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique task identifier (e.g., task-001)",
+            "pattern": "^task-\\d+$"
+          },
+          "featId": {
+            "type": "string",
+            "pattern": "^feat-\\d+$",
+            "description": "The feature this task belongs to (e.g. feat-001). All tasks sharing a featId are part of the same feature, implement one at a time, and commit together. Every task row must have a featId."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-friendly, action-oriented task title — the same one-line actionable deliverable used as the task's bullet in the parent plan's Task summary (`.harness/plans/feat-NNN.md`). Reads as a sentence, not a slug: no robotic phrases (avoid 'Implement X module', 'Add Y component', 'Wire up Z'). Same phrase becomes the Azure task title via `harness_create_tasks`, so board readers see the same actionable sentence everywhere. See AGENTS.md **Write the task row** and `templates/plan.md` → Task summary."
+          },
+          "title": {
+            "type": "string",
+            "description": "Alternative short label (alias for name) — same human-friendly, action-oriented phrasing rules apply."
+          },
+          "description": {
+            "type": "string",
+            "description": "One human-friendly sentence stating what 'done' means for this task — the behaviour a reviewer will see land. Follows the same non-robotic rules as `name`: reads as prose, not a slug or restatement of the title. This is the local row's tracking description only; the Azure task carries the full implementation contract (Target File / Summary / Implementation Guidelines / Code Sample / Reference — see AGENTS.md **Sprint Planner (Azure tasks)** → Task descriptions)."
+          },
+          "verification": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Runnable command that proves this task works"
+          },
+          "requiredTests": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["unit", "integration", "e2e", "karate"]
+            },
+            "description": "Test layers that must pass before marking done. `karate` is Hubtel's service-level E2E framework for backend (.NET/Java) monorepos — see Hubtel dev-docs `pipelines-karate-test` (fetch via engineering MCP get_doc at implementation time)."
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Task IDs that must be done before this one"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["not-started", "in-progress", "verified", "blocked", "done"],
+            "description": "Current implementation state. 'verified' means the task is implemented and its verification passed, but not yet committed (waiting for all tasks in the same featId to be verified before the feature commits together)."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Required when status is done. Must be exactly 'commit <hash>' from the commit that landed this task's feature. Leave empty or omit while in-progress or verified; use description and verification on the row for scope and proof."
+          },
+          "taskId": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "Azure DevOps work-item id from harness_create_tasks (data.succeeded[].azureId). Required on new rows at triage; enforced (required) on in-progress/verified/done rows."
+          },
+          "planFile": {
+            "type": "string",
+            "pattern": "^\\.harness/plans/feat-\\d+\\.md$",
+            "description": "Relative path to the feature's persisted plan file in .harness/plans/ (e.g. .harness/plans/feat-001.md). All tasks sharing a featId point to the same plan file."
+          }
+        },
+        "required": ["id", "featId", "description", "verification", "status"],
+        "anyOf": [{ "required": ["name"] }, { "required": ["title"] }],
+        "allOf": [
+          {
+            "if": {
+              "properties": { "status": { "const": "done" } },
+              "required": ["status"]
+            },
+            "then": {
+              "properties": {
+                "evidence": {
+                  "type": "string",
+                  "pattern": "^commit\\s+[0-9a-f]{7,40}\\s*$",
+                  "description": "Exactly 'commit <hash>' from the commit that landed this task's feature"
+                }
+              },
+              "required": ["evidence"]
+            }
+          },
+          {
+            "if": {
+              "properties": { "status": { "enum": ["in-progress", "verified"] } },
+              "required": ["status"]
+            },
+            "then": {
+              "properties": {
+                "evidence": {
+                  "type": "string",
+                  "maxLength": 0,
+                  "description": "Must be empty while in-progress or verified; commit first (once per feature, when all tasks sharing a featId are verified), then mark done"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "status": { "enum": ["in-progress", "verified", "done"] } },
+              "required": ["status"]
+            },
+            "then": {
+              "required": ["taskId"]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "required": ["sprintPlanner", "tasks"]
+}

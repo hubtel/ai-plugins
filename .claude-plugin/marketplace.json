@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "hubtel",
+  "owner": {
+    "name": "Hubtel Enablement Team",
+    "email": "engineering@hubtel.com"
+  },
+  "metadata": {
+    "description": "Hubtel's plugin marketplace for AI coding agents bundled with curated skills, agents, commands, and MCP servers that encode how Hubtel engineering works.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "hubtel-docs-as-code",
+      "displayName": "Hubtel Docs As Code",
+      "source": "./plugins/hubtel-docs-as-code",
+      "description": "Generate, update, validate, or analyze complete DAC-compliant documentation for a Hubtel project",
+      "version": "1.4.0",
+      "author": {
+        "name": "Hubtel Enablement Team",
+        "email": "engineering@hubtel.com"
+      },
+      "category": "Engineering",
+      "keywords": [
+        "hubtel",
+        "documentation",
+        "dac-compliance"
+      ],
+      "skills": [
+        "./skills/hbtl-dac-generate",
+        "./skills/hbtl-dac-update",
+        "./skills/hbtl-dac-validate",
+        "./skills/hbtl-dac-analyze"
+      ]
+    },
+    {
+      "name": "hubtel-engineering-harness",
+      "displayName": "Hubtel Engineering Harness",
+      "source": "./plugins/hubtel-engineering-harness",
+      "description": "Hubtel plugin for building and auditing harnesses around AI coding agents.",
+      "version": "1.3.0",
+      "author": {
+        "name": "Hubtel Enablement Team",
+        "email": "engineering@hubtel.com"
+      },
+      "category": "Core Engineering",
+      "keywords": [
+        "hubtel",
+        "harness",
+        "engineering",
+        "workflow",
+        "automation"
+      ],
+      "skills": [
+        "./skills/software-development",
+        "./skills/hbtl-harness-creator"
+      ],
+      "mcpServers": {
+        "hubtel-engineering": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@hubtel/engineering-mcp@latest"
+          ]
+        },
+        "hubtel-sprint-planner": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@hubtel/sprint-planner-mcp@latest"
+          ]
+        },
+        "hubtel-design-system": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@hubtel/design-system-mcp@latest"
+          ]
+        },
+        "hubtel-sonarquabe": {
+          "type": "http",
+          "url": "https://sonar.hubtel.com/mcp"
+        },
+        "chrome-devtools": {
+          "command": "npx",
+          "args": [
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      }
+    }
+  ]
+}

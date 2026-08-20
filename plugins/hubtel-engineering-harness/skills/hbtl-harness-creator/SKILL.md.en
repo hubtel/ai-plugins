@@ -1,0 +1,150 @@
+---
+name: hbtl-harness-creator
+description: >-
+  Build, audit, and improve lightweight harnesses for AI coding agents: AGENTS.md/CLAUDE.md,
+  feature state, verification workflows, scope boundaries, lifecycle handoff,
+  memory persistence, context control, tool safety, and multi-agent coordination.
+license: MIT
+---
+
+# HBTL Harness Creator
+
+Use this skill to make a repository easier for coding agents to start, stay in scope, verify work, and resume across sessions. Keep the harness small enough that agents actually follow it.
+
+Not for model selection, prompt tuning in isolation, chat UI design, or general app architecture.
+
+## Core Model
+
+Every useful coding-agent harness has five subsystems:
+
+| Subsystem | Minimal artifact | Purpose |
+|---|---|---|
+| Instructions | `AGENTS.md` or `CLAUDE.md` | Startup path, working rules, definition of done |
+| State | `feature_list.json`, `progress.md` | Current feature, status, evidence, next step |
+| Verification | Tiered: `node init.mjs` (fast: static lint/typecheck) per feature + `node init.mjs --build` (CI quality gate via `aqua quality-gate`) at the push gate; per-feature `verification` owns tests | Repo health and feature/push gates |
+| Scope | Feature dependencies and done criteria | Prevents overreach and half-finished work |
+| Lifecycle | `session-handoff.md`, end-of-session routine | Makes the next session restartable |
+
+## First Move
+
+1. Inspect what already exists: instruction files, feature/state files, verification commands, docs, package manifests.
+2. Ask only for missing context that cannot be inferred safely: target agent, desired file name, tolerance for structure, and whether overwriting is allowed.
+3. Prefer a minimal harness first. Add memory, tool safety, multi-agent, or benchmark details only when the user's problem calls for them.
+
+## Common Tasks
+
+### Create a harness
+
+Use the bundled script when working on a local repository:
+
+```bash
+node scripts/create-harness.mjs --target /path/to/project
+```
+
+Options:
+
+- `--agent-file CLAUDE.md` for Claude-oriented projects.
+- `--package-manager npm|pnpm|yarn|bun` when detection is wrong.
+- `--commands "cmd one,cmd two"` for custom verification.
+- `--force` only after confirming overwrites are acceptable.
+
+Then explain what was created. `feature_list.json` ships with one bootstrap placeholder — the **agent** replaces it with real features as work arrives; humans prompt in natural language.
+
+### Request triage
+
+On implementation requests (build/add/create/fix product code), the agent **must** update `feature_list.json` before editing application source — including utils and pages. See `templates/agents.md` → **Hard rule — feature row before code**.
+
+**Work breakdown.** A request is decomposed by *outcome*, not by file or page — each distinct action, surface (screen/route/command/endpoint), and shared building block is its own independently verifiable row, and a coverage pass maps everything the request implies to at least one row (don't bundle several actions into one "manage X" feature, don't drop the supporting pieces another row needs). One row active at a time, sequenced with `dependencies`. See `templates/agents.md` → **Break work down**.
+
+**Batch delivery.** When a breakdown produces N ≥ 2 rows, they share a `batchId` and deliver as one **batch**: implemented and verified one slice at a time (a finished slice becomes `verified`, not committed), but committed **once**, together, when every row in the batch is `verified`. See `templates/agents.md` → **Batch delivery**.
+
+### Verification model
+
+Two layers (both required before marking a feature `done`):
+
+Tiered so the per-feature loop stays fast and build runs only when code is about to leave the machine:
+
+1. **Fast gate** — `node init.mjs` (install + static checks: lint/typecheck) at session start and before each `done`. No full test suite here. Cross-platform runner (bash, cmd, PowerShell); `./init.sh` is a bash wrapper.
+2. **Feature** — the feature's `verification` command in `feature_list.json` owns the tests for that feature.
+3. **Push gate** — `node init.mjs --build` delegates to **`aqua quality-gate`** (the CI-parity checks — lint, tests, coverage, build, analysis); runs only before a push, on user consent. The whole suite runs once here (cross-feature regression catch), not per feature. Exits `2` if the Aqua CLI is missing.
+
+**Commit-to-done (approval-gated):** after the fast gate and feature verification pass, the agent presents a **review overview** and commits **only after explicit human approval** — no pre-staging before the ask. Order: implement → `node init.mjs` (fast) → feature verification → **request commit approval** → (on approval) stage + commit → evidence → done. No evidence on `in-progress` rows. Build is validated later at the push gate. See `templates/agents.md` → **Commit approval gate**.
+
+**Completion is mandatory.** "Implemented and tests pass" is the *middle* of the task. The agent must run the completion sequence straight through and must not yield control until the active feature is `done` or `blocked` — with one sanctioned exception: pausing at the commit approval gate (closing line `Feature <id>: awaiting commit approval`). Apart from that pause, `in-progress` is never a valid hand-off state for the request just given. Each completed implementation response ends with `Feature <id>: done — evidence: commit <hash>` (or a `blocked` line). See `templates/agents.md` → **Completion Is Mandatory** and **Completing a feature**.
+
+**Inference-driven `requiredTests`.** Instead of defaulting every row to `["unit"]`, the agent infers the layer by asking *what would actually catch this feature breaking*: behaviour only provable by driving the running app the way a user or caller does → `["e2e"]`; self-contained logic provable in isolation → `["unit"]`; behaviour that only holds against a real external dependency → add `"integration"`. Pick the layer(s) that prove the feature's value — testing a user-facing surface only in isolation misses what actually breaks; `["unit"]` is a choice, not the default. A soft validator warning backstops this for rows that read as user-facing but carry no `e2e`.
+
+Record evidence on the feature entry when `status` is `done` — commit pointer only:
+
+```text
+commit <hash>
+```
+
+Do not duplicate verification output in evidence; the row's `verification` field holds the proof command.
+
+```text
+commit <hash>
+```
+
+**Invalid:** `commit <hash> — lint clean, vitest (16 passed)` or any text after the hash.
+
+Optional `requiredTests`: `unit`, `integration`, `e2e`. When `e2e` is listed, the `verification` command should run E2E (e.g. `playwright`).
+
+### Audit an existing harness
+
+Run:
+
+```bash
+node scripts/validate-harness.mjs --target /path/to/project
+```
+
+Report the five subsystem scores, the lowest-scoring area, and the first 2-3 changes that would improve reliability. Treat the lowest score as a candidate bottleneck; confirm with failures, logs, or task outcomes before claiming causality.
+
+### Produce a report
+
+Use when the user wants a shareable assessment:
+
+```bash
+node scripts/render-assessment-html.mjs --target /path/to/project
+node scripts/run-benchmark.mjs --target /path/to/project --html /path/to/report.html
+```
+
+Be clear that this is a structural benchmark. Real effectiveness still needs before/after agent sessions on representative tasks.
+
+## When to Read References
+
+Load only the reference needed for the user's problem:
+
+- Memory across sessions: [Memory Persistence](references/memory-persistence-pattern.md)
+- Reusable workflows as skills: [Skill Runtime](references/skill-runtime-pattern.md)
+- Permissions, tools, concurrency: [Tool Registry & Safety](references/tool-registry-pattern.md)
+- Context budget and progressive disclosure: [Context Engineering](references/context-engineering-pattern.md)
+- Delegation and parallel agents: [Multi-Agent Coordination](references/multi-agent-pattern.md)
+- Hooks, startup, long-running work: [Lifecycle & Bootstrap](references/lifecycle-bootstrap-pattern.md)
+- Non-obvious failure modes: [Gotchas](references/gotchas.md)
+- Change history: [CHANGELOG.md](CHANGELOG.md)
+
+## Design Rules
+
+- Keep the root instruction file short: routing and invariants, not a full manual.
+- Put project facts in project docs, not in the skill.
+- Make verification commands explicit and runnable.
+- Require commit + evidence before marking a feature done.
+- Forbid yielding on `in-progress`: an implementation request ends only at `done` or `blocked`.
+- Use one active feature unless the harness has explicit multi-agent ownership boundaries.
+- Prefer append/update state files over relying on chat history.
+- Never hide destructive behavior in scripts; overwrites require explicit user approval.
+
+## Deliverable Checklist
+
+For a usable minimal harness, leave the target project with:
+
+- [ ] `AGENTS.md` or `CLAUDE.md`
+- [ ] `feature_list.json`
+- [ ] `progress.md`
+- [ ] Each feature in `feature_list.json` has a `verification` command
+- [ ] `node init.mjs` runs repo baseline checks (with `./init.sh` bash wrapper)
+- [ ] Optional `session-handoff.md` for multi-session work
+- [ ] Documented verification evidence or next action
+
+If you cannot create files, provide exact file contents and commands instead.

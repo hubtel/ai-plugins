@@ -1,0 +1,33 @@
+{
+  "hubtel-engineering": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@hubtel/engineering-mcp@latest"
+    ]
+  },
+  "hubtel-sprint-planner": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@hubtel/sprint-planner-mcp@latest"
+    ]
+  },
+  "hubtel-design-system": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@hubtel/design-system-mcp@latest"
+    ]
+  },
+  "hubtel-sonarquabe": {
+    "type": "http",
+    "url": "https://sonar.hubtel.com/mcp"
+  },
+  "chrome-devtools": {
+    "command": "npx",
+    "args": [
+      "chrome-devtools-mcp@latest"
+    ]
+  }
+}

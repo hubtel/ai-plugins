@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Overall Plan (Phase 1)",
+  "description": "Front-matter schema for `.harness/plans/overview.md` — the single overall plan the planning subagent produces in Phase 1. The main agent presents this file for user review; Phase 2 does not run until this plan is approved.",
+  "type": "object",
+  "required": ["status", "generatedAt", "request"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["draft", "approved"],
+      "description": "Draft while the subagent is iterating with the user; approved (with approvedAt stamped) once the human explicitly says go."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of the first-draft generation"
+    },
+    "approvedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp captured when status flips to approved"
+    },
+    "request": {
+      "type": "string",
+      "description": "The original user request, restated by the subagent in its own words"
+    },
+    "featureCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of features the overall plan proposes"
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "confirmed"],
+        "properties": {
+          "text": { "type": "string" },
+          "confirmed": { "type": "boolean" }
+        }
+      },
+      "description": "Anything the subagent inferred without asking. `confirmed: false` marks unconfirmed assumptions — these require explicit approval before Azure tasks are created (see AGENTS.md Present breakdown)."
+    },
+    "featureTypes": {
+      "type": "object",
+      "description": "Proposed Conventional Commits type per feature (feat/fix/refactor/…). Keyed by featId. Editable at commit approval.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Feature Plan (Phase 2)",
+  "description": "Front-matter schema for `.harness/plans/feat-NNN.md` — the detailed per-feature sub-plan the planning subagent produces in Phase 2 after the overall plan (Phase 1) is approved. Extends today's plan shape (overview, flow diagram, files-to-touch, task summary, dependencies, risks) with the richer sections listed below. Backward-compatible: plans without the new sections raise a soft warning, not tier-1.",
+  "type": "object",
+  "required": ["featId", "status"],
+  "properties": {
+    "featId": {
+      "type": "string",
+      "pattern": "^feat-\\d+$",
+      "description": "Feature identifier the plan belongs to"
+    },
+    "overallPlan": {
+      "type": "string",
+      "description": "Relative path to the Phase 1 overall plan this sub-plan derives from (canonical value: `.harness/plans/overview.md`)"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "approved"],
+      "description": "Draft until the breakdown is approved; approved once harness_create_tasks has been called for its tasks."
+    },
+    "commitType": {
+      "type": "string",
+      "enum": ["feat", "fix", "refactor", "chore", "docs", "test", "perf", "build", "ci", "style", "revert"],
+      "description": "Conventional Commits type proposed for the feature's commit subject. Editable at commit approval."
+    },
+    "expectedServices": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional planning-time hint: .NET service names the feature is expected to touch (.csproj basenames). Auto-detected services at commit time are authoritative."
+    }
+  }
+}

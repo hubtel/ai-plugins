@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UI Runtime Artifact (v3)",
+  "description": "Per-feature evidence for step 3.7. Required for UI rows at verified/done. When chrome-devtools-mcp is connected, records an append-only runs[] timeline of checks, issues, and criteriaResults. The gate reads the LATEST run only; earlier runs are history. When the MCP is unavailable, use the skipped shape (no runs). The validator cannot detect MCP connectivity.",
+  "type": "object",
+  "required": ["version", "featId"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": "3" },
+    "featId": { "type": "string", "pattern": "^feat-\\d+$" },
+    "url": { "type": "string", "minLength": 1 },
+    "mcp": { "enum": ["connected", "unavailable"] },
+    "skipped": { "type": "boolean" },
+    "skipReason": { "type": "string", "minLength": 1 },
+    "blocked": { "type": "boolean" },
+    "blockedReason": { "type": "string", "minLength": 1 },
+    "criteria": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/criterion" }
+    },
+    "remediation": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/remediation" }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/run" }
+    }
+  },
+  "$defs": {
+    "criterion": {
+      "type": "object",
+      "required": ["id", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "remediation": {
+      "type": "object",
+      "required": ["at", "issueId", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "type": "string", "format": "date-time" },
+        "issueId": { "type": "string", "minLength": 1 },
+        "action": { "type": "string", "minLength": 1 }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": ["id", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "dev-server",
+            "url-loaded",
+            "a11y-content",
+            "styled-not-default",
+            "console-errors",
+            "network-errors",
+            "interaction",
+            "server-output",
+            "screenshot"
+          ]
+        },
+        "result": { "enum": ["clear", "issue-found", "not-applicable"] },
+        "detail": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "path": { "type": "string", "minLength": 1 },
+        "issueId": { "type": "string", "minLength": 1 },
+        "criterionId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "required": ["id", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "class": {
+          "enum": [
+            "dev-server-unavailable",
+            "navigation-failed",
+            "unstyled-surface",
+            "console-error",
+            "network-error",
+            "framework-issue",
+            "interaction-broken",
+            "server-output-error",
+            "screenshot-missing",
+            "acceptance-mismatch",
+            "visual-defect",
+            "content-wrong",
+            "layout-wrong",
+            "accessibility"
+          ]
+        },
+        "severity": { "enum": ["blocker", "major", "minor"] },
+        "status": { "enum": ["open", "resolved", "waived"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "detail": { "type": "string" },
+        "source": {
+          "type": "object",
+          "required": ["from"],
+          "additionalProperties": false,
+          "properties": {
+            "from": { "enum": ["check", "acceptance", "manual"] },
+            "checkId": { "type": "string", "minLength": 1 },
+            "criterionId": { "type": "string", "minLength": 1 }
+          }
+        },
+        "openedIn": { "enum": ["initial", "recheck"] },
+        "resolvedIn": { "enum": ["initial", "recheck"] },
+        "resolution": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "criteriaResult": {
+      "type": "object",
+      "required": ["criterionId", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "criterionId": { "type": "string", "minLength": 1 },
+        "result": { "enum": ["pass", "fail"] },
+        "issueId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["phase", "at", "checks"],
+      "additionalProperties": false,
+      "properties": {
+        "phase": { "enum": ["initial", "recheck"] },
+        "at": { "type": "string", "format": "date-time" },
+        "status": { "enum": ["pass", "fail"] },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/check" }
+        },
+        "issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/issue" }
+        },
+        "criteriaResults": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/criteriaResult" }
+        }
+      }
+    }
+  }
+}
