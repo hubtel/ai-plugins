@@ -1,0 +1,133 @@
+---
+# DAC Overview Template
+# Business context and system purpose
+---
+template_type: docs_overview
+dac_version: 1.0
+
+structure:
+  title: '{{PROJECT_NAME}} Overview'
+  sections:
+    - business_context
+    - system_responsibilities
+    - key_integrations
+    - external_links
+
+content_template: |
+  # {{PROJECT_NAME}} Overview
+
+  ## Business Context
+
+  ### Why This System Exists
+
+  {{BUSINESS_PURPOSE}}
+
+  ### Problem Statement
+
+  {{PROBLEM_STATEMENT}}
+
+  ### Target Users
+
+  {{TARGET_USERS}}
+
+  ## System Responsibilities
+
+  This system is responsible for:
+
+  {{SYSTEM_RESPONSIBILITIES}}
+
+  ### In Scope
+
+  {{IN_SCOPE}}
+
+  ### Out of Scope
+
+  {{OUT_OF_SCOPE}}
+
+  ## Key Integrations
+
+  ### Internal Services
+
+  {{INTERNAL_INTEGRATIONS}}
+
+  ### External Services
+
+  {{EXTERNAL_INTEGRATIONS}}
+
+  ## Service Tier
+
+  - **Priority:** {{SERVICE_TIER}}
+  - **Business Impact:** {{BUSINESS_IMPACT}}
+  - **User Base:** {{USER_BASE}}
+  - **System Dependencies:** {{DEPENDENCIES_COUNT}}
+
+  ## External Documentation
+
+  {{#if ONEDRIVE_BRIEF_LINK}}
+  - **Project Brief:** [OneDrive Document]({{ONEDRIVE_BRIEF_LINK}})
+  {{/if}}
+  {{#if ADDITIONAL_DOCS}}
+  {{ADDITIONAL_DOCS}}
+  {{/if}}
+
+placeholders:
+  - name: PROJECT_NAME
+    description: Name of the project
+    required: true
+
+  - name: BUSINESS_PURPOSE
+    description: Why this system was built
+    required: true
+
+  - name: PROBLEM_STATEMENT
+    description: What problem this solves
+    required: true
+
+  - name: TARGET_USERS
+    description: Who uses this system
+    required: true
+
+  - name: SYSTEM_RESPONSIBILITIES
+    description: What this system does (bulleted list)
+    required: true
+    example: "- Process customer payments\n- Send transaction notifications\n- Generate reports"
+
+  - name: IN_SCOPE
+    description: What is included in this system
+    required: true
+
+  - name: OUT_OF_SCOPE
+    description: What is explicitly not handled by this system
+    required: true
+
+  - name: INTERNAL_INTEGRATIONS
+    description: Internal Hubtel services this system integrates with
+    required: false
+
+  - name: EXTERNAL_INTEGRATIONS
+    description: External third-party services
+    required: false
+
+  - name: SERVICE_TIER
+    description: 'Critical / High / Medium / Low'
+    required: true
+
+  - name: BUSINESS_IMPACT
+    description: Financial or operational impact of downtime
+    required: true
+
+  - name: USER_BASE
+    description: Number/type of users affected
+    required: true
+
+  - name: DEPENDENCIES_COUNT
+    description: How many services depend on this
+    required: true
+
+  - name: ONEDRIVE_BRIEF_LINK
+    description: Link to OneDrive project brief (optional)
+    required: false
+
+  - name: ADDITIONAL_DOCS
+    description: Links to other external docs
+    required: false

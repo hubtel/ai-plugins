@@ -1,0 +1,15 @@
+{
+  "tasks": [
+    {
+      "id": "task-001",
+      "featId": "feat-001",
+      "name": "Replace with an actionable, human-friendly deliverable — the same phrase from the plan's Task summary bullet",
+      "description": "Replace with one human-friendly sentence stating what 'done' looks like for this task",
+      "verification": "./init.sh",
+      "requiredTests": ["unit"],
+      "dependencies": [],
+      "status": "not-started",
+      "evidence": ""
+    }
+  ]
+}

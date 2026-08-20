@@ -1,0 +1,164 @@
+---
+# DAC Operations Template
+# Production behavior and operational guidance
+---
+template_type: docs_operations
+dac_version: 1.0
+
+structure:
+  title: '{{PROJECT_NAME}} Operations'
+  sections:
+    - normal_behavior
+    - failure_modes
+    - logging
+    - monitoring
+    - operational_notes
+
+content_template: |
+  # {{PROJECT_NAME}} Operations
+
+  ## Normal System Behavior
+
+  ### Expected Performance
+
+  {{EXPECTED_PERFORMANCE}}
+
+  ### Health Checks
+
+  {{HEALTH_CHECKS}}
+
+  ### Resource Usage
+
+  {{RESOURCE_USAGE}}
+
+  ## Failure Modes
+
+  ### Common Failure Scenarios
+
+  {{FAILURE_SCENARIOS}}
+
+  ### Degraded Operation
+
+  {{DEGRADED_OPERATION}}
+
+  ## Logging
+
+  ### Log Levels
+
+  {{LOG_LEVELS}}
+
+  ### Key Log Patterns
+
+  {{LOG_PATTERNS}}
+
+  ### Log Location
+
+  {{LOG_LOCATION}}
+
+  ## Monitoring and Alerts
+
+  ### Metrics
+
+  {{METRICS}}
+
+  ### Dashboards
+
+  {{DASHBOARDS}}
+
+  ### Alert Thresholds
+
+  {{ALERT_THRESHOLDS}}
+
+  ## Operational Notes
+
+  ### On-Call Runbook
+
+  {{RUNBOOK_PROCEDURES}}
+
+  ### Common Issues and Solutions
+
+  {{COMMON_ISSUES}}
+
+  ### Escalation Path
+
+  {{ESCALATION_PATH}}
+
+  ## Deployment
+
+  ### Deployment Process
+
+  {{DEPLOYMENT_PROCESS}}
+
+  ### Rollback Procedure
+
+  {{ROLLBACK_PROCEDURE}}
+
+placeholders:
+  - name: PROJECT_NAME
+    description: Name of the project
+    required: true
+
+  - name: EXPECTED_PERFORMANCE
+    description: Normal performance metrics (response time, throughput, etc.)
+    required: true
+
+  - name: HEALTH_CHECKS
+    description: Available health check endpoints
+    required: true
+
+  - name: RESOURCE_USAGE
+    description: Expected CPU, memory, disk usage under normal load
+    required: true
+
+  - name: FAILURE_SCENARIOS
+    description: Common ways the system can fail
+    required: true
+
+  - name: DEGRADED_OPERATION
+    description: How system behaves when partially unavailable
+    required: false
+
+  - name: LOG_LEVELS
+    description: Log levels used (DEBUG, INFO, WARN, ERROR)
+    required: true
+
+  - name: LOG_PATTERNS
+    description: Important log patterns to search for
+    required: true
+    example: "- `ERROR: Database connection failed` - Database unavailable\n- `WARN: Rate limit exceeded` - Too many requests"
+
+  - name: LOG_LOCATION
+    description: Where logs are stored/accessed
+    required: true
+
+  - name: METRICS
+    description: Key metrics being tracked
+    required: true
+
+  - name: DASHBOARDS
+    description: Links to monitoring dashboards
+    required: false
+
+  - name: ALERT_THRESHOLDS
+    description: When alerts are triggered
+    required: true
+
+  - name: RUNBOOK_PROCEDURES
+    description: Step-by-step procedures for on-call engineers
+    required: true
+
+  - name: COMMON_ISSUES
+    description: Frequently encountered problems and their solutions
+    required: true
+
+  - name: ESCALATION_PATH
+    description: Who to contact for different types of issues
+    required: true
+
+  - name: DEPLOYMENT_PROCESS
+    description: How deployments are performed
+    required: false
+
+  - name: ROLLBACK_PROCEDURE
+    description: How to roll back a failed deployment
+    required: false

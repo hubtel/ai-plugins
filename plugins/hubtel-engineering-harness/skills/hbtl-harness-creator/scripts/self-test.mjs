@@ -1,0 +1,1655 @@
+#!/usr/bin/env node
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  CONVENTIONAL_COMMIT_TYPES,
+  deriveRunStatus,
+  detectDotnetMonorepo,
+  formatBuildTag,
+  resolveTouchedServices,
+  summarizeUiRuntimeArtifact,
+  validateCommitMessage,
+  validateFeatureList,
+  validateUiRuntimeArtifact
+} from './lib/harness-utils.mjs';
+import { azureWorkItemUrl, metricsHtmlReport, parsePlanTitle, repairUtf8Mojibake } from './lib/metrics-utils.mjs';
+import { checksForPullRequest, firstBuildOutcome, parseAzureRemote, summarizePolicies, tokenExpired } from './lib/azure-devops.mjs';
+
+const skillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const createScript = path.join(skillRoot, 'scripts', 'create-harness.mjs');
+const validateScript = path.join(skillRoot, 'scripts', 'validate-harness.mjs');
+const summarizeScript = path.join(skillRoot, 'scripts', 'summarize-ui-runtime.mjs');
+
+// Azure tracking is mandatory: the scaffolder now requires sprint planner args
+// (normally captured via the MCP's get_active_sprint_boards). Dummy values for tests.
+const SPRINT_ARGS = [
+  '--sprint-board-url', 'https://dev.azure.com/hubtel/example/_sprints/taskboard/example',
+  '--parent-story-id', '12345',
+  '--parent-story-title', 'Self-test parent',
+  '--engineering-mcp-verified'
+];
+
+// Mandatory sprintPlanner block for inline feature_list.json fixtures. Without it,
+// validateFeatureList now fails tier-1 (Azure tracking is always on).
+const SPRINT_BLOCK = {
+  sprintBoardUrl: 'https://dev.azure.com/hubtel/example/_sprints/taskboard/example',
+  parentStory: { id: '12345', title: 'Self-test parent' }
+};
+
+// v3 helper: baseline "clear" checks for a healthy run.
+function clearChecks(screenshotPath = '.harness/ui-runtime/screenshots/run.png', { media = true } = {}) {
+  const checks = [
+    { id: 'dev-server', result: 'clear', detail: 'next dev ready on http://localhost:3000' },
+    { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
+    { id: 'a11y-content', result: 'clear', detail: 'heading + fields present' },
+    { id: 'styled-not-default', result: 'clear', detail: 'themed background; Sora font' },
+    { id: 'console-errors', result: 'clear', count: 0, detail: 'list_console_messages: 0 errors' },
+    {
+      id: 'network-errors',
+      result: 'clear',
+      count: 0,
+      detail: 'list_network_requests: no failed requests; logo asset 200 OK'
+    },
+    { id: 'screenshot', result: 'clear', path: screenshotPath }
+  ];
+  if (media) {
+    checks.push({ id: 'server-output', result: 'clear', detail: 'dev-server log: no asset 404s' });
+  }
+  return checks;
+}
+
+const V3_CRITERIA = [
+  { id: 'crit-logo', summary: 'Logo loads and renders correctly' },
+  { id: 'crit-a11y', summary: 'Primary CTA meets WCAG AA contrast' },
+  { id: 'crit-auth', summary: 'Sign-in flow completes successfully' }
+];
+
+function runNode(script, args) {
+  const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout || '',
+    stderr: result.stderr || ''
+  };
+}
+
+const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-'));
+const nestedRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-nested-'));
+const metricsRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-metrics-'));
+
+try {
+  const scaffold = runNode(createScript, ['--target', tempRoot, ...SPRINT_ARGS]);
+  if (scaffold.status !== 0) {
+    console.error(scaffold.stdout);
+    console.error(scaffold.stderr);
+    throw new Error('create-harness.mjs failed');
+  }
+
+  // Mandatory Azure tracking: scaffolded feature_list.json must carry the sprintPlanner block.
+  const scaffoldedFeatures = JSON.parse(await readFile(path.join(tempRoot, 'feature_list.json'), 'utf8'));
+  if (!scaffoldedFeatures.sprintPlanner?.sprintBoardUrl || !scaffoldedFeatures.sprintPlanner?.parentStory?.id) {
+    throw new Error('scaffolded feature_list.json is missing the sprintPlanner block (sprintBoardUrl + parentStory.id)');
+  }
+
+  // The optional parent story title must be persisted when supplied.
+  if (scaffoldedFeatures.sprintPlanner.parentStory.title !== 'Self-test parent') {
+    throw new Error('scaffolded feature_list.json did not persist parentStory.title from --parent-story-title');
+  }
+
+  // Hard gate: scaffolding without sprint planner args must fail before writing files.
+  const missingArgs = runNode(createScript, ['--target', await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-nomcp-'))]);
+  if (missingArgs.status === 0) {
+    throw new Error('create-harness.mjs should fail (exit 1) when --sprint-board-url/--parent-story-id are missing');
+  }
+
+  // Hard gate: scaffolding without --engineering-mcp-verified must fail (engineering MCP install enforced at scaffold).
+  const missingMcpFlag = runNode(createScript, [
+    '--target', await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-noeng-')),
+    '--sprint-board-url', 'https://dev.azure.com/hubtel/example/_sprints/taskboard/example',
+    '--parent-story-id', '12345'
+  ]);
+  if (missingMcpFlag.status === 0) {
+    throw new Error('create-harness.mjs should fail (exit 1) when --engineering-mcp-verified is missing');
+  }
+
+  // Idempotent by default: re-scaffolding without --force leaves feature_list.json untouched.
+  const reRun = runNode(createScript, ['--target', tempRoot, ...SPRINT_ARGS]);
+  if (reRun.status !== 0 || !/SKIPPED feature_list\.json/.test(reRun.stdout)) {
+    console.error(reRun.stdout);
+    throw new Error('re-scaffolding without --force should skip existing feature_list.json');
+  }
+
+  // --force rewrites the sprintPlanner block with the new args (no duplicate/placeholder block).
+  const forced = runNode(createScript, [
+    '--target', tempRoot, '--force',
+    '--sprint-board-url', 'https://dev.azure.com/hubtel/example/_sprints/taskboard/updated',
+    '--parent-story-id', '99999',
+    '--parent-story-title', 'Updated parent',
+    '--engineering-mcp-verified'
+  ]);
+  if (forced.status !== 0) {
+    console.error(forced.stdout);
+    console.error(forced.stderr);
+    throw new Error('create-harness.mjs --force failed');
+  }
+  const forcedFeatures = JSON.parse(await readFile(path.join(tempRoot, 'feature_list.json'), 'utf8'));
+  if (forcedFeatures.sprintPlanner.parentStory.id !== '99999'
+    || forcedFeatures.sprintPlanner.sprintBoardUrl !== 'https://dev.azure.com/hubtel/example/_sprints/taskboard/updated') {
+    throw new Error('create-harness.mjs --force did not rewrite the sprintPlanner block with new args');
+  }
+
+  // Restore the canonical scaffold for the remaining assertions.
+  runNode(createScript, ['--target', tempRoot, '--force', ...SPRINT_ARGS]);
+
+  const pass = runNode(validateScript, ['--target', tempRoot]);
+  if (pass.status !== 0) {
+    console.error(pass.stdout);
+    console.error(pass.stderr);
+    throw new Error('validate-harness.mjs failed on fresh scaffold');
+  }
+
+  // Generated init.mjs must be syntactically valid JS.
+  const initMjsCheck = spawnSync(process.execPath, ['--check', path.join(tempRoot, 'init.mjs')], { encoding: 'utf8' });
+  if (initMjsCheck.status !== 0) {
+    console.error(initMjsCheck.stderr);
+    throw new Error('generated init.mjs failed node --check');
+  }
+
+  // The completion stop-gate and closing report must be scored as present.
+  const json = runNode(validateScript, ['--target', tempRoot, '--json']);
+  const report = JSON.parse(json.stdout);
+  const instructions = report.subsystems?.instructions;
+  const checkPasses = (needle) =>
+    instructions?.checks?.some((item) => item.pass && item.message.includes(needle));
+  if (!checkPasses('Completion stop-gate')) {
+    throw new Error('fresh scaffold is missing the Completion stop-gate instruction check');
+  }
+  if (!checkPasses('Closing report status line')) {
+    throw new Error('fresh scaffold is missing the Closing report status line instruction check');
+  }
+  if (!checkPasses('Post-done message and push offer')) {
+    throw new Error('fresh scaffold is missing the Post-done message and push offer instruction check');
+  }
+  if (!checkPasses('Before pushing uses plain language')) {
+    throw new Error('fresh scaffold is missing the Before pushing plain-language instruction check');
+  }
+  if (!checkPasses('SonarQube pre-push review')) {
+    throw new Error('fresh scaffold is missing the SonarQube pre-push review instruction check');
+  }
+  if (!checkPasses('Push gate delegates to aqua quality-gate')) {
+    throw new Error('fresh scaffold is missing the aqua quality-gate push-tier instruction check');
+  }
+  if (!checkPasses('Sonar MCP review ordered after the quality gate')) {
+    throw new Error('fresh scaffold is missing the Sonar-MCP-after-quality-gate ordering instruction check');
+  }
+
+  // Generated AGENTS.md Verification Commands: single CI quality-gate line, no
+  // per-command "(build gate: …)" npm/dotnet lines.
+  const scaffoldAgents = await readFile(path.join(tempRoot, 'AGENTS.md'), 'utf8');
+  if (!scaffoldAgents.includes('CI quality gate — same checks as the PR pipeline')) {
+    throw new Error('AGENTS.md Verification Commands should contain the single CI quality-gate line');
+  }
+  if (scaffoldAgents.includes('(build gate: run via `node init.mjs --build` before pushing)')) {
+    throw new Error('AGENTS.md Verification Commands should no longer emit per-command "(build gate: …)" lines');
+  }
+  if (!checkPasses('Post-push pull request')) {
+    throw new Error('fresh scaffold is missing the Post-push pull request instruction check');
+  }
+  if (!checkPasses('Work breakdown')) {
+    throw new Error('fresh scaffold is missing the Work breakdown instruction check');
+  }
+  if (!checkPasses('Breakdown granularity')) {
+    throw new Error('fresh scaffold is missing the per-operation breakdown granularity instruction check');
+  }
+  if (!checkPasses('Clarification policy')) {
+    throw new Error('fresh scaffold is missing the Clarification policy instruction check');
+  }
+  if (!checkPasses('Breakdown-before-tasks gate')) {
+    throw new Error('fresh scaffold is missing the Breakdown-before-tasks gate instruction check');
+  }
+  if (!checkPasses('Unconfirmed assumptions approval')) {
+    throw new Error('fresh scaffold is missing the Unconfirmed assumptions approval instruction check');
+  }
+  if (!checkPasses('Adjacent surface gate')) {
+    throw new Error('fresh scaffold is missing the Adjacent surface gate instruction check');
+  }
+  if (!checkPasses('Azure-linked commit message convention')) {
+    throw new Error('fresh scaffold is missing the Azure-linked commit message convention instruction check');
+  }
+  if (!checkPasses('Commit approval gate')) {
+    throw new Error('fresh scaffold is missing the Commit approval gate instruction check');
+  }
+  if (!checkPasses('Approval-gated commit on done')) {
+    throw new Error('fresh scaffold is missing the Approval-gated commit on done instruction check');
+  }
+  if (!checkPasses('Feature delivery')) {
+    throw new Error('fresh scaffold is missing the Feature delivery instruction check');
+  }
+  if (!checkPasses('Approval semantics')) {
+    throw new Error('fresh scaffold is missing the Approval semantics instruction check');
+  }
+  if (!checkPasses('Commit approval distinct from push consent documented')) {
+    throw new Error('fresh scaffold is missing the commit-vs-push consent instruction check');
+  }
+  if (!checkPasses('P.2 failure aborts push gate documented')) {
+    throw new Error('fresh scaffold is missing the P.2 abort instruction check');
+  }
+  if (!checkPasses('Feature-branch discipline')) {
+    throw new Error('fresh scaffold is missing the Feature-branch discipline instruction check');
+  }
+  if (!checkPasses('Azure in-progress status sync')) {
+    throw new Error('fresh scaffold is missing the Azure in-progress status sync instruction check');
+  }
+  if (!checkPasses('Hubtel Engineering MCP dependency')) {
+    throw new Error('fresh scaffold is missing the Hubtel Engineering MCP dependency instruction check');
+  }
+  if (!checkPasses('Guidelines verification gate')) {
+    throw new Error('fresh scaffold is missing the Guidelines verification gate instruction check');
+  }
+  if (!checkPasses('Docs lookup obligation')) {
+    throw new Error('fresh scaffold is missing the Docs lookup obligation instruction check');
+  }
+  if (!checkPasses('Package audit gate')) {
+    throw new Error('fresh scaffold is missing the Package audit gate instruction check');
+  }
+  if (!checkPasses('Software-development skill referenced')) {
+    throw new Error('fresh scaffold is missing the Software-development skill reference instruction check');
+  }
+  if (!checkPasses('Design System MCP documented')) {
+    throw new Error('fresh scaffold is missing the Design System MCP instruction check');
+  }
+  if (!checkPasses('UI runtime assertion documented')) {
+    throw new Error('fresh scaffold is missing the UI runtime assertion instruction check');
+  }
+
+  // The scaffolded instructions must carry the v3 UI-runtime vocabulary and the summarize helper.
+  const scaffoldedAgents = await readFile(path.join(tempRoot, 'AGENTS.md'), 'utf8');
+  for (const marker of ['summarize-ui-runtime', 'criteriaResults', 'append-only', 'issue closure', '"version": "3"']) {
+    if (!scaffoldedAgents.includes(marker)) {
+      throw new Error(`scaffolded AGENTS.md is missing the v3 UI-runtime marker "${marker}"`);
+    }
+  }
+  if (!checkPasses('Task-details resume lookup')) {
+    throw new Error('fresh scaffold is missing the Task-details resume lookup instruction check');
+  }
+  if (instructions?.score !== 5) {
+    throw new Error(`instructions subsystem should score 5/5 on a fresh scaffold (got ${instructions?.score})`);
+  }
+
+  const featurePath = path.join(tempRoot, 'feature_list.json');
+
+  // Missing sprintPlanner block must fail tier-1 (Azure tracking is mandatory).
+  await writeFile(featurePath, JSON.stringify({
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'No sprint block',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failMissingBlock = runNode(validateScript, ['--target', tempRoot]);
+  if (failMissingBlock.status === 0) {
+    throw new Error('validate-harness.mjs should fail when the sprintPlanner block is absent');
+  }
+  if (!/sprintPlanner block/.test(failMissingBlock.stdout + failMissingBlock.stderr)) {
+    throw new Error('validator should report the missing sprintPlanner block');
+  }
+
+  // Malformed block (no sprintBoardUrl) must fail tier-1.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: { parentStory: { id: '12345' } },
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Malformed sprint block',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failMalformedBlock = runNode(validateScript, ['--target', tempRoot]);
+  if (failMalformedBlock.status === 0) {
+    throw new Error('validate-harness.mjs should fail when the sprintPlanner block is missing sprintBoardUrl');
+  }
+
+  // in-progress / done task without a numeric taskId must fail tier-1.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Active without taskId',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'in-progress',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failMissingTaskId = runNode(validateScript, ['--target', tempRoot]);
+  if (failMissingTaskId.status === 0) {
+    throw new Error('validate-harness.mjs should fail when an in-progress task lacks a numeric taskId');
+  }
+  if (!/taskId/.test(failMissingTaskId.stdout + failMissingTaskId.stderr)) {
+    throw new Error('validator should report the missing taskId');
+  }
+
+  // Valid block + valid numeric taskId on an active task must pass (no block/taskId error).
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Active with taskId',
+      description: 'Well-formed active task',
+      verification: './init.sh',
+      status: 'in-progress',
+      taskId: '12346',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const passActiveTaskId = runNode(validateScript, ['--target', tempRoot]);
+  if (passActiveTaskId.status !== 0) {
+    console.error(passActiveTaskId.stdout);
+    console.error(passActiveTaskId.stderr);
+    throw new Error('validate-harness.mjs should pass with a valid sprintPlanner block and numeric taskId');
+  }
+
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Broken task',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'done',
+      taskId: '12346',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failEmptyEvidence = runNode(validateScript, ['--target', tempRoot]);
+  if (failEmptyEvidence.status === 0) {
+    throw new Error('validate-harness.mjs should fail when done task has empty evidence');
+  }
+
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'WIP task',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'in-progress',
+      taskId: '12346',
+      evidence: 'commit deadbeef — ./init.sh (pass)',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failInProgressEvidence = runNode(validateScript, ['--target', tempRoot]);
+  if (failInProgressEvidence.status === 0) {
+    throw new Error('validate-harness.mjs should fail when in-progress task has evidence');
+  }
+
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Bad evidence',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'done',
+      taskId: '12346',
+      evidence: 'tests passed',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failMissingCommitPrefix = runNode(validateScript, ['--target', tempRoot]);
+  if (failMissingCommitPrefix.status === 0) {
+    throw new Error('validate-harness.mjs should fail when done evidence lacks commit hash prefix');
+  }
+
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Verbose evidence',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'done',
+      taskId: '12346',
+      evidence: 'commit deadbeef — ./init.sh (pass)',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failVerboseEvidence = runNode(validateScript, ['--target', tempRoot]);
+  if (failVerboseEvidence.status === 0) {
+    throw new Error('validate-harness.mjs should fail when done evidence includes verification suffix');
+  }
+
+  // Batch-commit anti-pattern: two done tasks from different features sharing one
+  // commit hash must fail — each feature needs its own commit.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [
+      {
+        id: 'task-001',
+        featId: 'feat-001',
+        name: 'First task',
+        description: 'Has its own work',
+        verification: './init.sh',
+        status: 'done',
+        taskId: '12346',
+        evidence: 'commit abc1234',
+        dependencies: []
+      },
+      {
+        id: 'task-002',
+        featId: 'feat-002',
+        name: 'Second task',
+        description: 'Different work, must be its own commit',
+        verification: './init.sh',
+        status: 'done',
+        taskId: '12347',
+        evidence: 'commit abc1234',
+        dependencies: []
+      }
+    ]
+  }, null, 2));
+
+  const failSharedCommit = runNode(validateScript, ['--target', tempRoot]);
+  if (failSharedCommit.status === 0) {
+    throw new Error('validate-harness.mjs should fail when two done tasks from different features share one evidence commit hash');
+  }
+
+  // --- Feature delivery (featId / verified) ---
+
+  // verified status must carry empty evidence, same discipline as in-progress.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Verified with evidence',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'verified',
+      taskId: '12346',
+      evidence: 'commit deadbeef',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failVerifiedEvidence = runNode(validateScript, ['--target', tempRoot]);
+  if (failVerifiedEvidence.status === 0) {
+    throw new Error('validate-harness.mjs should fail when a verified task has evidence');
+  }
+
+  // verified status requires a numeric taskId, same as in-progress/done.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Verified without taskId',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'verified',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failVerifiedNoTaskId = runNode(validateScript, ['--target', tempRoot]);
+  if (failVerifiedNoTaskId.status === 0) {
+    throw new Error('validate-harness.mjs should fail when a verified task lacks a numeric taskId');
+  }
+
+  // Malformed featId (doesn't match "feat-<number>") must fail.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-one',
+      name: 'Bad feat id',
+      description: 'Should fail validation',
+      verification: './init.sh',
+      status: 'verified',
+      taskId: '12346',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const failBadFeatId = runNode(validateScript, ['--target', tempRoot]);
+  if (failBadFeatId.status === 0) {
+    throw new Error('validate-harness.mjs should fail when featId does not match "feat-<number>"');
+  }
+
+  // A complete, real feature (all tasks done, same featId, same hash) must PASS —
+  // this is exactly the shape the pre-feature shared-hash rule used to reject.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [
+      {
+        id: 'task-001',
+        featId: 'feat-001',
+        name: 'Feature task one',
+        description: 'First half of one delivery',
+        verification: './init.sh',
+        status: 'done',
+        taskId: '12346',
+        evidence: 'commit abc1234',
+        dependencies: []
+      },
+      {
+        id: 'task-002',
+        featId: 'feat-001',
+        name: 'Feature task two',
+        description: 'Second half of the same delivery',
+        verification: './init.sh',
+        status: 'done',
+        taskId: '12347',
+        evidence: 'commit abc1234',
+        dependencies: []
+      }
+    ]
+  }, null, 2));
+
+  const passCompleteFeature = runNode(validateScript, ['--target', tempRoot]);
+  if (passCompleteFeature.status !== 0) {
+    console.error(passCompleteFeature.stdout);
+    console.error(passCompleteFeature.stderr);
+    throw new Error('validate-harness.mjs should pass when every task of one featId is done under the same commit hash');
+  }
+
+  // Half-committed feature, 3-of-4 sharing a hash (the 4th still verified) — Check A's
+  // length>1 branch fires here.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [
+      { id: 'task-001', featId: 'feat-002', name: 'Task 1', description: 'd', verification: './init.sh', status: 'done', taskId: '1', evidence: 'commit aaaaaaa', dependencies: [] },
+      { id: 'task-002', featId: 'feat-002', name: 'Task 2', description: 'd', verification: './init.sh', status: 'done', taskId: '2', evidence: 'commit aaaaaaa', dependencies: [] },
+      { id: 'task-003', featId: 'feat-002', name: 'Task 3', description: 'd', verification: './init.sh', status: 'done', taskId: '3', evidence: 'commit aaaaaaa', dependencies: [] },
+      { id: 'task-004', featId: 'feat-002', name: 'Task 4', description: 'd', verification: './init.sh', status: 'verified', taskId: '4', evidence: '', dependencies: [] }
+    ]
+  }, null, 2));
+
+  const failHalfFeatureThreeOfFour = runNode(validateScript, ['--target', tempRoot]);
+  if (failHalfFeatureThreeOfFour.status === 0) {
+    throw new Error('validate-harness.mjs should fail when only 3 of 4 feature tasks are done under a shared hash');
+  }
+
+  // Half-committed feature, 1-of-2: only one task done, the other still verified. The
+  // done hash maps to a single taskId, so Check A's length>1 branch never fires —
+  // this is the hole Check B (independent, keyed on featId) exists to close.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [
+      { id: 'task-001', featId: 'feat-003', name: 'Task 1', description: 'd', verification: './init.sh', status: 'done', taskId: '1', evidence: 'commit bbbbbbb', dependencies: [] },
+      { id: 'task-002', featId: 'feat-003', name: 'Task 2', description: 'd', verification: './init.sh', status: 'verified', taskId: '2', evidence: '', dependencies: [] }
+    ]
+  }, null, 2));
+
+  const failHalfFeatureOneOfTwo = runNode(validateScript, ['--target', tempRoot]);
+  if (failHalfFeatureOneOfTwo.status === 0) {
+    throw new Error('validate-harness.mjs should fail when 1 of 2 feature tasks is done and the hash maps to only one taskId (Check B completeness hole)');
+  }
+
+  // Two different features colliding on one hash must fail (cross-feature contamination).
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [
+      { id: 'task-001', featId: 'feat-004', name: 'Feature A task', description: 'd', verification: './init.sh', status: 'done', taskId: '1', evidence: 'commit ccccccc', dependencies: [] },
+      { id: 'task-002', featId: 'feat-005', name: 'Feature B task', description: 'd', verification: './init.sh', status: 'done', taskId: '2', evidence: 'commit ccccccc', dependencies: [] }
+    ]
+  }, null, 2));
+
+  const failCrossFeatureHash = runNode(validateScript, ['--target', tempRoot]);
+  if (failCrossFeatureHash.status === 0) {
+    throw new Error('validate-harness.mjs should fail when two different featIds share one commit hash');
+  }
+
+  // Soft UI heuristic: a user-facing surface (page/list/form) carrying only
+  // requiredTests:["unit"] should WARN (nudge toward e2e) but still pass.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Auth integrations list page',
+      description: 'Paginated, searchable table of auth integrations',
+      verification: 'pnpm --dir src vitest run tests/components/IntegrationsList.spec.tsx',
+      requiredTests: ['unit'],
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const uiSurfaceWarn = runNode(validateScript, ['--target', tempRoot]);
+  if (uiSurfaceWarn.status !== 0) {
+    throw new Error('UI-facing task on requiredTests:["unit"] should warn, not fail');
+  }
+  if (!/reads as a user-facing surface/.test(uiSurfaceWarn.stdout + uiSurfaceWarn.stderr)) {
+    throw new Error('validator should warn when a UI-facing task lacks e2e');
+  }
+
+  // Counter-case: a no-surface task (API client / logic) on unit must NOT warn.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Auth backoffice API client',
+      description: 'TypeScript models and server-side client for backoffice endpoints',
+      verification: 'pnpm --dir src vitest run tests/services/authBackofficeApi.spec.ts',
+      requiredTests: ['unit'],
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const noSurfaceQuiet = runNode(validateScript, ['--target', tempRoot]);
+  if (/reads as a user-facing surface/.test(noSurfaceQuiet.stdout + noSurfaceQuiet.stderr)) {
+    throw new Error('non-UI task (API client) on requiredTests:["unit"] should not trigger the UI surface warning');
+  }
+
+  // Build-in-verification heuristic: production build on a row should WARN (push-gate
+  // only) but still pass tier-1.
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Release bundle',
+      description: 'Compile production assets',
+      verification: 'pnpm --dir src build',
+      requiredTests: ['unit'],
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const buildInVerificationWarn = runNode(validateScript, ['--target', tempRoot]);
+  if (buildInVerificationWarn.status !== 0) {
+    throw new Error('task verification with build should warn, not fail tier-1');
+  }
+  if (!/verification includes a build command/.test(buildInVerificationWarn.stdout + buildInVerificationWarn.stderr)) {
+    throw new Error('validator should warn when task verification includes a build command');
+  }
+
+  await writeFile(featurePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Auth backoffice API client',
+      description: 'TypeScript models and server-side client for backoffice endpoints',
+      verification: 'pnpm --dir src vitest run tests/services/authBackofficeApi.spec.ts',
+      requiredTests: ['unit'],
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const noBuildQuiet = runNode(validateScript, ['--target', tempRoot]);
+  if (/verification includes a build command/.test(noBuildQuiet.stdout + noBuildQuiet.stderr)) {
+    throw new Error('test-only verification should not trigger the build-in-verification warning');
+  }
+
+  // Nested src-rooted app: commands must be scoped to the app dir with pm-native flags.
+  await mkdir(path.join(nestedRoot, 'src'), { recursive: true });
+  await writeFile(path.join(nestedRoot, 'src', 'package.json'), JSON.stringify({
+    name: 'nested-app',
+    scripts: { lint: 'eslint .', test: 'vitest run', build: 'next build' }
+  }, null, 2));
+  await writeFile(path.join(nestedRoot, 'src', 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+
+  const nestedScaffold = runNode(createScript, ['--target', nestedRoot, ...SPRINT_ARGS]);
+  if (nestedScaffold.status !== 0) {
+    console.error(nestedScaffold.stdout);
+    console.error(nestedScaffold.stderr);
+    throw new Error('create-harness.mjs failed on nested src project');
+  }
+
+  const nestedInit = await readFile(path.join(nestedRoot, 'init.mjs'), 'utf8');
+  if (!nestedInit.includes('pnpm --dir src')) {
+    throw new Error('nested src project should generate "pnpm --dir src" commands in init.mjs');
+  }
+
+  // Tiered runner: the fast gate is static only (install + lint/typecheck);
+  // the push tier (--build) delegates to `aqua quality-gate` (CI parity) rather
+  // than re-deriving test/build commands from package.json.
+  if (!/const fast = \[/.test(nestedInit)) {
+    throw new Error('init.mjs should declare the fast command tier');
+  }
+  if (/const build = \[/.test(nestedInit)) {
+    throw new Error('init.mjs should no longer declare a build[] tier — the push tier delegates to aqua quality-gate');
+  }
+  if (!nestedInit.includes("process.argv.includes('--build')")) {
+    throw new Error('init.mjs should gate the push tier behind --build');
+  }
+  if (!nestedInit.includes("process.argv.includes('--quality-gate')")) {
+    throw new Error('init.mjs should accept the --quality-gate alias for the push tier');
+  }
+  if (!nestedInit.includes('aqua quality-gate')) {
+    throw new Error('init.mjs --build path should invoke aqua quality-gate');
+  }
+  if (!nestedInit.includes('process.chdir(repoRoot)')) {
+    throw new Error('init.mjs should chdir to repo root so gates work from any subdirectory');
+  }
+  const fastMatch = nestedInit.match(/const fast = (\[[\s\S]*?\]);/);
+  if (!fastMatch) {
+    throw new Error('could not parse the fast tier from generated init.mjs');
+  }
+  const fastCmds = JSON.parse(fastMatch[1]);
+  // Fast gate is static only: no build, no full test suite.
+  if (fastCmds.some((cmd) => /\bbuild\b/i.test(cmd))) {
+    throw new Error('fast tier must not contain the build command');
+  }
+  if (fastCmds.some((cmd) => /\btest\b|vitest/i.test(cmd))) {
+    throw new Error('fast tier must not run the full test suite (feature verification covers tests)');
+  }
+  if (!fastCmds.some((cmd) => cmd.includes('lint'))) {
+    throw new Error('fast tier should contain the lint (static) command');
+  }
+
+  // --- UI runtime artifact v3 ---
+
+  // Scenario 1: closed loop — initial fail (logo 404 + contrast) → remediation → recheck pass.
+  const closedLoopArtifact = {
+    version: '3',
+    featId: 'feat-002',
+    url: 'http://localhost:3000/',
+    mcp: 'connected',
+    criteria: V3_CRITERIA,
+    remediation: [
+      { at: '2026-07-20T21:36:10.000Z', issueId: 'logo-broken', action: 'copied logo.svg to public/logo.png; updated img src' },
+      { at: '2026-07-20T21:36:15.000Z', issueId: 'button-contrast', action: 'updated button bg from #a78bfa to #5b21b6' }
+    ],
+    runs: [
+      {
+        phase: 'initial',
+        at: '2026-07-20T21:35:00.000Z',
+        checks: [
+          { id: 'dev-server', result: 'clear' },
+          { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
+          { id: 'a11y-content', result: 'clear' },
+          { id: 'styled-not-default', result: 'clear' },
+          { id: 'console-errors', result: 'clear', count: 0 },
+          { id: 'network-errors', result: 'issue-found', count: 1, issueId: 'logo-broken' },
+          { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-002-initial.png' }
+        ],
+        issues: [
+          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'open', summary: 'Logo asset /logo.png returned 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial' },
+          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'open', summary: 'Sign-in button contrast 2.8:1 below WCAG AA', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial' }
+        ],
+        criteriaResults: [
+          { criterionId: 'crit-logo', result: 'fail', issueId: 'logo-broken' },
+          { criterionId: 'crit-a11y', result: 'fail', issueId: 'button-contrast' },
+          { criterionId: 'crit-auth', result: 'pass' }
+        ]
+      },
+      {
+        phase: 'recheck',
+        at: '2026-07-20T21:36:45.000Z',
+        checks: clearChecks('.harness/ui-runtime/screenshots/feat-002-recheck.png'),
+        issues: [
+          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'resolved', summary: 'Logo asset /logo.png returned 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'asset restored; 200 OK' },
+          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'resolved', summary: 'Sign-in button contrast 2.8:1 below WCAG AA', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'contrast now 7.1:1' }
+        ],
+        criteriaResults: [
+          { criterionId: 'crit-logo', result: 'pass' },
+          { criterionId: 'crit-a11y', result: 'pass' },
+          { criterionId: 'crit-auth', result: 'pass' }
+        ]
+      }
+    ]
+  };
+  const closedLoop = validateUiRuntimeArtifact(closedLoopArtifact, { featId: 'feat-002' });
+  if (!closedLoop.ok) {
+    throw new Error(`ui-runtime v3 closed-loop artifact should validate: ${closedLoop.errors.join('; ')}`);
+  }
+  if (deriveRunStatus(closedLoopArtifact.runs[0], { criteria: V3_CRITERIA }).status !== 'fail') {
+    throw new Error('deriveRunStatus should mark the initial run as fail (open issues)');
+  }
+  if (deriveRunStatus(closedLoopArtifact.runs[1], { criteria: V3_CRITERIA }).status !== 'pass') {
+    throw new Error('deriveRunStatus should mark the recheck run as pass (no open issues)');
+  }
+
+  // Scenario 2: multi-recheck — initial fail → recheck fail (one issue still open) → second recheck pass.
+  const multiRecheckArtifact = {
+    version: '3',
+    featId: 'feat-003',
+    url: 'http://localhost:3000/',
+    mcp: 'connected',
+    criteria: [{ id: 'crit-logo', summary: 'Logo renders' }, { id: 'crit-a11y', summary: 'CTA contrast' }],
+    remediation: [
+      { at: '2026-07-20T22:00:30.000Z', issueId: 'logo-broken', action: 'restored logo asset' },
+      { at: '2026-07-20T22:01:30.000Z', issueId: 'button-contrast', action: 'darkened CTA background' }
+    ],
+    runs: [
+      {
+        phase: 'initial',
+        at: '2026-07-20T22:00:00.000Z',
+        checks: [
+          { id: 'dev-server', result: 'clear' },
+          { id: 'url-loaded', result: 'clear' },
+          { id: 'a11y-content', result: 'clear' },
+          { id: 'styled-not-default', result: 'clear' },
+          { id: 'console-errors', result: 'clear', count: 0 },
+          { id: 'network-errors', result: 'issue-found', count: 1, issueId: 'logo-broken' },
+          { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-003-1.png' }
+        ],
+        issues: [
+          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'open', summary: 'Logo 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial' },
+          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'open', summary: 'CTA contrast low', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial' }
+        ],
+        criteriaResults: [
+          { criterionId: 'crit-logo', result: 'fail', issueId: 'logo-broken' },
+          { criterionId: 'crit-a11y', result: 'fail', issueId: 'button-contrast' }
+        ]
+      },
+      {
+        phase: 'recheck',
+        at: '2026-07-20T22:01:00.000Z',
+        checks: clearChecks('.harness/ui-runtime/screenshots/feat-003-2.png'),
+        issues: [
+          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'resolved', summary: 'Logo 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'asset restored' },
+          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'open', summary: 'CTA contrast still low', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial' }
+        ],
+        criteriaResults: [
+          { criterionId: 'crit-logo', result: 'pass' },
+          { criterionId: 'crit-a11y', result: 'fail', issueId: 'button-contrast' }
+        ]
+      },
+      {
+        phase: 'recheck',
+        at: '2026-07-20T22:02:00.000Z',
+        checks: clearChecks('.harness/ui-runtime/screenshots/feat-003-3.png'),
+        issues: [
+          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'resolved', summary: 'Logo 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'asset restored' },
+          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'resolved', summary: 'CTA contrast fixed', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'contrast now 6.2:1' }
+        ],
+        criteriaResults: [
+          { criterionId: 'crit-logo', result: 'pass' },
+          { criterionId: 'crit-a11y', result: 'pass' }
+        ]
+      }
+    ]
+  };
+  const multiRecheck = validateUiRuntimeArtifact(multiRecheckArtifact, { featId: 'feat-003' });
+  if (!multiRecheck.ok) {
+    throw new Error(`ui-runtime v3 multi-recheck artifact should validate: ${multiRecheck.errors.join('; ')}`);
+  }
+
+  // Scenario 3: smoke checks all clear but an acceptance issue is still open →
+  // latest run is not closed → validation must fail (the core v3 guarantee).
+  const openIssueArtifact = {
+    version: '3',
+    featId: 'feat-004',
+    url: 'http://localhost:3000/',
+    mcp: 'connected',
+    criteria: [{ id: 'crit-logo', summary: 'Logo renders undistorted' }],
+    runs: [
+      {
+        phase: 'initial',
+        at: '2026-07-20T23:00:00.000Z',
+        checks: clearChecks('.harness/ui-runtime/screenshots/feat-004.png'),
+        issues: [
+          { id: 'logo-distorted', class: 'visual-defect', severity: 'major', status: 'open', summary: 'Logo loads (200) but renders stretched', source: { from: 'acceptance', criterionId: 'crit-logo' }, openedIn: 'initial' }
+        ],
+        criteriaResults: [{ criterionId: 'crit-logo', result: 'fail', issueId: 'logo-distorted' }]
+      }
+    ]
+  };
+  const openIssue = validateUiRuntimeArtifact(openIssueArtifact, { featId: 'feat-004' });
+  if (openIssue.ok) {
+    throw new Error('ui-runtime v3 artifact with all checks clear but an open acceptance issue should fail validation');
+  }
+
+  // Scenario 3b: console/network clear without count must fail tier-1.
+  const missingCountArtifact = {
+    version: '3',
+    featId: 'feat-007',
+    url: 'http://localhost:3000/',
+    mcp: 'connected',
+    criteria: [{ id: 'crit-page', summary: 'Sign-in page renders' }],
+    runs: [{
+      phase: 'initial',
+      at: '2026-07-21T10:00:00.000Z',
+      checks: [
+        { id: 'dev-server', result: 'clear' },
+        { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
+        { id: 'a11y-content', result: 'clear' },
+        { id: 'styled-not-default', result: 'clear' },
+        { id: 'console-errors', result: 'clear' },
+        { id: 'network-errors', result: 'clear' },
+        { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-007.png' }
+      ],
+      issues: [],
+      criteriaResults: [{ criterionId: 'crit-page', result: 'pass' }]
+    }]
+  };
+  const missingCount = validateUiRuntimeArtifact(missingCountArtifact, { featId: 'feat-007' });
+  if (missingCount.ok) {
+    throw new Error('ui-runtime artifact with clear console/network checks but no count should fail validation');
+  }
+  if (!/requires count when result is clear/.test(missingCount.errors.join('; '))) {
+    throw new Error('missing count rejection should mention count requirement');
+  }
+
+  // Scenario 3c: media criterion pass without load proof on a closed run must fail.
+  const mediaPassNoProofArtifact = {
+    version: '3',
+    featId: 'feat-008',
+    url: 'http://localhost:3000/',
+    mcp: 'connected',
+    criteria: [{ id: 'crit-logo', summary: 'Hubtel logo loads and displays' }],
+    runs: [{
+      phase: 'initial',
+      at: '2026-07-21T11:00:00.000Z',
+      checks: [
+        { id: 'dev-server', result: 'clear' },
+        { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
+        { id: 'a11y-content', result: 'clear', detail: 'image "Hubtel" in a11y tree' },
+        { id: 'styled-not-default', result: 'clear' },
+        { id: 'console-errors', result: 'clear', count: 0 },
+        { id: 'network-errors', result: 'clear', count: 0 },
+        { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-008.png' }
+      ],
+      issues: [],
+      criteriaResults: [{ criterionId: 'crit-logo', result: 'pass' }]
+    }]
+  };
+  const mediaPassNoProof = validateUiRuntimeArtifact(mediaPassNoProofArtifact, { featId: 'feat-008' });
+  if (mediaPassNoProof.ok) {
+    throw new Error('ui-runtime artifact with media criterion pass but no load proof should fail validation');
+  }
+  if (!/load proof|server-output/.test(mediaPassNoProof.errors.join('; '))) {
+    throw new Error('media pass without proof should mention load proof or server-output requirement');
+  }
+
+  // Scenario 4: v1 connected artifact is obsolete and must be rejected with a re-run message.
+  const v1Connected = validateUiRuntimeArtifact({
+    version: '1',
+    featId: 'feat-005',
+    url: 'http://localhost:3000/page',
+    mcp: 'connected',
+    initial: { at: '2026-07-20T14:00:00Z', status: 'pass', assertions: [{ id: 'dev-server', status: 'pass' }] }
+  }, { featId: 'feat-005' });
+  if (v1Connected.ok) {
+    throw new Error('ui-runtime v1 connected artifact should be rejected as obsolete');
+  }
+  if (!/version 1 is obsolete/.test(v1Connected.errors.join('; '))) {
+    throw new Error('ui-runtime v1 connected rejection should mention the obsolete version and re-run guidance');
+  }
+
+  // Scenario 5: v1 skipped shape (MCP unavailable) is still accepted.
+  const v1Skipped = validateUiRuntimeArtifact({
+    version: '1',
+    featId: 'feat-006',
+    skipped: true,
+    skipReason: 'MCP unavailable',
+    mcp: 'unavailable'
+  }, { featId: 'feat-006' });
+  if (!v1Skipped.ok) {
+    throw new Error(`ui-runtime v1 skipped shape should still validate: ${v1Skipped.errors.join('; ')}`);
+  }
+
+  // summarizeUiRuntimeArtifact surfaces the latest run's open issues.
+  const openSummary = summarizeUiRuntimeArtifact(openIssueArtifact, { featId: 'feat-004' });
+  if (openSummary.closed) {
+    throw new Error('summarizeUiRuntimeArtifact should report an artifact with an open issue as not closed');
+  }
+  if (!openSummary.openIssues.some((i) => i.id === 'logo-distorted')) {
+    throw new Error('summarizeUiRuntimeArtifact should list the open issue id from the latest run');
+  }
+  const closedSummary = summarizeUiRuntimeArtifact(closedLoopArtifact, { featId: 'feat-002' });
+  if (!closedSummary.closed) {
+    throw new Error('summarizeUiRuntimeArtifact should report the closed-loop artifact as closed');
+  }
+
+  // summarize-ui-runtime.mjs CLI: exit 1 + open issue id when open; exit 0 when closed.
+  const summarizeDir = path.join(tempRoot, 'summarize-fixture');
+  await mkdir(path.join(summarizeDir, '.harness', 'ui-runtime'), { recursive: true });
+  await writeFile(path.join(summarizeDir, '.harness', 'ui-runtime', 'feat-004.json'), JSON.stringify(openIssueArtifact, null, 2));
+  await writeFile(path.join(summarizeDir, '.harness', 'ui-runtime', 'feat-002.json'), JSON.stringify(closedLoopArtifact, null, 2));
+
+  const summarizeOpen = runNode(summarizeScript, ['--target', summarizeDir, 'feat-004']);
+  if (summarizeOpen.status !== 1) {
+    throw new Error(`summarize-ui-runtime.mjs should exit 1 for an open artifact (got ${summarizeOpen.status})`);
+  }
+  if (!/logo-distorted/.test(summarizeOpen.stdout)) {
+    throw new Error('summarize-ui-runtime.mjs should print the open issue id');
+  }
+  const summarizeClosed = runNode(summarizeScript, ['--target', summarizeDir, 'feat-002']);
+  if (summarizeClosed.status !== 0) {
+    throw new Error(`summarize-ui-runtime.mjs should exit 0 for a closed artifact (got ${summarizeClosed.status})`);
+  }
+  const summarizeMissing = runNode(summarizeScript, ['--target', summarizeDir, 'feat-999']);
+  if (summarizeMissing.status !== 2) {
+    throw new Error(`summarize-ui-runtime.mjs should exit 2 when the artifact file is missing (got ${summarizeMissing.status})`);
+  }
+
+  const uiArtifactDir = path.join(tempRoot, '.harness', 'ui-runtime');
+  await mkdir(uiArtifactDir, { recursive: true });
+  const uiFeaturePath = path.join(tempRoot, 'feature_list.json');
+  await writeFile(uiFeaturePath, JSON.stringify({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-010',
+      featId: 'feat-010',
+      name: 'Dashboard page',
+      description: 'User-facing dashboard screen',
+      verification: 'pnpm test dashboard',
+      status: 'verified',
+      taskId: '99901',
+      evidence: '',
+      dependencies: []
+    }]
+  }, null, 2));
+
+  const missingArtifact = validateFeatureList(JSON.parse(await readFile(uiFeaturePath, 'utf8')), { repoRoot: tempRoot });
+  if (missingArtifact.ok) {
+    throw new Error('validateFeatureList should fail when a verified UI row lacks a ui-runtime artifact');
+  }
+
+  await writeFile(path.join(uiArtifactDir, 'task-010.json'), JSON.stringify({
+    version: '1',
+    featId: 'task-010',
+    skipped: true,
+    skipReason: 'MCP unavailable',
+    mcp: 'unavailable'
+  }, null, 2));
+
+  const skippedArtifact = validateFeatureList(JSON.parse(await readFile(uiFeaturePath, 'utf8')), { repoRoot: tempRoot });
+  if (!skippedArtifact.ok) {
+    throw new Error(`validateFeatureList should accept skipped ui-runtime artifact: ${skippedArtifact.errors.join('; ')}`);
+  }
+
+  const nestedInitCheck = spawnSync(process.execPath, ['--check', path.join(nestedRoot, 'init.mjs')], { encoding: 'utf8' });
+  if (nestedInitCheck.status !== 0) {
+    console.error(nestedInitCheck.stderr);
+    throw new Error('nested init.mjs failed node --check');
+  }
+
+  // --- Karate + Conventional Commits + Selective builds + Two-phase planning ---
+
+  // Schema/enum: requiredTests must accept `karate` as a first-class layer.
+  const schemaText = await readFile(path.join(skillRoot, 'templates', 'feature-list.schema.json'), 'utf8');
+  if (!/"karate"/.test(schemaText)) {
+    throw new Error('feature-list.schema.json requiredTests enum must include "karate"');
+  }
+
+  // SKILL + agents.md doc anchors — surface Karate, two-phase planning, selective builds.
+  const skillText = await readFile(path.join(skillRoot, 'SKILL.md'), 'utf8');
+  for (const marker of ['Karate', 'Selective builds', 'Phase 1', 'Phase 2']) {
+    if (!skillText.includes(marker)) {
+      throw new Error(`SKILL.md is missing the "${marker}" section/reference`);
+    }
+  }
+  const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services']) {
+    if (!agentsTemplate.includes(marker)) {
+      throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
+    }
+  }
+
+  // New template files exist.
+  for (const rel of ['templates/overview-plan.md', 'templates/overview-plan.schema.json', 'templates/plan.md', 'templates/plan.schema.json']) {
+    const full = path.join(skillRoot, rel);
+    try {
+      await readFile(full, 'utf8');
+    } catch {
+      throw new Error(`Expected template ${rel} to exist after Phase 1/Phase 2 planning restructure`);
+    }
+  }
+
+  // Scaffolder creates .harness/plans/.gitkeep for the two-phase planning subagent.
+  const scaffoldedGitkeep = path.join(tempRoot, '.harness', 'plans', '.gitkeep');
+  try {
+    await readFile(scaffoldedGitkeep, 'utf8');
+  } catch {
+    throw new Error('create-harness.mjs must scaffold .harness/plans/.gitkeep');
+  }
+
+  // detectDotnetMonorepo detects src/*.sln + ≥ 2 src/<Project>/*.csproj.
+  const monorepoTrue = detectDotnetMonorepo({
+    stack: 'dotnet',
+    files: [
+      'src/Hubtel.CCI.sln',
+      'src/Hubtel.CCI.Api/Hubtel.CCI.Api.csproj',
+      'src/Hubtel.Vault.Api/Hubtel.Vault.Api.csproj'
+    ]
+  });
+  if (!monorepoTrue.isMonorepo) {
+    throw new Error('detectDotnetMonorepo should return isMonorepo:true for src/*.sln + 2 csproj');
+  }
+  const monorepoFalse = detectDotnetMonorepo({ stack: 'dotnet', files: ['src/OnlyOne/OnlyOne.csproj'] });
+  if (monorepoFalse.isMonorepo) {
+    throw new Error('detectDotnetMonorepo should return false when < 2 csproj under src/');
+  }
+  const monorepoWrongStack = detectDotnetMonorepo({ stack: 'typescript-react', files: [] });
+  if (monorepoWrongStack.isMonorepo) {
+    throw new Error('detectDotnetMonorepo should return false on non-dotnet stacks');
+  }
+
+  // resolveTouchedServices maps staged src/<Project>/… paths to their .csproj basenames.
+  const touchRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-touched-'));
+  await mkdir(path.join(touchRoot, 'src', 'Hubtel.CCI.Api'), { recursive: true });
+  await writeFile(path.join(touchRoot, 'src', 'Hubtel.CCI.Api', 'Hubtel.CCI.Api.csproj'), '<Project/>');
+  await mkdir(path.join(touchRoot, 'src', 'Hubtel.Vault.Api'), { recursive: true });
+  await writeFile(path.join(touchRoot, 'src', 'Hubtel.Vault.Api', 'Hubtel.Vault.Api.csproj'), '<Project/>');
+  const touched = resolveTouchedServices(touchRoot, [
+    'src/Hubtel.CCI.Api/Controllers/OtpController.cs',
+    'src/Hubtel.Vault.Api/Services/VaultReader.cs',
+    'tests/Hubtel.CCI.Api.Tests/OtpControllerTests.cs' // out of src/, ignored
+  ]);
+  if (touched.length !== 2 || !touched.includes('Hubtel.CCI.Api') || !touched.includes('Hubtel.Vault.Api')) {
+    throw new Error(`resolveTouchedServices should return ["Hubtel.CCI.Api","Hubtel.Vault.Api"], got ${JSON.stringify(touched)}`);
+  }
+  const buildTag = formatBuildTag(touched);
+  if (!/^build: -Hubtel\.CCI\.Api -Hubtel\.Vault\.Api$/.test(buildTag)) {
+    throw new Error(`formatBuildTag should render "build: -Hubtel.CCI.Api -Hubtel.Vault.Api", got "${buildTag}"`);
+  }
+  await rm(touchRoot, { recursive: true, force: true });
+
+  // Conventional Commits regex accepts the canonical shape and rejects bare Closed:-only subjects.
+  const okCommit = validateCommitMessage([
+    'feat: add OTP verification endpoint build: -Hubtel.CCI.Api -Hubtel.Vault.Api',
+    '',
+    'Adds POST /api/otp/verify with request-id lookup and validates against Redis-stored codes.',
+    '',
+    'Closed: #12346 #12347'
+  ].join('\n'));
+  if (!okCommit.ok) {
+    throw new Error(`validateCommitMessage should accept a well-formed Conventional Commits message; got errors: ${okCommit.errors.join('; ')}`);
+  }
+  const legacyCommit = validateCommitMessage('Closed: #12348');
+  if (!legacyCommit.ok) {
+    throw new Error('validateCommitMessage should accept legacy `Closed: #…` single-line commits as tier-1 pass (backward compat)');
+  }
+  if (!legacyCommit.warnings.some((w) => /legacy `Closed:/.test(w))) {
+    throw new Error('legacy `Closed:` single-line commits should raise a soft warning');
+  }
+  const badCommit = validateCommitMessage('random subject text');
+  if (badCommit.ok) {
+    throw new Error('validateCommitMessage should reject subjects that are neither Conventional Commits nor legacy `Closed:` form');
+  }
+  if (!Array.isArray(CONVENTIONAL_COMMIT_TYPES) || !CONVENTIONAL_COMMIT_TYPES.includes('feat')) {
+    throw new Error('CONVENTIONAL_COMMIT_TYPES must be exported and include `feat`');
+  }
+
+  // Karate backend-surface heuristic: a backend row on .NET stack without karate warns.
+  const karateFixture = {
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Add OTP verification endpoint',
+      description: 'POST /api/otp/verify — new endpoint that returns a JWT on success',
+      verification: 'dotnet test',
+      requiredTests: ['unit'],
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  };
+  const karateWarn = validateFeatureList(karateFixture, { projectStack: 'dotnet' });
+  if (!karateWarn.warnings.some((w) => /backend service surface/.test(w) && /karate/.test(w))) {
+    throw new Error('validateFeatureList should soft-warn backend-surface .NET rows that lack `karate`');
+  }
+  // Same fixture on a frontend stack should NOT trip the backend-surface warning.
+  const karateQuiet = validateFeatureList(karateFixture, { projectStack: 'typescript-react' });
+  if (karateQuiet.warnings.some((w) => /backend service surface/.test(w))) {
+    throw new Error('backend-service karate warning must not fire on frontend stacks');
+  }
+  // Karate + missing verification hint warns.
+  const karateVerification = validateFeatureList({
+    sprintPlanner: SPRINT_BLOCK,
+    tasks: [{
+      id: 'task-001',
+      featId: 'feat-001',
+      name: 'Otp flow',
+      description: 'business flow',
+      verification: 'dotnet test',
+      requiredTests: ['karate'],
+      status: 'not-started',
+      evidence: '',
+      dependencies: []
+    }]
+  }, { projectStack: 'dotnet' });
+  if (!karateVerification.warnings.some((w) => /requiredTests includes karate/.test(w))) {
+    throw new Error('validateFeatureList should warn when requiredTests includes karate but verification does not mention karate/mvn/LocalTestRunner');
+  }
+
+  // CHANGELOG must record the retained additions.
+  const changelog = await readFile(path.join(skillRoot, 'CHANGELOG.md'), 'utf8');
+  for (const marker of ['Karate', 'Selective-build', 'Conventional Commits', 'Two-phase planning']) {
+    if (!changelog.includes(marker)) {
+      throw new Error(`CHANGELOG.md is missing the "${marker}" entry`);
+    }
+  }
+
+  // metrics.mjs (Phase 1): git-backed harvest over a repo. Skipped only when
+  // git is unavailable on the runner.
+  const gitAvailable = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
+  if (!gitAvailable) {
+    console.warn('metrics.mjs test skipped: git not available on PATH');
+  } else {
+    const gitIn = (cwd, gitArgs) => spawnSync('git', gitArgs, { cwd, encoding: 'utf8' });
+    const initGit = gitIn(metricsRoot, ['init', '-q']);
+    if (initGit.status !== 0) {
+      throw new Error(`metrics test: git init failed — ${initGit.stderr}`);
+    }
+    await writeFile(path.join(metricsRoot, 'AGENTS.md'), '# Harness\n', 'utf8');
+    await mkdir(path.join(metricsRoot, '.harness', 'plans'), { recursive: true });
+    await writeFile(path.join(metricsRoot, '.harness', 'plans', 'feat-001.md'), `---
+featureId: feat-001
+title: Tooling foundation
+status: approved
+---
+
+# feat-001: Tooling foundation
+`, 'utf8');
+    await writeFile(path.join(metricsRoot, '.harness', 'plans', 'feat-002.md'), `---
+featureId: feat-002
+title: Data layer
+status: draft
+---
+
+# feat-002: Data layer
+`, 'utf8');
+    const doneTask = (id, taskId) => ({
+      id,
+      featId: 'feat-001',
+      name: `Task ${id}`,
+      description: 'delivered work',
+      verification: 'node init.mjs',
+      status: 'done',
+      taskId,
+      planFile: '.harness/plans/feat-001.md',
+      evidence: '',
+      dependencies: []
+    });
+    const metricsFeatures = {
+      sprintPlanner: SPRINT_BLOCK,
+      tasks: [
+        doneTask('task-001', '379429'),
+        doneTask('task-002', '379430'),
+        { id: 'task-003', featId: 'feat-002', name: 'Blocked task', description: 'd', verification: 'node init.mjs', status: 'blocked', taskId: '379431', planFile: '.harness/plans/feat-002.md', evidence: '', dependencies: [] },
+        { id: 'task-004', featId: 'feat-002', name: 'Pending task', description: 'd', verification: 'node init.mjs', status: 'not-started', planFile: '.harness/plans/feat-002.md', evidence: '', dependencies: [] }
+      ]
+    };
+    await writeFile(path.join(metricsRoot, 'feature_list.json'), JSON.stringify(metricsFeatures, null, 2), 'utf8');
+    gitIn(metricsRoot, ['add', '.']);
+    const commit = gitIn(metricsRoot, [
+      '-c', 'user.email=selftest@example.com',
+      '-c', 'user.name=Self Test',
+      'commit', '-q', '-m', 'feat: deliver feature one\n\nClosed: #379429 #379430'
+    ]);
+    if (commit.status !== 0) {
+      throw new Error(`metrics test: git commit failed — ${commit.stderr}`);
+    }
+    const shortHash = gitIn(metricsRoot, ['rev-parse', '--short=7', 'HEAD']).stdout.trim();
+    // Re-point the done rows' evidence at the real commit (working-tree edit is enough).
+    metricsFeatures.tasks[0].evidence = `commit ${shortHash}`;
+    metricsFeatures.tasks[1].evidence = `commit ${shortHash}`;
+    await writeFile(path.join(metricsRoot, 'feature_list.json'), JSON.stringify(metricsFeatures, null, 2), 'utf8');
+
+    const metricsJsonPath = path.join(metricsRoot, '.harness', 'metrics', 'metrics.json');
+    const metricsHtmlPath = path.join(metricsRoot, '.harness', 'metrics', 'metrics.html');
+    const metricsRun = runNode(path.join(skillRoot, 'scripts', 'metrics.mjs'), [
+      '--target', metricsRoot,
+      '--repo-name', 'Self-Test-Repo',
+      '--no-azure'
+    ]);
+    if (metricsRun.status !== 0) {
+      throw new Error(`metrics.mjs exited ${metricsRun.status}: ${metricsRun.stderr}`);
+    }
+    if (!metricsRun.stdout.includes('.harness/metrics/metrics.json') && !metricsRun.stdout.includes('.harness\\metrics\\metrics.json')) {
+      throw new Error(`metrics.mjs should report JSON output path — got: ${metricsRun.stdout}`);
+    }
+    let metricsOut;
+    try {
+      metricsOut = JSON.parse(await readFile(metricsJsonPath, 'utf8'));
+    } catch (err) {
+      throw new Error(`metrics.mjs did not write valid JSON to ${metricsJsonPath}: ${err.message}`);
+    }
+    try {
+      await readFile(metricsHtmlPath, 'utf8');
+    } catch {
+      throw new Error(`metrics.mjs should write HTML to ${metricsHtmlPath}`);
+    }
+    const m = metricsOut.metrics;
+    if (!m) {
+      throw new Error('metrics.mjs output must have a top-level `metrics` key');
+    }
+    if (m.taskDelivery.tasksCreated !== 4 || m.taskDelivery.tasksCompleted !== 2 || m.taskDelivery.tasksBlocked !== 1) {
+      throw new Error(`metrics task counts wrong: ${JSON.stringify(m.taskDelivery)}`);
+    }
+    if (typeof m.taskDelivery.timeToFirstFeatureHours !== 'number' || m.taskDelivery.timeToFirstFeatureHours < 0) {
+      throw new Error(`metrics.taskDelivery.timeToFirstFeatureHours should be a non-negative number — got ${m.taskDelivery.timeToFirstFeatureHours}`);
+    }
+    if (m.taskDelivery.avgHoursBetweenFeatureCommits !== null) {
+      throw new Error(`metrics.taskDelivery.avgHoursBetweenFeatureCommits should be null with a single feature commit — got ${m.taskDelivery.avgHoursBetweenFeatureCommits}`);
+    }
+    if (m.usageLog.parentStoryUrl !== null) {
+      throw new Error(`metrics.usageLog.parentStoryUrl should be null without an Azure remote — got ${m.usageLog.parentStoryUrl}`);
+    }
+    if (m.azure.status !== 'skipped' || m.phase !== 1) {
+      throw new Error(`--no-azure should stay Phase 1 with a skipped azure lookup — got phase ${m.phase}, azure ${JSON.stringify(m.azure)}`);
+    }
+    if (!Array.isArray(m.pullRequests) || m.pullRequests.length !== 0) {
+      throw new Error('metrics.pullRequests should be an empty array when the Azure lookup is skipped');
+    }
+
+    // A cancellation is the absence of a verdict, not a failure — Azure cancels a
+    // PR's in-flight build whenever a new push supersedes it.
+    const canceled = firstBuildOutcome([{ status: 'completed', result: 'canceled', id: 1, queueTime: '2026-08-05T10:00:00Z' }]);
+    if (canceled.firstBuildPassed !== null || canceled.totalBuilds !== 1 || canceled.buildsCanceled !== 1) {
+      throw new Error(`a canceled-only build should yield no verdict but stay counted — got ${JSON.stringify(canceled)}`);
+    }
+    // The first build that actually finished decides the verdict, not the one a
+    // second push killed.
+    const superseded = firstBuildOutcome([
+      { status: 'completed', result: 'canceled', id: 6, queueTime: '2026-08-05T09:00:00Z' },
+      { status: 'completed', result: 'partiallySucceeded', id: 7, queueTime: '2026-08-05T09:02:00Z' }
+    ]);
+    if (superseded.firstBuildPassed !== 'Yes' || superseded.buildId !== 7 || superseded.buildsCanceled !== 1 || superseded.totalBuilds !== 2) {
+      throw new Error(`a superseded build must be skipped, not fail the PR — got ${JSON.stringify(superseded)}`);
+    }
+    const passed = firstBuildOutcome([
+      { status: 'completed', result: 'succeeded', id: 2, queueTime: '2026-08-05T10:00:00Z' },
+      { status: 'completed', result: 'failed', id: 3, queueTime: '2026-08-05T12:00:00Z' }
+    ]);
+    if (passed.firstBuildPassed !== 'Yes' || passed.buildId !== 2) {
+      throw new Error(`earliest build should decide the verdict — got ${JSON.stringify(passed)}`);
+    }
+    const running = firstBuildOutcome([{ status: 'inProgress', id: 4 }]);
+    if (running.firstBuildPassed !== null || running.totalBuilds !== 1) {
+      throw new Error(`an in-flight build should yield no verdict — got ${JSON.stringify(running)}`);
+    }
+    // Hubtel's pipeline has steps that report failure without failing the build,
+    // so a partial success is what Azure approves the build policy on.
+    const partialBuild = firstBuildOutcome([
+      { status: 'completed', result: 'partiallySucceeded', id: 5, queueTime: '2026-08-05T10:00:00Z' }
+    ]);
+    if (partialBuild.firstBuildPassed !== 'Yes' || partialBuild.buildResultLabel !== 'Partial') {
+      throw new Error(`partial build should be a Yes labelled Partial — got ${JSON.stringify(partialBuild)}`);
+    }
+
+    // First run is reconstructed from the status log and build history, not from
+    // the policy's current state.
+    const statusLog = [
+      { contextGenre: 'hubtel', contextName: 'sonar', state: 'failed', creationDate: '2026-08-04T10:00:00Z' },
+      { contextGenre: 'hubtel', contextName: 'sonar', state: 'succeeded', creationDate: '2026-08-04T12:00:00Z' }
+    ];
+    const buildLog = [
+      { status: 'completed', result: 'failed', id: 10, queueTime: '2026-08-04T09:00:00Z' },
+      { status: 'completed', result: 'succeeded', id: 11, queueTime: '2026-08-04T11:00:00Z' }
+    ];
+    const evals = [
+      { status: 'approved', configuration: { isBlocking: true, isEnabled: true, type: { displayName: 'Status' }, settings: { statusName: 'sonar', statusGenre: 'hubtel' } } },
+      { status: 'approved', configuration: { isBlocking: true, isEnabled: true, type: { displayName: 'Build' }, settings: { buildDefinitionId: 42 } } },
+      { status: 'queued', configuration: { isBlocking: true, isEnabled: true, type: { displayName: 'Minimum number of reviewers' }, settings: {} } }
+    ];
+    const reconstructed = checksForPullRequest({ evaluations: evals, statuses: statusLog, builds: buildLog });
+    if (reconstructed.ciPassedFirstRun !== 'No') {
+      throw new Error(`both checks failed first then went green — first run must be No, got ${reconstructed.ciPassedFirstRun}`);
+    }
+    if (reconstructed.checks.length !== 2) {
+      throw new Error(`only blocking quality policies are checks — got ${JSON.stringify(reconstructed.checks.map((c) => c.name))}`);
+    }
+    const sonarCheck = reconstructed.checks.find((c) => c.name === 'sonar');
+    if (sonarCheck.firstRun !== 'Failed' || sonarCheck.latest !== 'Passed' || sonarCheck.attempts !== 2) {
+      throw new Error(`sonar should read Failed first, Passed latest, 2 runs — got ${JSON.stringify(sonarCheck)}`);
+    }
+    // policyPassRate gives partial credit; unsettled policies stay out of the denominator.
+    const q = reconstructed.policyPassRate;
+    if (q.total !== 2 || q.firstTry.passed !== 0 || q.firstTry.settled !== 2 || q.firstTry.rate !== 0) {
+      throw new Error(`policyPassRate.firstTry should be 0/2 at 0% — got ${JSON.stringify(q.firstTry)}`);
+    }
+    if (q.current.passed !== 2 || q.current.rate !== 1) {
+      throw new Error(`policyPassRate.current should be 2/2 at 100% — got ${JSON.stringify(q.current)}`);
+    }
+    const partial = checksForPullRequest({
+      evaluations: evals,
+      statuses: [{ contextGenre: 'hubtel', contextName: 'sonar', state: 'succeeded', creationDate: '2026-08-04T10:00:00Z' }],
+      builds: [{ status: 'completed', result: 'failed', id: 1, queueTime: '2026-08-04T09:00:00Z' }]
+    });
+    if (partial.policyPassRate.firstTry.rate !== 0.5) {
+      throw new Error(`one of two policies green should be 50% — got ${JSON.stringify(partial.policyPassRate.firstTry)}`);
+    }
+
+    const buildCheck = reconstructed.checks.find((c) => c.type === 'Build');
+    if (buildCheck.firstRun !== 'Failed' || buildCheck.latest !== 'Passed') {
+      throw new Error(`build should read Failed first, Passed latest — got ${JSON.stringify(buildCheck)}`);
+    }
+    // A double push cancels the in-flight build. The check must read the finished
+    // run, count one attempt rather than two, and never report Failed.
+    const supersededCheck = checksForPullRequest({
+      evaluations: [evals[1]],
+      statuses: [],
+      builds: [
+        { status: 'completed', result: 'canceled', id: 30, queueTime: '2026-08-04T09:04:00Z' },
+        { status: 'completed', result: 'partiallySucceeded', id: 31, queueTime: '2026-08-04T09:06:00Z' }
+      ]
+    });
+    const supersededBuild = supersededCheck.checks[0];
+    if (supersededBuild.firstRun !== 'Passed' || supersededBuild.attempts !== 1 || supersededBuild.canceledRuns !== 1) {
+      throw new Error(`a superseded build must not count as an attempt or a failure — got ${JSON.stringify(supersededBuild)}`);
+    }
+    if (supersededCheck.ciPassedFirstRun !== 'No' && supersededCheck.ciPassedFirstRun !== 'Yes') {
+      throw new Error('a superseded build should still leave a settled first-run verdict');
+    }
+    // Every run cancelled — no verdict at all, so the check joins checksNeverRan
+    // rather than reporting a failure the code never caused.
+    const allCanceled = checksForPullRequest({
+      evaluations: [evals[1]],
+      statuses: [],
+      builds: [{ status: 'completed', result: 'canceled', id: 32, queueTime: '2026-08-04T09:04:00Z' }]
+    });
+    if (allCanceled.checks[0].firstRun !== null || allCanceled.ciPassedFirstRun !== null || allCanceled.checksNeverRan !== 1) {
+      throw new Error(`an all-cancelled build check should be unassessable — got ${JSON.stringify(allCanceled)}`);
+    }
+    if (allCanceled.checks[0].latestDetail !== 'Canceled') {
+      throw new Error(`an all-cancelled build should name the cancellation — got ${JSON.stringify(allCanceled.checks[0])}`);
+    }
+    // A partial build reads as Passed — matching the approved build policy — while
+    // the detail keeps saying Partial so a non-blocking step failure stays visible.
+    const partialCheck = checksForPullRequest({
+      evaluations: [evals[1]],
+      statuses: [],
+      builds: [{ status: 'completed', result: 'partiallySucceeded', id: 12, queueTime: '2026-08-04T09:00:00Z' }]
+    }).checks[0];
+    if (partialCheck.latest !== 'Passed' || partialCheck.latestDetail !== 'Partial' || partialCheck.firstRun !== 'Passed') {
+      throw new Error(`a partial build check should read Passed/Partial — got ${JSON.stringify(partialCheck)}`);
+    }
+    const allGreen = checksForPullRequest({
+      evaluations: [evals[0]],
+      statuses: [{ contextGenre: 'hubtel', contextName: 'sonar', state: 'succeeded', creationDate: '2026-08-04T10:00:00Z' }],
+      builds: []
+    });
+    if (allGreen.ciPassedFirstRun !== 'Yes' || allGreen.checksNeverRan !== 0) {
+      throw new Error(`a check green on its first post should be Yes with nothing unrun — got ${JSON.stringify(allGreen.ciPassedFirstRun)}, neverRan ${allGreen.checksNeverRan}`);
+    }
+    const unsettled = checksForPullRequest({ evaluations: [evals[0]], statuses: [], builds: [] });
+    if (unsettled.ciPassedFirstRun !== null) {
+      throw new Error(`a check with no settled status yields no verdict — got ${unsettled.ciPassedFirstRun}`);
+    }
+    // A policy that never ran must not block a Yes (it did on repos with a
+    // permanently queued gate), but it must stay counted so the pass is legible
+    // as a pass over an incomplete gate. ciPassedFirstRun and policyPassRate
+    // judge the same denominator — they must never disagree.
+    const incompleteGate = checksForPullRequest({
+      evaluations: evals,
+      statuses: [],
+      builds: [{ status: 'completed', result: 'succeeded', id: 20, queueTime: '2026-08-04T09:00:00Z' }]
+    });
+    if (incompleteGate.ciPassedFirstRun !== 'Yes' || incompleteGate.checksNeverRan !== 1) {
+      throw new Error(`a queued policy should not block a Yes but must be counted — got ${incompleteGate.ciPassedFirstRun}, neverRan ${incompleteGate.checksNeverRan}`);
+    }
+    if (incompleteGate.policyPassRate.total !== 2 || incompleteGate.policyPassRate.firstTry.settled !== 1) {
+      throw new Error(`an incomplete gate should report 1 settled of 2 — got ${JSON.stringify(incompleteGate.policyPassRate)}`);
+    }
+    if ((incompleteGate.ciPassedFirstRun === 'Yes') !== (incompleteGate.policyPassRate.firstTry.rate === 1)) {
+      throw new Error('ciPassedFirstRun and policyPassRate must agree on the same evidence');
+    }
+
+    // Reviewer counts and work-item linking are process rules, not quality gates.
+    const policy = (type, status, name) => ({
+      status,
+      configuration: { isBlocking: true, isEnabled: true, type: { displayName: type }, settings: { statusName: name } }
+    });
+    const gate = summarizePolicies([
+      policy('Build', 'approved'),
+      policy('Status', 'approved', 'sonarqube-quality-gate'),
+      policy('Minimum number of reviewers', 'queued'),
+      policy('Work item linking', 'queued')
+    ]);
+    if (gate.gateStatus !== 'Passed' || gate.qualityPolicies !== 2 || gate.policies.length !== 2) {
+      throw new Error(`process policies must not affect the gate — got ${JSON.stringify(gate)}`);
+    }
+    const sonarRed = summarizePolicies([
+      policy('Build', 'approved'),
+      policy('Status', 'rejected', 'sonarqube-quality-gate')
+    ]);
+    if (sonarRed.gateStatus !== 'Failed' || sonarRed.buildPolicy !== 'Passed' || sonarRed.sonarQualityGate !== 'Failed') {
+      throw new Error(`a green build with a rejected Sonar gate should fail — got ${JSON.stringify(sonarRed)}`);
+    }
+    if (parseAzureRemote('https://dev.azure.com/hubtel/Front-End/_git/Repo').repo !== 'Repo') {
+      throw new Error('parseAzureRemote should extract org, project and repo from an https remote');
+    }
+    if (parseAzureRemote('https://github.com/acme/repo.git') !== null) {
+      throw new Error('parseAzureRemote should return null for a non-Azure remote');
+    }
+    // Expiry is epoch ms. Only a stamp that is present and past counts — an
+    // unrecognised credential shape must never block a working login.
+    const at = Date.parse('2026-08-17T12:00:00Z');
+    const withStamp = (expiresOnTimestamp) => ({ userInfo: { token: { expiresOnTimestamp } } });
+    if (tokenExpired(withStamp(Date.parse('2026-08-24T00:00:00Z')), at) !== false) {
+      throw new Error('a future expiry stamp should not read as expired');
+    }
+    if (tokenExpired(withStamp(Date.parse('2026-08-11T00:00:00Z')), at) !== true) {
+      throw new Error('a past expiry stamp should read as expired');
+    }
+    for (const shape of [{}, { userInfo: {} }, { userInfo: { token: {} } }, withStamp('soon'), withStamp(NaN), null]) {
+      if (tokenExpired(shape, at) !== false) {
+        throw new Error(`an unreadable expiry must not block the request — got true for ${JSON.stringify(shape)}`);
+      }
+    }
+    const mojibakeTitle = 'Tooling foundation \u00E2\u20AC\u201D Hubtel Design System';
+    if (parsePlanTitle(`---\ntitle: ${mojibakeTitle}\n---\n`) !== 'Tooling foundation \u2014 Hubtel Design System') {
+      throw new Error('parsePlanTitle should repair UTF-8 mojibake in plan titles');
+    }
+    if (repairUtf8Mojibake(mojibakeTitle) !== 'Tooling foundation \u2014 Hubtel Design System') {
+      throw new Error('repairUtf8Mojibake should normalize mis-decoded em dashes');
+    }
+    // Plan files name the feature in several shapes; all must resolve, or the
+    // feature column silently blanks on repos whose plans drifted from the template.
+    const titleShapes = [
+      ['---\r\nfeatId: feat-001\r\nname: Foundation\r\n---\r\n\r\n# feat-001 \u2014 Ignored\r\n', 'Foundation'],
+      ['---\ntitle: Foundation\n---\n', 'Foundation'],
+      ['# feat-001 \u2014 Foundation\n', 'Foundation'],
+      ['# feat-001: Foundation\n', 'Foundation'],
+      ['# feat-001 - Foundation\n', 'Foundation'],
+      ['# Foundation (feat-001)\n', 'Foundation']
+    ];
+    for (const [source, expected] of titleShapes) {
+      if (parsePlanTitle(source) !== expected) {
+        throw new Error(`parsePlanTitle should read ${JSON.stringify(expected)} from ${JSON.stringify(source)} \u2014 got ${JSON.stringify(parsePlanTitle(source))}`);
+      }
+    }
+    if (parsePlanTitle('## Overview\n\nNo heading here.\n') !== null) {
+      throw new Error('parsePlanTitle should return null when a plan names no feature');
+    }
+    const htmlWithDash = metricsHtmlReport({
+      metrics: {
+        repo: { name: 'Sample', branch: 'main', remote: null, path: '/tmp/sample' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        usageLog: { parentStoryUrl: null, parentStoryId: null },
+        taskDelivery: {
+          tasksCreated: 0,
+          tasksCompleted: 0,
+          tasksBlocked: 0,
+          tasksInProgress: 0,
+          tasksVerified: 0,
+          taskCompletionPct: null
+        },
+        featureCatalog: [{ featId: 'feat-001', featureName: 'Data layer \u2014 Prisma', tasksCompleted: 1, tasksTotal: 1 }],
+        features: [],
+        quality: {}
+      }
+    });
+    if (htmlWithDash.includes('\u00E2\u20AC')) {
+      throw new Error('metricsHtmlReport should not emit UTF-8 mojibake for em dashes');
+    }
+    if (!htmlWithDash.includes('Data layer &mdash; Prisma')) {
+      throw new Error('metricsHtmlReport should encode em dashes as HTML entities');
+    }
+    if (azureWorkItemUrl('https://dev.azure.com/hubtel/Hubtel/_git/Hubtel-Pledge', '371977') !== 'https://dev.azure.com/hubtel/Hubtel/_workitems/edit/371977') {
+      throw new Error('azureWorkItemUrl should derive org/project from an https remote');
+    }
+    if (azureWorkItemUrl('git@ssh.dev.azure.com:v3/hubtel/Hubtel/Hubtel-Pledge', '371977') !== 'https://dev.azure.com/hubtel/Hubtel/_workitems/edit/371977') {
+      throw new Error('azureWorkItemUrl should derive org/project from an ssh remote');
+    }
+    if (azureWorkItemUrl('https://github.com/foo/bar.git', '371977') !== null) {
+      throw new Error('azureWorkItemUrl should return null for non-Azure remotes');
+    }
+    if (m.usageLog.parentStoryId !== SPRINT_BLOCK.parentStory.id) {
+      throw new Error('metrics.usageLog.parentStoryId should come from sprintPlanner.parentStory.id');
+    }
+    if (!m.usageLog.harnessInstalledDate) {
+      throw new Error('metrics.usageLog.harnessInstalledDate should be derived from the AGENTS.md commit');
+    }
+    if (m.features.length !== 1 || m.features[0].closedAzureTaskIds.join(',') !== '379429,379430') {
+      throw new Error(`metrics.features should carry the Closed: # ids — got ${JSON.stringify(m.features)}`);
+    }
+    if (m.features[0].featureName !== 'Tooling foundation') {
+      throw new Error(`metrics.features should include featureName from plan — got ${JSON.stringify(m.features[0])}`);
+    }
+    if (!m.featureCatalog?.find((f) => f.featId === 'feat-002' && f.featureName === 'Data layer')) {
+      throw new Error(`metrics.featureCatalog should list plan titles — got ${JSON.stringify(m.featureCatalog)}`);
+    }
+    if (m.quality.length !== 1 || m.quality[0].verificationEvidencePresent !== 'Yes') {
+      throw new Error(`metrics.quality verification evidence should be Yes — got ${JSON.stringify(m.quality)}`);
+    }
+    if (!Array.isArray(m.notes.manualFieldsRequired) || !m.notes.manualFieldsRequired.includes('reviewTimeHours')) {
+      throw new Error('metrics.notes.manualFieldsRequired should list Phase 3 engineer fields');
+    }
+  }
+
+  console.log('harness self-test passed');
+} finally {
+  await rm(tempRoot, { recursive: true, force: true });
+  await rm(nestedRoot, { recursive: true, force: true });
+  await rm(metricsRoot, { recursive: true, force: true });
+}

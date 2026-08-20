@@ -1,0 +1,21 @@
+{
+  "name": "hubtel-docs-as-code",
+  "version": "1.4.0",
+  "description": "Generate, update, validate, or analyze complete DAC-compliant documentation for a Hubtel project",
+  "author": {
+    "name": "Hubtel Enablement Team",
+    "email": "engineering@hubtel.com"
+  },
+  "keywords": [
+    "hubtel",
+    "documentation",
+    "dac-compliance"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Hubtel Docs As Code",
+    "category": "Engineering",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
+  }
+}
