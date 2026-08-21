@@ -29,7 +29,7 @@
         "authentication": "ON_INSTALL"
       },
       "category": "Core Engineering",
-      "description": "Hubtel plugin for building and auditing harnesses around AI coding agents.",
+      "description": "Hubtel plugin for building and auditing harnesses around AI coding agents, encapsulating Hubtel's development workflow.",
       "version": "1.3.0"
     }
   ]
