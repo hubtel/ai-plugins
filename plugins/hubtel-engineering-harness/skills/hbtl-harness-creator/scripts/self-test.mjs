@@ -198,6 +198,9 @@ try {
   if (!checkPasses('Post-push pull request')) {
     throw new Error('fresh scaffold is missing the Post-push pull request instruction check');
   }
+  if (!checkPasses('hbtl-harness label tagging documented')) {
+    throw new Error('fresh scaffold is missing the hbtl-harness label tagging instruction check');
+  }
   if (!checkPasses('Work breakdown')) {
     throw new Error('fresh scaffold is missing the Work breakdown instruction check');
   }

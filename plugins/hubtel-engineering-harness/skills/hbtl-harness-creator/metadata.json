@@ -52,7 +52,6 @@
       "scripts/self-test.mjs",
       "scripts/summarize-ui-runtime.mjs",
       "scripts/metrics.mjs",
-      "scripts/install-mcps.mjs",
       "scripts/lib/harness-utils.mjs",
       "scripts/lib/metrics-utils.mjs",
       "scripts/lib/azure-devops.mjs"

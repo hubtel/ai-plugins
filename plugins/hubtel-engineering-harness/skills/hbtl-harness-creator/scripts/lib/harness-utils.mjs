@@ -1469,6 +1469,7 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['aqua quality-gate', 'CI quality gate', 'quality gate (delegates to'], 'Push gate delegates to aqua quality-gate'),
       textHas(agents, ['MCP review after the quality gate', 'review after the quality gate', 'after the P.2 quality gate', 'green quality gate is'], 'Sonar MCP review ordered after the quality gate'),
       textHas(agents, ['Post-push pull request', 'create_pull_request', 'Open a pull request?'], 'Post-push pull request documented'),
+      textHas(agents, ['hbtl-harness'], 'hbtl-harness label tagging documented'),
       textHas(agents, ['Closing report', 'evidence: commit'], 'Closing report status line documented'),
       textHas(agents, ['Invalid', 'commit'], 'Invalid verbose evidence examples documented')
     ],

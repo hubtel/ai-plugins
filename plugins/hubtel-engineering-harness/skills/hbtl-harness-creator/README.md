@@ -21,9 +21,7 @@ Or copy `skill-packs/harness-engineering/skills/hbtl-harness-creator/` into your
 Run from the skill directory (or pass the full path to each script):
 
 ```bash
-# 1. Install the required MCP servers (hubtel-engineering + hubtel-sprint-planner + hubtel-sonarquabe)
-node scripts/install-mcps.mjs
-# 2. Scaffold the harness
+# Scaffold the harness (MCPs must already be connected — see SKILL.md → Create a harness)
 node scripts/create-harness.mjs --target /path/to/project \
   --sprint-board-url "https://dev.azure.com/hubtel/.../taskboard/..." \
   --parent-story-id "12345" --parent-story-title "CCI ..." \
@@ -36,9 +34,9 @@ node scripts/summarize-ui-runtime.mjs --target /path/to/project feat-002
 
 `summarize-ui-runtime.mjs` reads `.harness/ui-runtime/<featId>.json` (the v3 UI runtime artifact) and prints the latest run's derived status, open issues, criteria results, and screenshot paths. It exits `0` when the artifact is closed (no open issues) or skipped, `1` when issues are open or the file is invalid, and `2` when the file is missing — so an agent can see what step 3.7 still has open without hand-parsing JSON.
 
-Two Hubtel MCPs gate the scaffold: `create-harness.mjs` requires `--sprint-board-url`, `--parent-story-id`, **and** `--engineering-mcp-verified`, and hard-fails without them. Install the required MCPs first with `node scripts/install-mcps.mjs` (registers `hubtel-engineering`, `hubtel-sprint-planner`, and `hubtel-sonarquabe` for the Hubtel agents via the Aqua CLI, plus `design-system` + `chrome-devtools` on frontend projects; idempotent, non-interactive). The SonarQube MCP powers the pre-push review on repos with a `SonarQubeProjectKey` in `azure-pipelines.yml` (see `SONARQUBE-PRE-PUSH-REVIEW-PLAN.md`). Then capture the board via the Sprint Planner MCP (`get_current_user` for the engineer email, then `get_active_sprint_boards`), and confirm the **Hubtel Engineering MCP** (`hubtel-engineering`) is live with a successful `get_guidelines_catalog` call before passing `--engineering-mcp-verified`. Auth for both is MCP-owned, not the harness. The engineering-MCP install also brings the `hbtl-software-development` skill, which owns the docs/guidelines/package-audit mechanics; generated harnesses **delegate** to it and pin **when** each is mandatory — a required two-phase docs probe (an orienting `get_docs_catalog` **before clarify** so questions are grounded in Hubtel's real option space, then `get_doc` + citation on the chosen flow's relevant hit before the breakdown), the guidelines verification gate (`get_guideline`), and a required `audit_packages` check before any dependency change. For **frontend** projects, `install-mcps.mjs` also auto-installs the conditional **Hubtel Design System MCP** (`hubtel-design-system`) as a soft (non-fatal) dependency; generated harnesses delegate all UI mechanics to the MCP and pin only which **tools** to call and when for UI rows (theme via `get_themes` in clarify; `search_components`/`get_composition_pattern` before breakdown; `get_component`/`get_design_tokens`/`find_icons` when implementing; `validate_imports`+`check_setup` before `verified`/`done`). It instructs the MCP's tools (agent-callable), not its slash-command prompts (user-triggered).
+Two Hubtel MCPs gate the scaffold: `create-harness.mjs` requires `--sprint-board-url`, `--parent-story-id`, **and** `--engineering-mcp-verified`, and hard-fails without them. Connect `hubtel-engineering`, `hubtel-sprint-planner`, and (for Sonar-enabled repos) `hubtel-sonarquabe` in the agent environment using Hubtel's standard MCP setup — this skill does not install MCP servers. The SonarQube MCP powers the pre-push review on repos with a `SonarQubeProjectKey` in `azure-pipelines.yml` (see `SONARQUBE-PRE-PUSH-REVIEW-PLAN.md`). Capture the board via the Sprint Planner MCP (`get_current_user` for the engineer email, then `get_active_sprint_boards`), and confirm the **Hubtel Engineering MCP** (`hubtel-engineering`) is live with a successful `get_guidelines_catalog` call before passing `--engineering-mcp-verified`. Auth for both is MCP-owned, not the harness. The engineering MCP typically carries the `hbtl-software-development` skill, which owns the docs/guidelines/package-audit mechanics; generated harnesses **delegate** to it and pin **when** each is mandatory — a required two-phase docs probe (an orienting `get_docs_catalog` **before clarify** so questions are grounded in Hubtel's real option space, then `get_doc` + citation on the chosen flow's relevant hit before the breakdown), the guidelines verification gate (`get_guideline`), and a required `audit_packages` check before any dependency change. For **frontend** UI work, connect the **Hubtel Design System MCP** (`hubtel-design-system`) and **Chrome DevTools MCP** in the agent environment; generated harnesses delegate all UI mechanics to the MCP and pin only which **tools** to call and when for UI rows (theme via `get_themes` in clarify; `search_components`/`get_composition_pattern` before breakdown; `get_component`/`get_design_tokens`/`find_icons` when implementing; `validate_imports`+`check_setup` before `verified`/`done`). It instructs the MCP's tools (agent-callable), not its slash-command prompts (user-triggered).
 
-The scripts use only Node.js built-in modules; `install-mcps.mjs` additionally requires the Aqua CLI on PATH. They can be run after copying the skill directory into another repository.
+The scripts use only Node.js built-in modules. They can be run after copying the skill directory into another repository.
 
 ## What It Creates
 
@@ -89,7 +87,6 @@ hbtl-harness-creator/
 ├── metadata.json
 ├── agents/openai.yaml
 ├── scripts/
-│   ├── install-mcps.mjs
 │   ├── create-harness.mjs
 │   ├── validate-harness.mjs
 │   ├── render-assessment-html.mjs

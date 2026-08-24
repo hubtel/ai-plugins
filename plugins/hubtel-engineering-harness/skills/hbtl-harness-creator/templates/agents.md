@@ -12,7 +12,7 @@ Before writing code:
 4. Ensure the **Hubtel Engineering MCP** (`hubtel-engineering`) is connected — it supplies the mandatory code-quality guidelines and Hubtel docs (see **Hubtel Engineering MCP**). If it's missing, register it before implementation work
 5. Run the baseline `node init.mjs` (cross-platform; `./init.sh` is a bash wrapper) to verify the repo is healthy
 6. Read `feature_list.json` for current task state — if any row has a `featId` and status ∈ `{in-progress, verified}`, resume that feature to completion before starting anything else (see **Feature delivery** → Resume); never commit its `verified` rows individually
-7. **Recover task context before resuming existing rows** — if you are picking up rows you did not author this session (fresh context), fetch full Azure specs with `get_task_details` (server `hubtel-sprint-planner-local`) for **non-completed tasks only** (status ∈ `{not-started, in-progress, blocked}` — skip `verified` and `done` rows since their implementation is already finished). Batch every relevant `taskId` into one call. The local row `description` is a one-line tracking label, not the spec (see **Sprint Planner (Azure tasks)** → Task details on resume)
+7. **Recover task context before resuming existing rows** — if you are picking up rows you did not author this session (fresh context), fetch full Azure specs with `get_task_details` (server `hubtel-sprint-planner`) for **non-completed tasks only** (status ∈ `{not-started, in-progress, blocked}` — skip `verified` and `done` rows since their implementation is already finished). Batch every relevant `taskId` into one call. The local row `description` is a one-line tracking label, not the spec (see **Sprint Planner (Azure tasks)** → Task details on resume)
 7b. **Read plan files for features with plans** — if any task row has a `planFile`, read `.harness/plans/feat-NNN.md` before implementing. The plan provides architectural context (flow diagram, files to touch, file connections) that complements the Azure task spec. Plans are especially valuable on resume — they carry the big picture that `get_task_details` alone may not convey
 8. If the message is implementation work, ensure you're on a compliant **feature branch** before editing code (see **Branch Discipline**)
 9. If the message is implementation work, add/activate a task row **before** editing code (see Request Triage)
@@ -28,7 +28,7 @@ All implementation work happens on a **Hubtel feature branch** — never directl
 users/<username>/feature/<short-desc>
 ```
 
-- `<username>` — your Hubtel handle: the local-part (text before `@`) of your git `user.email` (`git config user.email`), lowercased. If git identity is unset, resolve it from `get_current_user` (server `hubtel-sprint-planner-local`).
+- `<username>` — your Hubtel handle: the local-part (text before `@`) of your git `user.email` (`git config user.email`), lowercased. If git identity is unset, resolve it from `get_current_user` (server `hubtel-sprint-planner`).
 - `<short-desc>` — a kebab-case summary of the work (e.g. `add-otp-login`).
 
 **Gate (run before implementation):**
@@ -319,7 +319,7 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 - **UI runtime assertion** — for every **UI row**, write `.harness/ui-runtime/<featId>.json` (v3) before `verified`/`done` (tier-1). When `chrome-devtools-mcp` is connected, run the full 3.7 loop and record an **append-only `runs[]`** of `checks`, `issues`, and `criteriaResults`; the gate is **no open issues on the latest run**, not "checks passed." Do not report UI runtime pass or set `verified`/`done` until `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0**. Read what's still open with that helper anytime. When it is not connected, write a **skipped** artifact and note the skip in the review overview. Does not change `requiredTests`/`verification` or CI (see **UI Runtime Assertion**)
 - **Approval-gated commit on done** — present the review overview and commit only after explicit human approval (see **Commit approval gate**); then stage this feature's files, commit with message `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature, and use that commit's hash as evidence
 - **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on `Push now?` yes, run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → human consent when blocked) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete (see **Hubtel SonarQube MCP**)
-- **PR after push (explicit consent)** — after a successful push, ask `Open a pull request? (yes / not yet)`; on **yes**, call `create_pull_request` with read-only git resolution only (see **Sprint Planner (Azure tasks)** → Post-push pull request)
+- **PR after push (explicit consent)** — after a successful push, ask `Open a pull request? (yes / not yet)`; on **yes**, call `create_pull_request` with read-only git resolution only, always tagging the PR with `tags: ["hbtl-harness"]` (see **Sprint Planner (Azure tasks)** → Post-push pull request)
 - **Stay in scope** — don't modify files unrelated to the current task
 - **Leave clean state** — next session runs `node init.mjs` with a clean tree
 
@@ -344,7 +344,7 @@ Azure tracking is **mandatory** — there is no ungated harness. `feature_list.j
 
 **Scaffold (once).** The board is captured before the harness exists:
 
-1. Call `get_current_user` (server `hubtel-sprint-planner-local`) to get the authenticated engineer's email.
+1. Call `get_current_user` (server `hubtel-sprint-planner`) to get the authenticated engineer's email.
 2. Call `get_active_sprint_boards` with that email — it lists active boards and validates them internally.
 3. Pick a board → capture `sprintBoardUrl` + `parentStory.{id, title}`.
 4. Scaffold with those values (`create-harness.mjs --sprint-board-url … --parent-story-id …`). Missing values ⇒ scaffold fails; no plain-harness fallback.
@@ -357,7 +357,7 @@ Every Azure task must be **implementation-ready** — not a restatement of the t
 
 **Who authors (and why it stops the drift).** The planning subagent authors these descriptions **feature by feature**, as it writes each `feat-NNN.md` — not the main agent in one trailing pass over all features. Authoring 40+ dense contracts in a single uninterrupted pass exhausts sustained attention and collapses into a fill-in-the-blank template after the first few features (bespoke for the first ~11 tasks, then repeated boilerplate — the exact failure this section exists to prevent). Chunking authoring per feature keeps every task's reasoning fresh and local to its plan. The main agent's job on the returned set is to **validate**, not re-author: it runs the **Self-audit gate** (below) and resumes the subagent to re-author anything that drifts. The Content bar below defines the quality every task — first or last — must clear.
 
-**Fetch once per session.** Call `get_harness_task_structure` (server `hubtel-sprint-planner-local`, no arguments) the first time a request needs Azure tasks, and **reuse** the returned `data.template` for every task that session. The template defines the required sections in order: **Target File → Summary → Implementation Guidelines → Code Sample (optional) → Reference**. This structure is the **authoritative format** — do not reorder, rename, or omit required sections.
+**Fetch once per session.** Call `get_harness_task_structure` (server `hubtel-sprint-planner`, no arguments) the first time a request needs Azure tasks, and **reuse** the returned `data.template` for every task that session. The template defines the required sections in order: **Target File → Summary → Implementation Guidelines → Code Sample (optional) → Reference**. This structure is the **authoritative format** — do not reorder, rename, or omit required sections.
 
 **Guardrail — use the template, ignore the `nextStep`.** This tool also returns a `nextStep` (`cleanup_sprint_planner_workspace`, `autoExecute: true`) that belongs to the *interactive* sprint-planning flow. **Consume only `data.template`.** Do **not** run `cleanup_sprint_planner_workspace`, do **not** write a `tasks_to_create.md` preview file, and do **not** call `submit_task` — this harness creates tasks solely through `harness_create_tasks` (see **Triage** below). Treat the `nextStep` as informational and discard it.
 
@@ -524,6 +524,7 @@ The **descriptions** differ per layer — different audiences, different depths,
    - `sprintBoardUrl` ← `sprintPlanner.sprintBoardUrl`
    - `parentStoryId` ← `sprintPlanner.parentStory.id`
    - `tasks[]` ← one `{ id, title, description }` per planned task (`id` = the task's `task-NNN`, `title` = its name, `description` = the full template-shaped description — **not** the one-line row/preview description)
+   - `tags` ← `"hbtl-harness"` — always sent so every task this harness creates is tagged (the tool applies it on top of its default CCI/SprintAssistant tags).
    - Omit `assignedTo` — the MCP assigns to the authenticated user.
 6. **Map the response:** for each `data.succeeded[]` entry, set the matching task's `taskId` to its `azureId` (keyed by the echoed `id`).
 7. **Sanity check:** confirm `data.succeededCount === data.total` before writing rows.
@@ -542,10 +543,11 @@ This is a single swappable step ("Create Azure tasks for this breakdown"); the c
 | task `id` | task `id` (`task-NNN`) — echoed back to map the result |
 | task `title` | task `name` |
 | task `description` | template-shaped **HTML** per `get_harness_task_structure` (see **Task descriptions** → *Output format*) — **not** the row's one-line `description`, and **not** raw Markdown |
+| `tags` | `"hbtl-harness"` (constant) — applied to every created task on top of the tool's default CCI/SprintAssistant tags |
 
-`type` / `domain` / `priority` / `estimatedHours` / `tags` are derived inside the tool — the harness supplies none of them.
+`type` / `domain` / `priority` / `estimatedHours` are derived inside the tool — the harness supplies none of them; the only tag it supplies is `hbtl-harness` (the default CCI/SprintAssistant tags are added by the tool).
 
-**Task status sync (in-progress → Active).** Azure tasks are created at triage in their default (`New`) state. The moment a feature row is set to `in-progress`, move its Azure task to **Active** so the sprint board mirrors local state. Call `update_task_status` (server `hubtel-sprint-planner-local`):
+**Task status sync (in-progress → Active).** Azure tasks are created at triage in their default (`New`) state. The moment a feature row is set to `in-progress`, move its Azure task to **Active** so the sprint board mirrors local state. Call `update_task_status` (server `hubtel-sprint-planner`):
 
 | `update_task_status` field | Source |
 |---|---|
@@ -560,7 +562,7 @@ One row is `in-progress` at a time (see **One task at a time**), so this is one 
 
 ### Task details on resume (`get_task_details`)
 
-Feature rows are deliberately lean — the local `description` is one sentence of tracking state, while the **full implementation-ready spec** (the template-shaped HTML authored at triage: Target File / Summary / Implementation Guidelines / Code Sample / Reference) lives only on the Azure task. The session that authored a task has that spec in context; a fresh session does **not**. `get_task_details` (server `hubtel-sprint-planner-local`) closes that gap: it fetches the full details of existing Azure tasks by work-item id.
+Feature rows are deliberately lean — the local `description` is one sentence of tracking state, while the **full implementation-ready spec** (the template-shaped HTML authored at triage: Target File / Summary / Implementation Guidelines / Code Sample / Reference) lives only on the Azure task. The session that authored a task has that spec in context; a fresh session does **not**. `get_task_details` (server `hubtel-sprint-planner`) closes that gap: it fetches the full details of existing Azure tasks by work-item id.
 
 **When to call (required before implementing a row you did not author this session):**
 
@@ -595,7 +597,7 @@ Open a pull request? (yes / not yet)
 
 On **not yet**, silence, or an ambiguous reply: record `PR status: not opened yet` in `progress.md` and stop.
 
-On **yes**, call `create_pull_request` (server `hubtel-sprint-planner-local`). **Read-only git only** inside this step — P.7 already pushed; never commit, push, checkout, or edit files here.
+On **yes**, call `create_pull_request` (server `hubtel-sprint-planner`). **Read-only git only** inside this step — P.7 already pushed; never commit, push, checkout, or edit files here.
 
 | Argument | How to resolve |
 |---|---|
@@ -603,6 +605,7 @@ On **yes**, call `create_pull_request` (server `hubtel-sprint-planner-local`). *
 | `targetBranch` | Infer from branch type, then verify with `git branch -r`: **hotfix** branches (`hotfix/*`) → `main` or `master`; **feature** branches (including `users/<username>/feature/*`) → the repo's integration branch — prefer the first match among `origin/develop`, `origin/development`, `origin/staging`, `origin/stage`. **Never guess** if none match — AskUserQuestion (type=input) for the target before calling the tool. **Note:** you must never **push** to `development`/`develop`, but the PR **target** is often that branch — that is normal. |
 | `title` | `git log -1 --pretty=%s` on the source branch, then AskUserQuestion with exactly one option: `Use last commit message: "<subject>"` (AskUserQuestion adds **Other…** for a custom title). Skip the question only when the human already supplied an explicit title. |
 | `repoLink` | `git remote get-url origin` if not supplied (HTTPS or `git@ssh.dev.azure.com:v3/...` forms both work) |
+| `tags` | Always `["hbtl-harness"]` — a constant string array so every PR this harness opens is identifiable as harness-originated. Not resolved from git; do not ask the human. |
 
 **Work item linking (handled by the MCP).** Prefer ids already on the branch: parse `Closed: #…` from commit messages on the feature branch (same ids as the harness commit format). If none, use `taskId`s from the delivered feature row(s). If still none, AskUserQuestion for comma-separated ids (e.g. `#375924, #375925`).
 
@@ -656,7 +659,7 @@ Before any change to `package.json` / `*.csproj` / a lockfile, or any `npm|pnpm|
 
 **Applies only when** this is a **frontend** project (React/Next or Vue/Nuxt) **and** the feature row renders UI — a user-facing surface (page, screen, form, modal, table, dashboard, sidebar, list, flow, etc.; your judgment). Backend/infra/script/test rows skip this section entirely.
 
-**Installed for frontend projects.** `scripts/install-mcps.mjs` auto-adds the Hubtel Design System MCP when it detects a frontend project. It is a **soft dependency** — a failed install warns but never blocks setup — so if the tools aren't connected at session start, register the server before UI work (`node scripts/install-mcps.mjs --server design-system`). Auth is **MCP-owned** — surface its login, wait, retry; never build a parallel path.
+**Required for frontend UI rows.** Connect the Hubtel Design System MCP (`hubtel-design-system`) in the agent environment before UI work. It is a **soft dependency** at runtime — if tools aren't connected at session start, register the server before UI work. Auth is **MCP-owned** — surface its login, wait, retry; never build a parallel path.
 
 **Mechanics are owned by the MCP** — do **not** generate Hubtel UI from memory, improvise CSS safelists/recipes, or re-derive component/token/import violation lists here. The server injects its behavioral rules on connect (use Hubtel components, subpath imports, semantic tokens); this harness pins only **which tools** to call and **when**. Use the MCP's **tools** — they are the agent-callable surface. (The MCP also ships human slash-command prompts, but those are user-triggered and rely on user-supplied args; the agent path is the tools below, not the prompts.)
 
@@ -784,7 +787,7 @@ Backend/infra/script/test-only rows skip step 3.7 and the runtime artifact entir
 
 **Applies when** `azure-pipelines.yml` declares a `SonarQubeProjectKey` (this repo's CI runs SonarQube on PRs). When it does, the **SonarQube analysis runs as a step inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and a **local MCP review of that analysis is part of the push gate** — it runs **after** the quality gate, before push, matching Hubtel CI ordering. Repos without a `SonarQubeProjectKey` skip this section.
 
-**Required MCP.** `scripts/install-mcps.mjs` always installs the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`) alongside the engineering and sprint-planner servers. If its tools aren't connected when you need them at the push gate, register it (`node scripts/install-mcps.mjs --server hubtel-sonarquabe`). Auth is **MCP-owned** — surface its login, wait, retry; never build a parallel path.
+**Required MCP when Sonar CI is enabled.** Connect the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`) in the agent environment before the push gate on repos with a `SonarQubeProjectKey`. If its tools aren't connected when you need them, register the server first. Auth is **MCP-owned** — surface its login, wait, retry; never build a parallel path.
 
 **The quality gate uploads the analysis; the MCP reads server state.** The MCP has no "run scan" tool, and the harness runs **no standalone `aqua sonar-analyze`** — the SonarQube analysis is one step inside `aqua quality-gate`, so running `node init.mjs --build` (P.2) uploads fresh branch analysis for the MCP to query. Do **not** invoke `aqua sonar-analyze` yourself.
 
@@ -1053,7 +1056,7 @@ The push gate runs on **`Push now?` → yes** only — not on commit approval, a
 8. **P.8 Record** — update `progress.md` (quality-gate status + SonarQube status + push status → `pushed to origin`).
 9. **P.9 PR offer** — ask explicitly: `Open a pull request? (yes / not yet)` — do not auto-open; PR consent is separate from push consent.
 10. **P.10 Resolve PR args** *(on yes)* — read-only git: current branch, integration target (`git branch -r`), last commit subject for title choice, `origin` remote URL; gather work-item ids from `Closed: #…` commits or row `taskId`s (see **Post-push pull request**).
-11. **P.11 Open PR** — call `create_pull_request` (server `hubtel-sprint-planner-local`); present title, id, and link on success.
+11. **P.11 Open PR** — call `create_pull_request` (server `hubtel-sprint-planner`) with `tags: ["hbtl-harness"]`; present title, id, and link on success.
 12. **P.12 Record PR** — update `progress.md` **PR status** (id, target, link, or `not opened yet`).
 
 **Fix loop** *(on `yes` at P.6)* — fix → `node init.mjs` (fast gate) → affected row's `verification` (re-run 3.6/3.7 only if UI changed) → **new commit** → **re-run P.2–P.6** (the quality gate re-runs the analysis). Sonar-only fix commits use a normal message describing the remediations; do not re-run commit approval for them.
