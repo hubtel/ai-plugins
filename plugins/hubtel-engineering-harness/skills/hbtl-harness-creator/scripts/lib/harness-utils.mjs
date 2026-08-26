@@ -68,9 +68,13 @@ export async function copyTemplate(templateName, targetPath, replacements = {}, 
   return { path: targetPath, status: 'written' };
 }
 
-export async function buildFeatureListWithSprintPlanner(templateName, sprintPlanner) {
+export async function buildFeatureListWithSprintPlanner(templateName, sprintPlanner, approvalMode = 'supervised') {
   const parsed = JSON.parse(await readText(path.join(TEMPLATE_DIR, templateName)));
-  const withBlock = { sprintPlanner, ...parsed };
+  // Drop any template-provided approvalMode so the caller's choice wins and
+  // approvalMode stays the first key in the emitted file.
+  const rest = { ...parsed };
+  delete rest.approvalMode;
+  const withBlock = { approvalMode, sprintPlanner, ...rest };
   return `${JSON.stringify(withBlock, null, 2)}\n`;
 }
 
@@ -1080,6 +1084,8 @@ export function dedupe(values) {
 }
 
 const DONE_STATUSES = new Set(['done']);
+// Per-repo delivery-gate policy (top-level approvalMode). Absent ⇒ supervised.
+const APPROVAL_MODES = new Set(['supervised', 'autopilot']);
 const IN_PROGRESS_STATUSES = new Set(['in-progress']);
 // A task sits here after its own verification passes, before the feature commits.
 const EMPTY_EVIDENCE_STATUSES = new Set(['in-progress', 'verified']);
@@ -1133,6 +1139,11 @@ export function validateFeatureList(parsed, options = {}) {
   const warnings = [];
   if (!parsed || !Array.isArray(parsed.tasks)) {
     return { ok: false, errors: ['Feature list must contain a tasks array'], warnings };
+  }
+
+  // approvalMode is optional (defaults to supervised when absent); when present it must be a known enum value.
+  if (parsed.approvalMode !== undefined && !APPROVAL_MODES.has(parsed.approvalMode)) {
+    warnings.push(`approvalMode "${parsed.approvalMode}" is not a known value (expected ${[...APPROVAL_MODES].join(' or ')}); treating as supervised`);
   }
 
   // Azure tracking is mandatory: every harness must carry a well-formed sprintPlanner block.
@@ -1456,6 +1467,7 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['Tiered verification', 'fast gate', 'verification'], 'Tiered verification documented'),
       textHas(agents, ['Approval-gated commit on done', 'Commit only after approval'], 'Approval-gated commit on done documented'),
       textHas(agents, ['Commit approval gate', 'Approve this commit'], 'Commit approval gate documented'),
+      textHas(agents, ['Approval mode', 'approvalMode', 'autopilot'], 'Approval mode documented'),
       textHas(agents, ['only an explicit', 'do not treat silence as approval'], 'Approval semantics documented'),
       textHas(agents, ['Commit approval ≠ push consent', 'commit and push'], 'Commit approval distinct from push consent documented'),
       textHas(agents, ['abort the push gate immediately', 'P.2 Quality gate'], 'P.2 failure aborts push gate documented'),

@@ -40,6 +40,43 @@ users/<username>/feature/<short-desc>
 
 One branch covers the whole request (which may span several task rows). Establish it once, up front; you do **not** re-branch per row.
 
+## Approval mode
+
+`feature_list.json` carries a top-level **`approvalMode`** — `supervised` (default) or `autopilot`. Read it on session start; when the key is absent, treat it as `supervised`. Mirror the active mode in `progress.md`'s **Current State** section (the **Approval mode** line) so a fresh session resumes with the same policy.
+
+**Scope — the four delivery gates only.** `approvalMode` controls **only**: the commit approval gate (`Approve this commit?`), the post-done push offer (`Push now?`), the Sonar `push anyway` inference, and the post-push PR offer (`Open a pull request?`). It does **not** relax Phase 1 plan approval, breakdown approval, or the **where-to-start** ask — those run identically in every mode. It also never relaxes any hard safety rail (see below).
+
+**Mode behaviour:**
+
+| Gate | `supervised` (default) | `autopilot` |
+|------|------------------------|-------------|
+| **Commit** (`Approve this commit?`) | Pause; present the review overview and commit **only** after an explicit affirmative in a later message (same-turn ban applies) | After the full verification stack passes (steps 1–3.7), present the review overview and commit **in the same turn** — no pause. Closing line unchanged: `Feature <featId>: done — evidence: commit <hash>` |
+| **Push** (`Push now?`) | Ask; push only on an explicit push affirmative | Skip the ask; run the push gate (P.1–P.7) inline. Still emit the **Delivered** body + **Before pushing** sentence so the human sees what ran |
+| **Sonar consent** (`push anyway`) | Pause at P.6 when review is not clean | **No change** — a blocked/unclean Sonar review still pauses at P.6. `push anyway` is **never** inferred; it requires an explicit prior human message |
+| **PR** (`Open a pull request?`) | Ask; open only on `yes` | Skip the ask; run P.10–P.12 (`create_pull_request`, `tags: ["hbtl-harness"]`) inline, then report title/id/link |
+
+**Hard rails (never relaxed, any mode — including `autopilot`).** Autopilot must **never** auto-push (or must pause/clarify) when any of these hold:
+
+- P.2 quality gate exits non-zero (abort the push gate — same rule as `supervised`).
+- Sonar MCP review is incomplete or not clean and no explicit prior `push anyway` (pause at P.6).
+- The branch is `main` / `master` / `development` (P.1 branch check).
+- `audit_packages` blocks a dependency change in this feature.
+- A UI row in the feature has an unresolved runtime issue (latest `.harness/ui-runtime/<featId>.json` run does not derive pass).
+- Deliverable-shaping ambiguity, unconfirmed assumptions, or high-stakes/destructive scope — clarify/pause per the existing planning and breakdown rules.
+
+**Session override.** If the human changes the mode in natural language (e.g. `approval mode: autopilot`, `run this in supervised mode`), write the new value into `feature_list.json` **once**, note the change in `progress.md`, then apply it for the rest of the session (persists per-repo).
+
+**Smart Mode note.** `approvalMode` is a **harness-text contract only** — it does not read or depend on Cursor Smart Mode or any IDE-native approval card. In `autopilot`, the plain-text ask lines are simply omitted from your output; do not substitute a runtime approval UI for the mode.
+
+**Autopilot completion sequence (run all four in the same turn).** In `autopilot`, the feature commit is the **start** of delivery, not the end. Once the full verification stack passes (steps 1–3.7), do **all** of the following in one turn — do **not** stop after the commit:
+
+1. **Commit** — present the review overview and commit in the same turn (the passing verification stack authorizes it; no `Approve this commit?` ask). This lands the `Feature <featId>: done` state, but that is **intermediate** — keep going.
+2. **Push gate inline (P.1–P.7)** — run the push gate straight away, without the `Push now?` ask (see **Pushing (quality gate)**). Every hard rail still binds: P.1 branch check, P.2 quality-gate abort, P.6 Sonar block. A hard rail firing is the **only** thing that stops you here.
+3. **PR inline (P.10–P.12)** — on a successful push, open the PR without the `Open a pull request?` ask (`create_pull_request`, `tags: ["hbtl-harness"]`), then report title/id/link (see **Post-push pull request**).
+4. **Record + close** — update `progress.md` (push status, PR status), then emit the **final** autopilot closing line (`Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id>` — see **Closing report**). Do not yield before this line unless a hard rail blocked you.
+
+The single sanctioned pause inside this sequence is the P.6 Sonar review gate on a not-clean/blocked review with no prior `push anyway` — everything else runs inline.
+
 ## Request Triage
 
 Humans prompt in natural language; **you maintain `feature_list.json`** (the human will not edit it).
@@ -288,11 +325,13 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 
 "Task row before code" governs how you **start**; this governs when you may **stop**.
 
-**Do not yield until `done` or `blocked`.** When the user asks for implementation work, you **MUST NOT** end your turn until the active task is either `done` (committed + `evidence` set + `status: done`) or `blocked` (concrete blocker recorded in `progress.md`) — **except when awaiting human commit approval** (see **Commit approval gate**), or **awaiting Sonar review consent at the push gate** (see **Pushing (quality gate)** → P.6), the two sanctioned pauses. "Implemented and tests pass" is the *middle* of the task — it is the signal to run the completion sequence, not to report back. Apart from those pauses, `in-progress` is never a valid hand-off state for the request you were just given.
+**Do not yield until `done` or `blocked`.** When the user asks for implementation work, you **MUST NOT** end your turn until the active task is either `done` (committed + `evidence` set + `status: done`) or `blocked` (concrete blocker recorded in `progress.md`) — **except when awaiting human commit approval** (see **Commit approval gate**), or **awaiting Sonar review consent at the push gate** (see **Pushing (quality gate)** → P.6), the two sanctioned pauses. **The sanctioned pauses depend on `approvalMode`** (see **Approval mode**): in `supervised`, both the commit-approval pause and the Sonar push pause apply; in `autopilot`, the commit-approval pause does **not** occur (commit lands same-turn) — the **only** sanctioned pause is the Sonar review pause at P.6 (when the review is blocked and there's no prior `push anyway`). "Implemented and tests pass" is the *middle* of the task — it is the signal to run the completion sequence, not to report back. Apart from those pauses, `in-progress` is never a valid hand-off state for the request you were just given.
 
 **Features extend this across every task.** For tasks sharing a `featId` (see **Feature delivery**), do not yield between tasks either — implement → fast gate → verification → `verified` → next task, straight through — until every row in the feature is `done` or `blocked`. The one sanctioned pause is the same kind, just feature-scoped: the **feature** commit approval, once, after every row is `verified`.
 
-**Commit only after approval.** Completing a feature *includes* committing it, but the commit is **gated**: run the completion sequence straight through to the approval ask, present the review overview, and commit only once the human gives the go-ahead (see **Commit approval gate**). Do not commit autonomously.
+**Commit only after approval (`supervised`).** In `supervised` mode, completing a feature *includes* committing it, but the commit is **gated**: run the completion sequence straight through to the approval ask, present the review overview, and commit only once the human gives the go-ahead (see **Commit approval gate**). Do not commit autonomously. In **`autopilot`** mode the commit is authorized by the passing verification stack — present the overview and commit in the same turn (see **Approval mode** and **Commit approval gate** → *Autopilot*).
+
+**Autopilot extends the turn through delivery.** In `autopilot`, committing and marking rows `done` is **not** the end of the turn — the `Feature <featId>: done` state is intermediate. After the commit, continue straight into P.1–P.7 (push gate) and, on a successful push, P.10–P.12 (PR) — all in the **same** turn (see **Approval mode** → Autopilot completion sequence). The turn ends only when one of these holds: (a) the PR is opened (push + PR succeeded) and you emit the `delivered` closing line, (b) a hard rail blocks (P.2 abort, P.6 Sonar review not clean with no prior `push anyway`, protected branch, `audit_packages` block), or (c) the task is `blocked`. Do **not** emit a final closing line or yield after the commit until one of these is reached — stopping at `done` is the wrong stopping point in `autopilot`.
 
 ## Working Rules
 
@@ -317,9 +356,9 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 - **Audit packages before adding** — call `audit_packages` before any `package.json`/`*.csproj`/lockfile change or dependency add; block untrusted/vulnerable-without-safe-version (see **Hubtel Engineering MCP** → Packages)
 - **Hubtel UI via the design-system MCP (frontend + UI rows)** — call the MCP **tools** for mechanics (`search_components`/`get_composition_pattern` before breakdown; `get_component`/`get_design_tokens`/`find_icons` when implementing); run `validate_imports` + `check_setup` before `verified`/`done` on UI rows (see **Hubtel Design System MCP**)
 - **UI runtime assertion** — for every **UI row**, write `.harness/ui-runtime/<featId>.json` (v3) before `verified`/`done` (tier-1). When `chrome-devtools-mcp` is connected, run the full 3.7 loop and record an **append-only `runs[]`** of `checks`, `issues`, and `criteriaResults`; the gate is **no open issues on the latest run**, not "checks passed." Do not report UI runtime pass or set `verified`/`done` until `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0**. Read what's still open with that helper anytime. When it is not connected, write a **skipped** artifact and note the skip in the review overview. Does not change `requiredTests`/`verification` or CI (see **UI Runtime Assertion**)
-- **Approval-gated commit on done** — present the review overview and commit only after explicit human approval (see **Commit approval gate**); then stage this feature's files, commit with message `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature, and use that commit's hash as evidence
-- **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on `Push now?` yes, run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → human consent when blocked) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete (see **Hubtel SonarQube MCP**)
-- **PR after push (explicit consent)** — after a successful push, ask `Open a pull request? (yes / not yet)`; on **yes**, call `create_pull_request` with read-only git resolution only, always tagging the PR with `tags: ["hbtl-harness"]` (see **Sprint Planner (Azure tasks)** → Post-push pull request)
+- **Approval-gated commit on done (mode-dependent)** — in `supervised`, present the review overview and commit only after explicit human approval; in `autopilot`, present the overview and commit in the same turn once verification passes (see **Approval mode** and **Commit approval gate**); either way, stage this feature's files, commit with message `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature, and use that commit's hash as evidence
+- **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on push (asked in `supervised`; run inline in `autopilot`), run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → human consent when blocked) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete; the P.6 Sonar pause is **not** relaxed by `autopilot` (see **Hubtel SonarQube MCP** and **Approval mode**)
+- **PR after push (mode-dependent)** — in `supervised`, after a successful push ask `Open a pull request? (yes / not yet)` and call `create_pull_request` on **yes**; in `autopilot`, open the PR inline after a successful push without the ask; always resolve args with read-only git only and tag the PR with `tags: ["hbtl-harness"]` (see **Sprint Planner (Azure tasks)** → Post-push pull request and **Approval mode**)
 - **Stay in scope** — don't modify files unrelated to the current task
 - **Leave clean state** — next session runs `node init.mjs` with a clean tree
 
@@ -585,17 +624,19 @@ Do **not** call it for:
 
 ### Post-push pull request (`create_pull_request`)
 
-After a **successful push** (P.7), offer to open an Azure DevOps pull request — separate consent from push, like the post-done push offer.
+After a **successful push** (P.7), open an Azure DevOps pull request — asked in `supervised`, run inline in `autopilot` (see **Approval mode**).
 
-**Harness exception to the MCP's standalone rule.** The Sprint Planner MCP documents `create_pull_request` as "call only when the user explicitly asks." In this harness, **`Open a pull request? (yes / not yet)` after a successful push** counts as that explicit ask — only call the tool when the human answers **yes** (or when they independently say "create/open a PR" at any time). Do **not** auto-open a PR without consent.
+**Harness exception to the MCP's standalone rule.** The Sprint Planner MCP documents `create_pull_request` as "call only when the user explicitly asks." In this harness, **`Open a pull request? (yes / not yet)` after a successful push** counts as that explicit ask (`supervised`) — only call the tool when the human answers **yes** (or when they independently say "create/open a PR" at any time). In **`autopilot`**, the human's standing choice of that mode is the explicit authorization — open the PR inline after the successful push without asking. Do **not** auto-open a PR in `supervised` without consent.
 
-**When it runs.** Immediately after P.7 succeeds and P.8 records `pushed to origin` in `progress.md`, ask:
+**When it runs.** Immediately after P.7 succeeds and P.8 records `pushed to origin` in `progress.md`: in `supervised`, ask:
 
 ```text
 Open a pull request? (yes / not yet)
 ```
 
-On **not yet**, silence, or an ambiguous reply: record `PR status: not opened yet` in `progress.md` and stop.
+In `autopilot`, skip the ask and proceed to resolve args + open the PR.
+
+On **not yet**, silence, or an ambiguous reply (`supervised`): record `PR status: not opened yet` in `progress.md` and stop.
 
 On **yes**, call `create_pull_request` (server `hubtel-sprint-planner`). **Read-only git only** inside this step — P.7 already pushed; never commit, push, checkout, or edit files here.
 
@@ -867,7 +908,9 @@ While `in-progress` or `verified`: leave `evidence` empty; test output belongs i
 
 ### Commit approval gate
 
-After the fast gate and feature proof pass (step 3) and **before any `git add` or `git commit`** (step 5), pause and get explicit human approval. Do **not** pre-stage — the working tree stays unstaged while you ask; staging happens only after approval, immediately before the commit.
+**Mode-dependent (see Approval mode).** In **`supervised`** (default), after the fast gate and feature proof pass (step 3) and **before any `git add` or `git commit`** (step 5), pause and get explicit human approval. Do **not** pre-stage — the working tree stays unstaged while you ask; staging happens only after approval, immediately before the commit.
+
+**In `autopilot`:** the passing verification stack (steps 1–3.7) authorizes the commit. Present the same review overview and commit **in the same turn** — do not pause for a human affirmative, and the **same-turn ban does not apply**. All other requirements are unchanged: the overview must still be complete (files, verification, UI runtime issue-closure, docs citations, proposed commit message), and every hard rail below (guidelines reconciliation, UI runtime closure, `audit_packages`) must still hold before the commit lands. The `Services` line + `build:` suffix are still auto-detected and included. After committing, continue straight into the push gate (see **Pushing (quality gate)** and **Post-done message**).
 
 Present a compact **review overview** in your response (mirror the key points to `progress.md`):
 
@@ -920,7 +963,7 @@ Same approval semantics as below (explicit affirmative only, no pre-staging befo
 - **Affirmative-only unblock** — only an explicit go-ahead in a **later** human message unblocks the commit (e.g. `yes`, `approve`, `commit`, `lgtm`). Only an explicit affirmative counts.
 - **Commit approval ≠ push consent** — approving a commit (including phrases like `commit and push`, `commit then push`, or `ship it`) authorizes **only** the commit. Push is a **separate** gate: after steps 6–10, still ask `Push now? (yes / not yet)` and wait for an explicit push affirmative. Combined commit+push language does **not** skip the push gate, pre-authorize P.2–P.6, or count as **`push anyway`** if the quality gate later fails.
 - **Never infer consent — do not treat silence as approval** — silence, `thanks`, `looks good`, an emoji, or an unrelated follow-up are **not** approval. If the reply is ambiguous, re-ask; never commit on a maybe.
-- **Same-turn ban** — never present the review overview and commit in the same turn. Approval must arrive in a **subsequent** message; presenting the overview ends the turn.
+- **Same-turn ban (`supervised` only)** — in `supervised`, never present the review overview and commit in the same turn: approval must arrive in a **subsequent** message, and presenting the overview ends the turn. In **`autopilot`**, this ban does **not** apply — the commit lands in the same turn as the overview once the verification stack passes (see **Approval mode**).
 - **Plain-text ask is the contract** — ask in plain text. If your runtime offers an interactive prompt (buttons, a question tool) you *may* use it, but the text ask is the portable contract and behavior is identical either way — never depend on a runtime-specific approval UI.
 
 ### Commit message format (Conventional Commits — required on every repo)
@@ -978,7 +1021,7 @@ After committing and marking row(s) `done`, your response has two parts: a **bod
 - **Commit** — `` `<hash>` `` from step 6's `git rev-parse --short HEAD` — the **same** hash on this line, every row's `evidence`, and the closing line — plus the commit message (`Closed: #…`)
 - **Branch** — current branch name and whether commits are **local only** or already pushed
 - **Before pushing** — one plain sentence for the **human** (no harness script names — do not mention `init.mjs`, `init.sh`, `aqua`, or `--build`). Say what **will run** if they push: the **same quality checks as the CI pipeline** for this project, in everyday terms (e.g. lint, typecheck, full test suite, production build, and code analysis — whichever the stack's CI runs). **When this repo has a `SonarQubeProjectKey`** (see **Hubtel SonarQube MCP**), note that a SonarQube analysis and review is part of that gate. **Never copy a fixed checklist from this doc** — a Python repo might say "full pytest run"; a frontend repo might list lint, typecheck, tests, and build. End with whether the gate has **already run on this branch** or **not run yet**
-- **Push offer** — ask explicitly: `Push now? (yes / not yet)` — do not auto-push; push consent is separate from commit approval
+- **Push offer (mode-dependent)** — in `supervised`, ask explicitly: `Push now? (yes / not yet)` — do not auto-push; push consent is separate from commit approval. In **`autopilot`**, skip the ask and run the push gate (P.1–P.7) inline right after the post-done body; still show the **Before pushing** sentence and report the push result (the P.2/Sonar/branch/audit rails still bind — see **Approval mode** and **Pushing (quality gate)**)
 
 Example (feature delivery — **shape only**; substitute task ids, hash, branch, and **Before pushing** checks from this project's **Verification Commands** build-gate lines — never copy a fixed checklist):
 
@@ -998,6 +1041,27 @@ Feature feat-001: done — evidence: commit 59e826f (task-001, task-002, task-00
 ```
 
 (Substitute this project's real checks: drop the SonarQube clause when the repo has no `SonarQubeProjectKey`; if the quality gate is only `pytest` + compile, say that — not "lint, test suite, and production build".)
+
+**Autopilot variant** — in `autopilot`, there is **no** `Push now?` ask and **no** `Open a pull request?` ask. After the commit, run the push gate (P.1–P.7) and PR (P.10–P.12) inline in the **same** turn, then report the results and close with the `delivered` line. The `Feature <featId>: done` line does **not** appear as the closing line — delivery continues past it (**shape only**):
+
+```text
+**Delivered**
+- **task-001** — Centered login layout
+- **task-002** — Hubtel logo and branding
+- **task-003** — Form validation on sign-in
+
+**Commit:** `59e826f` — `Closed: #375605 #375606 #375607`
+**Branch:** `users/jane/feature/centered-login`
+**Before pushing:** the same CI quality checks — lint, typecheck, full test suite, production build, and a SonarQube analysis and review — ran on this branch.
+
+**Quality gate:** passed. **Sonar review:** clean.
+**Pushed** to origin on `users/jane/feature/centered-login`.
+**PR:** #4821 — "feat: centered login layout" → https://dev.azure.com/hubtel/.../pullrequest/4821
+
+Feature feat-001: delivered — evidence: commit 59e826f, pushed, PR #4821 (task-001, task-002, task-003)
+```
+
+(If a hard rail blocks — P.2 non-zero, P.6 Sonar not clean, protected branch, or an `audit_packages` block — stop at that gate and close with the matching blocked line from **Closing report** instead; do not fabricate a push/PR result.)
 
 For a feature, emit **one** feature closing line — **do not** emit a separate `Task <id>: done` line per task.
 
@@ -1024,7 +1088,19 @@ Feature <featId>: in progress — <id> verified (<n>/<total>)
 Feature <featId>: blocked — <one-line reason + what you need>
 ```
 
-`in progress — <id> verified (<n>/<total>)` reports where the feature stands (for `progress.md`/resume, and the rare case a task is legitimately `blocked`) — it is **not** a routine stopping point; per **Completion Is Mandatory**, keep moving through tasks without yielding until the feature reaches `awaiting commit approval`, `done`, or `blocked`.
+**Autopilot closing lines.** In `autopilot`, the `done` line above is an **intermediate** state (see **Completion Is Mandatory** → Autopilot extends the turn), **not** the closing line — the turn continues into push + PR. Use these instead:
+
+```text
+Feature <featId>: committed — running push gate (autopilot)
+Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id> (task-001, task-002, …)
+Feature <featId>: push blocked — <one-line reason + what you need> (autopilot)
+```
+
+- `committed — running push gate` is a **transient** progress line only — never the last line of a completed turn; you must proceed to `delivered` or a blocked line in the same turn.
+- `delivered — evidence: commit <hash>, pushed, PR #<id>` is the **final** autopilot line after push + PR both succeed.
+- `push blocked — <reason> (autopilot)` is the final line when a hard rail fires at the push gate (P.2 abort, P.6 Sonar not clean with no prior `push anyway`, protected branch, `audit_packages` block); it is a legitimate stopping point.
+
+`in progress — <id> verified (<n>/<total>)` reports where the feature stands (for `progress.md`/resume, and the rare case a task is legitimately `blocked`) — it is **not** a routine stopping point; per **Completion Is Mandatory**, keep moving through tasks without yielding until the feature reaches `awaiting commit approval`, `done`, or `blocked` (`supervised`), or `delivered` / `push blocked` (`autopilot`).
 
 ### Evidence format
 
@@ -1042,9 +1118,9 @@ commit a1b2c3d
 
 ### Pushing (quality gate)
 
-The full CI-parity quality checks are validated here, not per feature. When row(s) are `done`, include the push offer in the **post-done message** (see **Post-done message**) — don't auto-push and don't fold push consent into commit approval.
+The full CI-parity quality checks are validated here, not per feature. When row(s) are `done`, include the push offer in the **post-done message** (see **Post-done message**). **`supervised`**: don't auto-push and don't fold push consent into commit approval — wait for `Push now?` → yes. **`autopilot`**: the push gate runs **inline** right after the commit — this is **not** bypassing consent; the human authorized it by choosing autopilot (see **Approval mode** → Autopilot completion sequence). Either way the gate itself (P.1–P.7) is identical.
 
-The push gate runs on **`Push now?` → yes** only — not on commit approval, and not on earlier `commit and push` / `ship it` wording (see **Commit approval gate** → **Approval semantics**). The quality gate (`node init.mjs --build` → `aqua quality-gate`) runs **first**; on repos with a `SonarQubeProjectKey` (see **Hubtel SonarQube MCP**), the analysis it uploads is then reviewed via the Sonar MCP before push, and blocks by default. **`Push now?` consents to the sequence — not to skipping P.2 or P.4–P.6, or running the MCP review in parallel with the push.** Steps:
+**In `supervised`**, the push gate runs on **`Push now?` → yes** only — not on commit approval, and not on earlier `commit and push` / `ship it` wording (see **Commit approval gate** → **Approval semantics**). **In `autopilot`**, the push gate runs **inline** right after the commit — without the `Push now?` ask — but the gate itself is **identical**: P.2 abort, the P.6 Sonar block, and the P.1 branch check all bind exactly as in `supervised` (see **Approval mode** → Hard rails). The quality gate (`node init.mjs --build` → `aqua quality-gate`) runs **first**; on repos with a `SonarQubeProjectKey` (see **Hubtel SonarQube MCP**), the analysis it uploads is then reviewed via the Sonar MCP before push, and blocks by default. **Consent (or the `autopilot` inline run) covers the sequence — not skipping P.2 or P.4–P.6, or running the MCP review in parallel with the push.** Steps:
 
 1. **P.1 Branch check** — confirm you're on a compliant `users/<username>/feature/<short-desc>` branch (never push `main`/`master`/`development`; see **Branch Discipline**).
 2. **P.2 Quality gate** — run `node init.mjs --build` from repo root (delegates to `aqua quality-gate` — the CI-parity checks; must pass). **Non-zero exit → abort the push gate immediately** — report the failure and **stop** (no P.3–P.7, no `git push`). Only a **later** explicit **`push anyway`** (same approval semantics as commit approval — not `commit and push`, not `Push now?` yes retroactively) may proceed without fixing. On `SonarQubeProjectKey` repos this step also uploads the SonarQube analysis; a missing `.scanner/report-task.txt` after a clean exit is a quality-gate failure — same abort rule. A green quality gate is **not** MCP review complete — proceed to P.3.
@@ -1054,8 +1130,8 @@ The push gate runs on **`Push now?` → yes** only — not on commit approval, a
 6. **P.6 Sonar review gate** *(SonarQubeProjectKey repos only)* — if review is incomplete or not clean, **pause** (sanctioned hand-off): ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)`; record `Awaiting Sonar review consent` in `progress.md`; do not push until **`push anyway`** or review is clean after a fix loop. If clean, proceed to P.7.
 7. **P.7 Push** — push to origin.
 8. **P.8 Record** — update `progress.md` (quality-gate status + SonarQube status + push status → `pushed to origin`).
-9. **P.9 PR offer** — ask explicitly: `Open a pull request? (yes / not yet)` — do not auto-open; PR consent is separate from push consent.
-10. **P.10 Resolve PR args** *(on yes)* — read-only git: current branch, integration target (`git branch -r`), last commit subject for title choice, `origin` remote URL; gather work-item ids from `Closed: #…` commits or row `taskId`s (see **Post-push pull request**).
+9. **P.9 PR offer (mode-dependent)** — in `supervised`, ask explicitly: `Open a pull request? (yes / not yet)` — do not auto-open; PR consent is separate from push consent. In **`autopilot`**, skip the ask and proceed straight to P.10–P.12 to open the PR inline after the successful push (see **Approval mode**).
+10. **P.10 Resolve PR args** *(on yes, or always in `autopilot`)* — read-only git: current branch, integration target (`git branch -r`), last commit subject for title choice, `origin` remote URL; gather work-item ids from `Closed: #…` commits or row `taskId`s (see **Post-push pull request**).
 11. **P.11 Open PR** — call `create_pull_request` (server `hubtel-sprint-planner`) with `tags: ["hbtl-harness"]`; present title, id, and link on success.
 12. **P.12 Record PR** — update `progress.md` **PR status** (id, target, link, or `not opened yet`).
 
@@ -1080,10 +1156,10 @@ A task is `done` only when every step of **Completing a feature** is satisfied:
 - [ ] Behavior implemented; `node init.mjs` (fast gate) passes; the row's `verification` passes; `requiredTests` layers satisfied
 - [ ] Code grounded in and reconciled against Hubtel guidelines (`get_guidelines_catalog` + `get_guideline`, applicable scope(s)); mechanics per the `hbtl-software-development` skill (see **Hubtel Engineering MCP**)
 - [ ] (UI rows on a frontend project) `validate_imports` + `check_setup` clean; UI built via the design-system tools (`get_component` / `get_design_tokens` / `find_icons`; `check_setup` / `get_setup_instructions` for setup rows) (see **Hubtel Design System MCP**)
-- [ ] Review overview presented and **commit approved** by the human before committing (once per feature — all tasks sharing a `featId` — see **Commit approval gate**)
+- [ ] Review overview presented and the commit landed once per feature (all tasks sharing a `featId`) — **`supervised`**: after explicit human **commit approval**; **`autopilot`**: authorized by the passing verification stack, committed in the same turn (see **Commit approval gate**)
 - [ ] Changes **committed** by you after approval; `evidence` is exactly `commit <hash>` from `git rev-parse --short HEAD` **immediately after** that commit — one hash, shared across every row sharing a `featId`
 - [ ] `status` set to `done` only after evidence is written; you did **not** yield while `in-progress` or `verified` (except the sanctioned commit-approval pause — feature-scoped)
-- [ ] **Post-done message** sent: **Delivered** summary, commit/branch/**Before pushing** sentence, `Push now? (yes / not yet)`; response ends with **one** closing report line (feature-scoped); `progress.md` matches `feature_list.json`
+- [ ] **Post-done message** sent: **Delivered** summary, commit/branch/**Before pushing** sentence; **`supervised`** ends with `Push now? (yes / not yet)` and **one** closing report line; **`autopilot`** runs the push gate + PR inline (no `Push now?` / `Open a pull request?` asks) and ends with the `delivered` closing line (or a `push blocked` line if a hard rail fired) — see **Approval mode** → Autopilot completion sequence; `progress.md` matches `feature_list.json`
 - [ ] Repo restartable from `node init.mjs` with a clean tree; structural validation passes (no tier-1)
 - [ ] Full CI-parity checks deferred to the push gate (`node init.mjs --build` → `aqua quality-gate`); on repos with a `SonarQubeProjectKey`, the quality gate uploads the SonarQube analysis and the Sonar MCP review runs after it and blocks by default (see **Hubtel SonarQube MCP**)
 

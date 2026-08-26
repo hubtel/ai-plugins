@@ -4,6 +4,7 @@
 
 **Last Updated:** YYYY-MM-DD HH:MM
 **Session ID:** [optional]
+**Approval mode:** [supervised | autopilot] — from feature_list.json approvalMode (see AGENTS.md **Approval mode**)
 **Active Task:** [task-XXX - Task Name]
 **Build/Push status:** [pushed to origin | not pushed — **Before pushing:** <this project's push-gate checks in plain language, from Verification Commands> will run — <already run on this branch | not run on this branch yet>]
 **Quality gate status:** [not run yet | passed (branch <name>) | failed — <which check> | blocked (Aqua CLI missing)]

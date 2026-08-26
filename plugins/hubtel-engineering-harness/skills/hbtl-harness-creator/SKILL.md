@@ -41,20 +41,25 @@ Azure tracking is **mandatory** — every harness this skill creates records wor
 2. Call **`get_active_sprint_boards`** with that email — it lists the engineer's active boards and validates them internally.
 3. The human picks a board → capture the **`sprintBoardUrl`** and the **parent story** (`id` + `title`).
 4. Confirm the **Hubtel Engineering MCP** (`hubtel-engineering`) is reachable — a successful **`get_guidelines_catalog`** call. If it fails, surface the MCP's login command and retry. Auth/session is **MCP-owned** — wait for its flow; don't build a parallel auth path.
-5. Run the scaffolder with those values:
+5. **Ask the user for the approval mode.** Present a single-select question; "Which mode do you want the harness to run in?" as an `elicitationForm` (same contract as the planning subagent — render through AskUserQuestion, or as structured Markdown when that tool is unavailable). Never assume a default; never skip the ask. The option labels shown to the user are short descriptive phrases (not raw mode names); the agent maps the chosen option back to its mode value for `--approval-mode`. Two options:
+   - "**Supervised**: Require human review and approval of every step" (Recommended)** → maps to `supervised`. Keeps every user checkpoint on delivery: you review and approve each commit, confirm the push, and confirm opening the pull request. Best when you want to eyeball each step before it lands.
+   - "**Autopilot**: Grant agent complete autonomy to commit, push, and create PRs after delivery" → maps to `autopilot`. After the verification stack passes the agent commits, pushes, and opens the PR without asking. It still stops on a failed quality gate, a blocked or unclean Sonar review, a protected branch, or a blocked dependency, and never relaxes planning, breakdown, or where-to-start approvals. Best for well-scoped, low-risk work you trust the agent and CI to catch.
+6. Run the scaffolder with those values:
 
 ```bash
 node scripts/create-harness.mjs --target /path/to/project \
   --sprint-board-url "https://dev.azure.com/hubtel/.../taskboard/..." \
   --parent-story-id "12345" \
   --parent-story-title "CCI ..." \
-  --engineering-mcp-verified
+  --engineering-mcp-verified \
+  --approval-mode supervised
 ```
 
 `--sprint-board-url`, `--parent-story-id`, and `--engineering-mcp-verified` are **required**; the scaffolder hard-fails (exit 1, nothing written) without them. `--engineering-mcp-verified` asserts you confirmed the engineering MCP is live (step 4) — never pass it blind. There is no ungated, plain-harness route.
 
 Other options:
 
+- `--approval-mode supervised|autopilot` sets the per-repo delivery-gate policy (default `supervised` when omitted; ask the human per step 5).
 - `--agent-file CLAUDE.md` for Claude-oriented projects.
 - `--package-manager npm|pnpm|yarn|bun` when detection is wrong.
 - `--commands "cmd one,cmd two"` for custom verification.
@@ -62,7 +67,7 @@ Other options:
 
 The harness uses six core Sprint Planner tools — `get_active_sprint_boards` and `validate_sprint_board` at scaffold, `get_harness_task_structure` (template only) and `harness_create_tasks` at triage (one batch per breakdown), `update_task_status` to mirror a row's `in-progress` state to Azure **Active**, and `get_task_details` at session resume (read-only: recovers the full task spec for rows a fresh session didn't author) — plus `get_current_user` to resolve the engineer email that `get_active_sprint_boards` and status sync require. `get_harness_task_structure` is called only for its `data.template` (the required task-description shape); its `nextStep` is ignored, since the harness creates tasks via `harness_create_tasks`, not the interactive flow. It does **not** call the other interactive-flow tools (`how_to_use`, `submit_task`, `search_developer`, etc.).
 
-Then explain what was created. `feature_list.json` ships with a mandatory `sprintPlanner` block (the captured board + parent story) and one bootstrap placeholder task — the **agent** replaces the placeholder with real tasks as work arrives; humans prompt in natural language.
+Then explain what was created. `feature_list.json` ships with a top-level `approvalMode` (the human's step-5 choice; default `supervised`), a mandatory `sprintPlanner` block (the captured board + parent story), and one bootstrap placeholder task — the **agent** replaces the placeholder with real tasks as work arrives; humans prompt in natural language.
 
 ### Request triage
 
@@ -167,7 +172,7 @@ Tiered so the per-task loop stays fast and build runs only when code is about to
 
 The approval + commit steps happen **once for the whole feature** (all tasks sharing a `featId`), not per task — see **Feature delivery** above.
 
-**Completion is mandatory.** "Implemented and tests pass" is the *middle* of the work. The agent must run the completion sequence straight through and must not yield control until the active task is `done` or `blocked` — with one sanctioned exception: pausing at the commit approval gate (closing line `Feature <featId>: awaiting commit approval`). Apart from that pause, `in-progress` is never a valid hand-off state for the request just given. Each completed implementation response ends with `Feature <featId>: done — evidence: commit <hash>` (or a `blocked` line). See `templates/agents.md` → **Completion Is Mandatory** and **Completing a task**.
+**Completion is mandatory.** "Implemented and tests pass" is the *middle* of the work. The agent must run the completion sequence straight through and must not yield control until the active task is `done` or `blocked` — with one sanctioned exception: pausing at the commit approval gate (closing line `Feature <featId>: awaiting commit approval`). Apart from that pause, `in-progress` is never a valid hand-off state for the request just given. In `supervised`, each completed implementation response ends with `Feature <featId>: done — evidence: commit <hash>` (or a `blocked` line). In `autopilot`, `done` is **not** the stopping point — the turn extends through the full delivery sequence (commit → push gate P.1–P.7 → PR P.10–P.12), all inline in the same turn, and ends with `Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id>` (or a `push blocked` line if a hard rail fires). See `templates/agents.md` → **Approval mode** (Autopilot completion sequence), **Completion Is Mandatory**, and **Completing a task**.
 
 **Inference-driven `requiredTests`.** Instead of defaulting every row to `["unit"]`, the agent infers the layer by asking *what would actually catch this task breaking*:
 
@@ -195,6 +200,15 @@ commit <hash>
 **Invalid:** `commit <hash> — lint clean, vitest (16 passed)` or any text after the hash.
 
 Optional `requiredTests`: `unit`, `integration`, `e2e`, `karate`. When `e2e` is listed, the `verification` command should run Playwright (frontend). When `karate` is listed, the `verification` command should run `mvn test -Dtest=LocalTestRunner` (or equivalent) from the `tests/*.karate.tests/` project.
+
+### Approval mode
+
+Every harness carries a per-repo `approvalMode` at the top of `feature_list.json` (`supervised` default, or `autopilot`). It controls **only** the delivery gates — commit approval, the `Push now?` offer, Sonar `push anyway` inference, and the `Open a pull request?` offer (problem items 4–7). It does **not** relax planning (Phase 1 plan approval), breakdown approval, or the where-to-start ask, and it does **not** relax any hard safety rail (P.2 quality-gate abort, blocked Sonar review, protected branches, `audit_packages`, UI runtime issue closure).
+
+- **`supervised`** — all human gates as documented in `templates/agents.md`: pause for explicit commit approval, ask `Push now?`, ask `Open a pull request?`.
+- **`autopilot`** — after the full verification stack passes, present the review overview and commit in the same turn; then run the push gate inline (still blocking on P.2/Sonar/branch/audit rails) and open the PR after a successful push, without the `Push now?` / `Open a pull request?` asks.
+
+**Persistence is per-repo** — the value lives in `feature_list.json` and applies to every session on that repo until changed. A human can flip it mid-session in natural language (e.g. `approval mode: autopilot`); the agent writes the new value into `feature_list.json` once, mirrors it in `progress.md`, and applies it. `approvalMode` is a **harness-text contract only** — it does not depend on Cursor Smart Mode or any IDE-native approval card. Gate mechanics live in `templates/agents.md` → **Approval mode**.
 
 ### Audit an existing harness
 

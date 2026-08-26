@@ -430,6 +430,16 @@ registry.register('shell', {
 
 ---
 
+## 38. Autopilot Over-Reached — Bypassed a Hard Rail or Relaxed Planning
+
+**Symptom**: With `approvalMode: autopilot`, the agent auto-pushed after a **failed** P.2 quality gate; treated a blocked or unclean Sonar review as if `push anyway` were granted (inferring it from the mode itself); pushed a protected branch (`main`/`master`/`development`); committed a dependency change that `audit_packages` blocked; feature-approved a UI feature with an unresolved runtime issue; or skipped the **planning / breakdown / where-to-start** gates because "autopilot means no asking."
+
+**Cause**: `autopilot` is read as "no gates at all." It is not — it only removes the four **delivery** asks (commit approval, `Push now?`, PR offer, and the `Push now?`-style push pause). The hard safety rails and the planning-phase gates (problem items 1–3) are outside its scope and never relax.
+
+**Fix**: In `autopilot`, still **abort** on a non-zero P.2, still **pause at P.6** when the Sonar review is incomplete or not clean (only an explicit prior human `push anyway` overrides — the mode alone never does), still refuse to push a protected branch, still block on `audit_packages`, and still require UI runtime issue closure before the feature commits. Planning (Phase 1 plan approval), breakdown approval, and the where-to-start ask run identically to `supervised`. `autopilot` only lets the commit land in the same turn as the review overview and runs the push/PR steps inline once every rail is clear. `approvalMode` is a harness-text contract — it never substitutes an IDE-native approval card (Cursor Smart Mode) for these gates. See `templates/agents.md` → **Approval mode** and **Pushing (quality gate)**.
+
+---
+
 ## Related Reading
 
 - [Memory Persistence Pattern](memory-persistence-pattern.md) — Gotchas #1, #3, #4, #15

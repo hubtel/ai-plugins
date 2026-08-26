@@ -19,7 +19,7 @@ import {
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
-  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified [--parent-story-title TITLE] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
+  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified [--parent-story-title TITLE] [--approval-mode supervised|autopilot] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
 
 Creates a minimal production harness:
   AGENTS.md or CLAUDE.md
@@ -39,6 +39,11 @@ The Hubtel Engineering MCP (hubtel-engineering) is a mandatory dependency.
 Confirm it is live FIRST (a successful get_guidelines_catalog call), then pass:
   --engineering-mcp-verified  (required) proof the MCP is connected and reachable
 
+Approval mode controls the delivery gates (commit / push / PR). Ask the human
+which they want, then pass it (defaults to supervised when omitted):
+  --approval-mode supervised  (default) all human gates: commit approval, push offer, PR offer
+  --approval-mode autopilot   auto-commit after verification, auto-push when clean, auto-open PR
+
 Existing files are skipped unless --force is set.`);
   process.exit(0);
 }
@@ -55,6 +60,16 @@ if (!sprintBoardUrl || !parentStoryId) {
 
 if (!engineeringMcpVerified) {
   console.error('Error: --engineering-mcp-verified is required. Confirm the Hubtel Engineering MCP (hubtel-engineering) is connected — run a get_guidelines_catalog call successfully — before scaffolding.');
+  process.exit(1);
+}
+
+const APPROVAL_MODES = ['supervised', 'autopilot'];
+const approvalMode = typeof args.approvalMode === 'string' && args.approvalMode.trim()
+  ? args.approvalMode.trim()
+  : 'supervised';
+
+if (!APPROVAL_MODES.includes(approvalMode)) {
+  console.error(`Error: --approval-mode must be one of ${APPROVAL_MODES.join(', ')} (got "${approvalMode}").`);
   process.exit(1);
 }
 
@@ -94,7 +109,7 @@ results.push(await copyTemplate('agents.md', path.join(target, agentFile), repla
 
 const featureListPath = path.join(target, 'feature_list.json');
 if (force || !await exists(featureListPath)) {
-  await writeText(featureListPath, await buildFeatureListWithSprintPlanner('feature-list.json', sprintPlanner));
+  await writeText(featureListPath, await buildFeatureListWithSprintPlanner('feature-list.json', sprintPlanner, approvalMode));
   results.push({ path: featureListPath, status: 'written' });
 } else {
   results.push({ path: featureListPath, status: 'skipped', reason: 'exists' });
@@ -135,6 +150,7 @@ if (force || !await exists(gitkeepPath)) {
 
 console.log(`Created harness for ${target}`);
 console.log(`Detected stack: ${project.stack}`);
+console.log(`Approval mode: ${approvalMode}`);
 console.log(`Fast gate (node init.mjs):`);
 for (const command of fast) {
   console.log(`  - ${command}`);

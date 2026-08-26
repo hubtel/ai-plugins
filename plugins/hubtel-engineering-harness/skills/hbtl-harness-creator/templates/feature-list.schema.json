@@ -4,6 +4,12 @@
   "description": "Track task implementation state for agent-driven development. Tasks are the atomic work items created on Azure; they are grouped by featId into features planned by the planning subagent.",
   "type": "object",
   "properties": {
+    "approvalMode": {
+      "type": "string",
+      "enum": ["supervised", "autopilot"],
+      "default": "supervised",
+      "description": "Per-repo human-checkpoint policy for the delivery gates (commit, push, Sonar push-anyway inference, PR). 'supervised' (default) keeps every human gate; 'autopilot' auto-commits after verification passes, auto-pushes when the quality gate and Sonar review are clean, and auto-opens the PR after a successful push. Does NOT relax planning, breakdown, or where-to-start gates. Absent means 'supervised'. See AGENTS.md **Approval mode**."
+    },
     "sprintPlanner": {
       "type": "object",
       "description": "Azure sprint tracking config captured at scaffold. Mandatory: every harness tracks work on Azure.",

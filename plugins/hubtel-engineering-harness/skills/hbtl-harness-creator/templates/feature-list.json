@@ -1,4 +1,5 @@
 {
+  "approvalMode": "supervised",
   "tasks": [
     {
       "id": "task-001",

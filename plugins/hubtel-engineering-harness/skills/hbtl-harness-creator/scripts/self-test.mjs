@@ -99,6 +99,57 @@ try {
     throw new Error('scaffolded feature_list.json did not persist parentStory.title from --parent-story-title');
   }
 
+  // approvalMode defaults to supervised when --approval-mode is omitted.
+  if (scaffoldedFeatures.approvalMode !== 'supervised') {
+    throw new Error(`default scaffold should set approvalMode:"supervised" (got ${JSON.stringify(scaffoldedFeatures.approvalMode)})`);
+  }
+
+  // --approval-mode autopilot is persisted and stays schema-valid.
+  const autopilotRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-autopilot-'));
+  try {
+    const autopilotScaffold = runNode(createScript, ['--target', autopilotRoot, ...SPRINT_ARGS, '--approval-mode', 'autopilot']);
+    if (autopilotScaffold.status !== 0) {
+      console.error(autopilotScaffold.stdout);
+      console.error(autopilotScaffold.stderr);
+      throw new Error('create-harness.mjs --approval-mode autopilot failed');
+    }
+    const autopilotFeatures = JSON.parse(await readFile(path.join(autopilotRoot, 'feature_list.json'), 'utf8'));
+    if (autopilotFeatures.approvalMode !== 'autopilot') {
+      throw new Error(`--approval-mode autopilot should write approvalMode:"autopilot" (got ${JSON.stringify(autopilotFeatures.approvalMode)})`);
+    }
+    const autopilotValidate = runNode(validateScript, ['--target', autopilotRoot]);
+    if (autopilotValidate.status !== 0) {
+      console.error(autopilotValidate.stdout);
+      console.error(autopilotValidate.stderr);
+      throw new Error('autopilot scaffold should pass validation (approvalMode is a known enum value)');
+    }
+
+    // An unknown approvalMode value must soft-warn (tier-2), not fail tier-1.
+    await writeFile(path.join(autopilotRoot, 'feature_list.json'), JSON.stringify({
+      approvalMode: 'yolo',
+      sprintPlanner: SPRINT_BLOCK,
+      tasks: [{
+        id: 'task-001',
+        featId: 'feat-001',
+        name: 'Unknown mode',
+        description: 'Should warn, not fail',
+        verification: './init.sh',
+        status: 'not-started',
+        evidence: '',
+        dependencies: []
+      }]
+    }, null, 2));
+    const unknownMode = runNode(validateScript, ['--target', autopilotRoot]);
+    if (unknownMode.status !== 0) {
+      throw new Error('unknown approvalMode should warn (tier-2), not fail tier-1');
+    }
+    if (!/approvalMode "yolo" is not a known value/.test(unknownMode.stdout + unknownMode.stderr)) {
+      throw new Error('validator should warn when approvalMode is an unknown enum value');
+    }
+  } finally {
+    await rm(autopilotRoot, { recursive: true, force: true });
+  }
+
   // Hard gate: scaffolding without sprint planner args must fail before writing files.
   const missingArgs = runNode(createScript, ['--target', await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-nomcp-'))]);
   if (missingArgs.status === 0) {
@@ -224,6 +275,15 @@ try {
   }
   if (!checkPasses('Commit approval gate')) {
     throw new Error('fresh scaffold is missing the Commit approval gate instruction check');
+  }
+  if (!checkPasses('Approval mode documented')) {
+    throw new Error('fresh scaffold is missing the Approval mode instruction check');
+  }
+  // The scaffolded instructions must describe both delivery-gate modes.
+  for (const mode of ['supervised', 'autopilot']) {
+    if (!scaffoldAgents.includes(mode)) {
+      throw new Error(`scaffolded AGENTS.md is missing the "${mode}" approval mode`);
+    }
   }
   if (!checkPasses('Approval-gated commit on done')) {
     throw new Error('fresh scaffold is missing the Approval-gated commit on done instruction check');
