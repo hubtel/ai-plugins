@@ -1,6 +1,6 @@
 {
   "name": "hubtel-engineering-harness",
-  "version": "1.3.0",
+  "version": "2.4.0",
   "description": "Hubtel plugin for building and auditing harnesses around AI coding agents.",
   "author": {
     "name": "Hubtel Enablement Team",

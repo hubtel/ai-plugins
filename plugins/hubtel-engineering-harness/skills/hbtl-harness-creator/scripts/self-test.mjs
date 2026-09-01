@@ -29,7 +29,8 @@ const SPRINT_ARGS = [
   '--sprint-board-url', 'https://dev.azure.com/hubtel/example/_sprints/taskboard/example',
   '--parent-story-id', '12345',
   '--parent-story-title', 'Self-test parent',
-  '--engineering-mcp-verified'
+  '--engineering-mcp-verified',
+  '--azure-devops-mcp-verified'
 ];
 
 // Mandatory sprintPlanner block for inline feature_list.json fixtures. Without it,
@@ -81,6 +82,15 @@ const nestedRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-neste
 const metricsRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-metrics-'));
 
 try {
+  const installMcpsScript = path.join(skillRoot, 'scripts', 'install-mcps.mjs');
+  const installMcpsSource = await readFile(installMcpsScript, 'utf8');
+  if (!installMcpsSource.includes("'hubtel-azure-devops'")) {
+    throw new Error('install-mcps.mjs must include hubtel-azure-devops in required servers');
+  }
+  if (!installMcpsSource.includes("'hubtel-design-system'")) {
+    throw new Error('install-mcps.mjs must use canonical hubtel-design-system server id');
+  }
+
   const scaffold = runNode(createScript, ['--target', tempRoot, ...SPRINT_ARGS]);
   if (scaffold.status !== 0) {
     console.error(scaffold.stdout);
@@ -166,6 +176,17 @@ try {
     throw new Error('create-harness.mjs should fail (exit 1) when --engineering-mcp-verified is missing');
   }
 
+  // Hard gate: scaffolding without --azure-devops-mcp-verified must fail (Azure DevOps MCP install enforced at scaffold).
+  const missingAzureMcpFlag = runNode(createScript, [
+    '--target', await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-noado-')),
+    '--sprint-board-url', 'https://dev.azure.com/hubtel/example/_sprints/taskboard/example',
+    '--parent-story-id', '12345',
+    '--engineering-mcp-verified'
+  ]);
+  if (missingAzureMcpFlag.status === 0) {
+    throw new Error('create-harness.mjs should fail (exit 1) when --azure-devops-mcp-verified is missing');
+  }
+
   // Idempotent by default: re-scaffolding without --force leaves feature_list.json untouched.
   const reRun = runNode(createScript, ['--target', tempRoot, ...SPRINT_ARGS]);
   if (reRun.status !== 0 || !/SKIPPED feature_list\.json/.test(reRun.stdout)) {
@@ -179,7 +200,8 @@ try {
     '--sprint-board-url', 'https://dev.azure.com/hubtel/example/_sprints/taskboard/updated',
     '--parent-story-id', '99999',
     '--parent-story-title', 'Updated parent',
-    '--engineering-mcp-verified'
+    '--engineering-mcp-verified',
+    '--azure-devops-mcp-verified'
   ]);
   if (forced.status !== 0) {
     console.error(forced.stdout);
@@ -230,6 +252,15 @@ try {
   if (!checkPasses('SonarQube pre-push review')) {
     throw new Error('fresh scaffold is missing the SonarQube pre-push review instruction check');
   }
+  if (!checkPasses('SonarQube MCP auth documented')) {
+    throw new Error('fresh scaffold is missing the SonarQube MCP auth instruction check');
+  }
+  if (!checkPasses('SonarQube startup probe documented')) {
+    throw new Error('fresh scaffold is missing the SonarQube startup probe instruction check');
+  }
+  if (!checkPasses('Autopilot Sonar auto-fix documented')) {
+    throw new Error('fresh scaffold is missing the autopilot Sonar auto-fix instruction check');
+  }
   if (!checkPasses('Push gate delegates to aqua quality-gate')) {
     throw new Error('fresh scaffold is missing the aqua quality-gate push-tier instruction check');
   }
@@ -248,6 +279,18 @@ try {
   }
   if (!checkPasses('Post-push pull request')) {
     throw new Error('fresh scaffold is missing the Post-push pull request instruction check');
+  }
+  if (!checkPasses('Hubtel Azure DevOps MCP documented')) {
+    throw new Error('fresh scaffold is missing the Hubtel Azure DevOps MCP instruction check');
+  }
+  if (!checkPasses('Azure DevOps MCP scaffold verify documented')) {
+    throw new Error('fresh scaffold is missing the Azure DevOps MCP scaffold verify instruction check');
+  }
+  if (!checkPasses('Post-push PR label step documented')) {
+    throw new Error('fresh scaffold is missing the Post-push PR label step instruction check');
+  }
+  if (!checkPasses('On-demand PR/CI query flow documented')) {
+    throw new Error('fresh scaffold is missing the on-demand PR/CI query flow instruction check');
   }
   if (!checkPasses('hbtl-harness label tagging documented')) {
     throw new Error('fresh scaffold is missing the hbtl-harness label tagging instruction check');
@@ -1563,6 +1606,59 @@ status: draft
     });
     if (allGreen.ciPassedFirstRun !== 'Yes' || allGreen.checksNeverRan !== 0) {
       throw new Error(`a check green on its first post should be Yes with nothing unrun — got ${JSON.stringify(allGreen.ciPassedFirstRun)}, neverRan ${allGreen.checksNeverRan}`);
+    }
+    // Front-End repos: policy `hubtel/sonarqube-quality-gate` vs log `sonarqube/qualitygate/…`.
+    const merchantSonar = checksForPullRequest({
+      evaluations: [{
+        status: 'queued',
+        configuration: {
+          isBlocking: true,
+          isEnabled: true,
+          type: { displayName: 'Status' },
+          settings: { statusName: 'sonarqube-quality-gate', statusGenre: 'hubtel' }
+        }
+      }],
+      statuses: [
+        {
+          contextGenre: 'sonarqube/qualitygate',
+          contextName: 'Front-End_Hubtel-Merchant-Compass_1662b374-f5c6-4d00-9b00-5331f61b321e',
+          state: 'succeeded',
+          creationDate: '2026-08-12T17:34:35.6015409+00:00'
+        },
+        {
+          contextGenre: 'sonarqube/qualitygate',
+          contextName: 'Front-End_Hubtel-Merchant-Compass_1662b374-f5c6-4d00-9b00-5331f61b321e',
+          state: 'succeeded',
+          creationDate: '2026-08-12T17:35:05.5478817+00:00'
+        }
+      ],
+      builds: []
+    });
+    const sonarGate = merchantSonar.checks[0];
+    if (sonarGate.firstRun !== 'Passed' || sonarGate.latest !== 'Passed' || sonarGate.attempts !== 2) {
+      throw new Error(`sonarqube-quality-gate should match sonarqube/qualitygate log — got ${JSON.stringify(sonarGate)}`);
+    }
+    if (merchantSonar.ciPassedFirstRun !== 'Yes' || merchantSonar.checksNeverRan !== 0) {
+      throw new Error(`matched Sonar gate should yield Yes with nothing unrun — got ${merchantSonar.ciPassedFirstRun}, neverRan ${merchantSonar.checksNeverRan}`);
+    }
+    // Snyk code/security often appear only in the status log — not in policy evaluations.
+    const snykOnly = checksForPullRequest({
+      evaluations: [evals[1]],
+      statuses: [
+        { contextGenre: 'code', contextName: 'snyk (Front-End)', state: 'succeeded', creationDate: '2026-08-12T17:31:06.987985+00:00' },
+        { contextGenre: 'code', contextName: 'snyk (Front-End)', state: 'succeeded', creationDate: '2026-08-12T17:31:08.878692+00:00' },
+        { contextGenre: 'security', contextName: 'snyk (Front-End)', state: 'succeeded', creationDate: '2026-08-12T17:31:02.9831706+00:00' },
+        { contextGenre: 'security', contextName: 'snyk (Front-End)', state: 'succeeded', creationDate: '2026-08-12T17:31:03.1782159+00:00' }
+      ],
+      builds: [{ status: 'completed', result: 'succeeded', id: 20, queueTime: '2026-08-04T09:00:00Z' }]
+    });
+    if (snykOnly.checks.length !== 3) {
+      throw new Error(`expected build + snyk code + snyk security — got ${JSON.stringify(snykOnly.checks.map((c) => c.name))}`);
+    }
+    const snykCode = snykOnly.checks.find((c) => c.genre === 'code');
+    const snykSec = snykOnly.checks.find((c) => c.genre === 'security');
+    if (snykCode?.firstRun !== 'Passed' || snykSec?.firstRun !== 'Passed') {
+      throw new Error(`snyk checks should read Passed on first run — got ${JSON.stringify({ snykCode, snykSec })}`);
     }
     const unsettled = checksForPullRequest({ evaluations: [evals[0]], statuses: [], builds: [] });
     if (unsettled.ciPassedFirstRun !== null) {

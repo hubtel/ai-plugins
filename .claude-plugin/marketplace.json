@@ -38,7 +38,7 @@
       "displayName": "Hubtel Engineering Harness",
       "source": "./plugins/hubtel-engineering-harness",
       "description": "Hubtel plugin for building and auditing harnesses around AI coding agents.",
-      "version": "1.3.0",
+      "version": "2.4.0",
       "author": {
         "name": "Hubtel Enablement Team",
         "email": "engineering@hubtel.com"
@@ -80,6 +80,10 @@
         "hubtel-sonarquabe": {
           "type": "http",
           "url": "https://sonar.hubtel.com/mcp"
+        },
+        "hubtel-azure-devops": {
+          "type": "http",
+          "url": "https://eng-mcp.hubtel.com/azure/mcp"
         },
         "chrome-devtools": {
           "command": "npx",

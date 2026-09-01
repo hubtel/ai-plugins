@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **SonarQube MCP auth recovery.** Generated harnesses now document explicit **`mcp_auth`** on `hubtel-sonarquabe` whenever auth or session issues occur — at startup (Sonar-enabled repos), before P.4 query bundle, and on mid-session tool failures — retry once, then block the push gate if still failing. New gotcha **#40**; `scoreHarness()` anchor **SonarQube MCP auth documented**.
+- **Sonar MCP post-scaffold probe.** `SKILL.md` step 7 probes Sonar auth on Sonar-enabled repos after scaffold (non-blocking; no verify flag). Startup **4c** now requires the probe **at session startup**, not deferred until push. `create-harness.mjs` prints a Sonar reminder when `SonarQubeProjectKey` is present. New gotcha **#41**; anchor **SonarQube startup probe documented**.
+- **Autopilot Sonar auto-fix at P.6.** In `autopilot`, unclean Sonar review (actionable MCP findings or failed Sonar quality gate) **auto-enters the fix loop** without the P.6 ask; re-run P.2–P.6 until clean or `blocked`. `supervised` unchanged (ask at P.6). Incomplete Sonar MCP still pauses in both modes; **`push anyway` never inferred**.
+
+## [2.4.0] — 2026-09-01
+
+### Changed
+
+- **BREAKING: P.11 PR creation moves to `hubtel-azure-devops`.** `create-harness.mjs` now requires **`--azure-devops-mcp-verified`** alongside `--engineering-mcp-verified` (verify with `mcp_auth` if needed, then `core_list_projects({ top: 1 })`). Post-push PR open at P.11 uses **`repo_pull_request_write`** (`action: create`) + **`repo_pull_request_label`** (`hbtl-harness`) instead of Sprint Planner **`create_pull_request`**. Sprint Planner scope is tasks/boards/triage only. On-demand PR/CI queries (`repo_pull_request`, `pipelines_build`, …) are documented under **Hubtel Azure DevOps MCP** and are explicitly not lifecycle-gated. Pre-push Sonar stays on `hubtel-sonarquabe`. **`scripts/install-mcps.mjs` restored** — installs `hubtel-engineering`, `hubtel-sprint-planner`, **`hubtel-azure-devops`**, and `hubtel-sonarquabe` via `aqua install-mcp` (step 0 of **Create a harness**). Marketplace plugin `hubtel-engineering-harness` adds `hubtel-azure-devops` to `mcp.json`. See `AZURE-DEVOPS-MCP-INTEGRATION.md` (live-verified: PR create response, `workItems` linking, scaffold probe).
+
+## [Unreleased]
+
 ## [2.3.0] — 2026-08-26
 
 ### Removed

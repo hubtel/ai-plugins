@@ -13,13 +13,14 @@ import {
   renderVerificationList,
   splitBuildCommands,
   verificationCommands,
-  writeText
+  writeText,
+  hasSonarQubeProjectKey
 } from './lib/harness-utils.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
-  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified [--parent-story-title TITLE] [--approval-mode supervised|autopilot] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
+  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified --azure-devops-mcp-verified [--parent-story-title TITLE] [--approval-mode supervised|autopilot] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
 
 Creates a minimal production harness:
   AGENTS.md or CLAUDE.md
@@ -39,6 +40,11 @@ The Hubtel Engineering MCP (hubtel-engineering) is a mandatory dependency.
 Confirm it is live FIRST (a successful get_guidelines_catalog call), then pass:
   --engineering-mcp-verified  (required) proof the MCP is connected and reachable
 
+The Hubtel Azure DevOps MCP (hubtel-azure-devops) is a mandatory dependency.
+If not signed in yet, call mcp_auth first, then a successful core_list_projects
+call with { top: 1 }, then pass:
+  --azure-devops-mcp-verified  (required) proof the MCP is connected and reachable
+
 Approval mode controls the delivery gates (commit / push / PR). Ask the human
 which they want, then pass it (defaults to supervised when omitted):
   --approval-mode supervised  (default) all human gates: commit approval, push offer, PR offer
@@ -52,6 +58,7 @@ const sprintBoardUrl = typeof args.sprintBoardUrl === 'string' ? args.sprintBoar
 const parentStoryId = typeof args.parentStoryId === 'string' ? args.parentStoryId.trim() : '';
 const parentStoryTitle = typeof args.parentStoryTitle === 'string' ? args.parentStoryTitle.trim() : '';
 const engineeringMcpVerified = args.engineeringMcpVerified === true || args.engineeringMcpVerified === 'true';
+const azureDevopsMcpVerified = args.azureDevopsMcpVerified === true || args.azureDevopsMcpVerified === 'true';
 
 if (!sprintBoardUrl || !parentStoryId) {
   console.error('Error: --sprint-board-url and --parent-story-id are required (capture via get_active_sprint_boards first)');
@@ -60,6 +67,11 @@ if (!sprintBoardUrl || !parentStoryId) {
 
 if (!engineeringMcpVerified) {
   console.error('Error: --engineering-mcp-verified is required. Confirm the Hubtel Engineering MCP (hubtel-engineering) is connected — run a get_guidelines_catalog call successfully — before scaffolding.');
+  process.exit(1);
+}
+
+if (!azureDevopsMcpVerified) {
+  console.error('Error: --azure-devops-mcp-verified is required. Confirm the Hubtel Azure DevOps MCP (hubtel-azure-devops) is connected — call mcp_auth if needed, then core_list_projects with { top: 1 } successfully — before scaffolding.');
   process.exit(1);
 }
 
@@ -156,6 +168,11 @@ for (const command of fast) {
   console.log(`  - ${command}`);
 }
 console.log(`Quality gate (node init.mjs --build): aqua quality-gate (CI parity)`);
+if (hasSonarQubeProjectKey(target)) {
+  console.log('');
+  console.log('SonarQube: this repo declares SonarQubeProjectKey — pre-push Sonar MCP review applies.');
+  console.log('After scaffold, probe hubtel-sonarquabe (mcp_auth if needsAuth) per SKILL.md step 7 and AGENTS.md startup 4c.');
+}
 console.log('');
 for (const result of results) {
   console.log(`${result.status.toUpperCase()} ${path.relative(target, result.path)}${result.reason ? ` (${result.reason})` : ''}`);

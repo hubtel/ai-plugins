@@ -13,7 +13,8 @@ import {
   getPullRequestStatuses,
   checksForPullRequest,
   firstBuildOutcome,
-  summarizePolicies
+  summarizePolicies,
+  enrichPolicySummaryFromChecks
 } from './azure-devops.mjs';
 
 export const METRICS_VERSION = '1.0';
@@ -358,6 +359,7 @@ export async function collectPullRequests({ remote, branch } = {}) {
         statuses,
         builds
       });
+      enrichPolicySummaryFromChecks(policySummary, checkSummary.checks);
       const { checks, ciPassedFirstRun } = checkSummary;
       pullRequests.push({
         pullRequestId,

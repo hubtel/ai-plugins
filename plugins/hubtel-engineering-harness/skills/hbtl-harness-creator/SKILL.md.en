@@ -38,8 +38,15 @@ Every useful coding-agent harness has five subsystems:
 Use the bundled script when working on a local repository:
 
 ```bash
-node scripts/create-harness.mjs --target /path/to/project
+node scripts/create-harness.mjs --target /path/to/project \
+  --sprint-board-url "https://dev.azure.com/hubtel/.../taskboard/..." \
+  --parent-story-id "12345" \
+  --parent-story-title "CCI ..." \
+  --engineering-mcp-verified \
+  --azure-devops-mcp-verified
 ```
+
+MCPs must already be connected before scaffolding — run **`node scripts/install-mcps.mjs --target /path/to/project`** first (Aqua CLI). See the main `SKILL.md` → **Create a harness** for the full install + verify flow (Sprint Planner board capture, Engineering MCP verify, Azure DevOps MCP verify).
 
 Options:
 

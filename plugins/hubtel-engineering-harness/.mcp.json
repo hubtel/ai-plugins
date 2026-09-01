@@ -24,6 +24,10 @@
     "type": "http",
     "url": "https://sonar.hubtel.com/mcp"
   },
+  "hubtel-azure-devops": {
+    "type": "http",
+    "url": "https://eng-mcp.hubtel.com/azure/mcp"
+  },
   "chrome-devtools": {
     "command": "npx",
     "args": [

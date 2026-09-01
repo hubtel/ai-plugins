@@ -29,9 +29,9 @@ export function tokenExpired(credentials, now = Date.now()) {
 }
 
 /**
- * Bearer token from the Aqua login. `userInfo.user.claim.authentication` is the
- * field of record. An expired login is caught here rather than as a 401 on every
- * one of the 1 + 5N requests a harvest makes.
+ * Bearer token from the Aqua login. `userInfo.token.token` is the field of record.
+ * An expired login is caught here rather than as a 401 on every one of the 1 + 5N
+ * requests a harvest makes.
  */
 export function resolveToken() {
   const file = path.join(os.homedir(), ...CREDENTIALS_PATH);
@@ -54,9 +54,9 @@ export function resolveToken() {
   } catch {
     return fail(`The Aqua credentials at ${file} are not valid JSON, so the login could not be read.`);
   }
-  const token = credentials?.userInfo?.user?.claim?.authentication;
+  const token = credentials?.userInfo?.token?.token;
   if (!token) {
-    return fail(`The Aqua credentials at ${file} carry no userInfo.user.claim.authentication token.`);
+    return fail(`The Aqua credentials at ${file} carry no userInfo.token.token.`);
   }
   if (tokenExpired(credentials)) {
     const expiredAt = new Date(credentials.userInfo.token.expiresOnTimestamp).toISOString();
@@ -262,6 +262,136 @@ export function statusVerdict(state) {
 }
 
 /**
+ * Branch-policy Sonar checks are named in kebab-case (e.g. `sonarqube-quality-gate`
+ * under genre `hubtel`), but Azure posts quality-gate results under genre `sonarqube`
+ * with a project-scoped name (`qualitygate/<project>_<repo>_<guid>`). Exact
+ * genre+name matching therefore misses real Sonar history on Front-End repos.
+ */
+export function isSonarPolicyName(name) {
+  if (!name) return false;
+  const normalized = String(name).toLowerCase();
+  return normalized.includes('sonarqube')
+    || normalized.includes('sonar-quality')
+    || normalized.includes('sonar_quality')
+    || normalized === 'sonar';
+}
+
+/** Status-log row for a SonarQube quality-gate post (not Snyk, coverage, etc.). */
+export function isSonarQualityGateStatusEntry(status) {
+  const genre = String(status?.contextGenre || '').toLowerCase();
+  const contextName = String(status?.contextName || '').toLowerCase();
+  // CCI shape on Front-End repos: genre `sonarqube/qualitygate`, project-scoped name.
+  if (genre === 'sonarqube/qualitygate') return true;
+  // Alternate Azure shape: genre `sonarqube`, name `qualitygate/<project>_…`.
+  if (genre === 'sonarqube' && contextName.startsWith('qualitygate/')) return true;
+  return false;
+}
+
+/**
+ * Status-log rows for one blocking Status policy — exact genre+name first, then a
+ * Sonar quality-gate fallback when the policy name is Sonar-shaped.
+ */
+export function statusHistoryForPolicy(statuses, name, genre) {
+  const exact = (statuses || []).filter(
+    (s) => (s.contextName || null) === name && (s.contextGenre || null) === genre
+  );
+  if (exact.length > 0) return exact;
+  if (!isSonarPolicyName(name)) return [];
+  return (statuses || []).filter(isSonarQualityGateStatusEntry);
+}
+
+/** Snyk code scan row in the PR status log (`code` / `snyk (…)`). */
+export function isSnykCodeStatusEntry(status) {
+  const genre = String(status?.contextGenre || '').toLowerCase();
+  const contextName = String(status?.contextName || '').toLowerCase();
+  return genre === 'code' && contextName.includes('snyk');
+}
+
+/** Snyk security scan row in the PR status log (`security` / `snyk (…)`). */
+export function isSnykSecurityStatusEntry(status) {
+  const genre = String(status?.contextGenre || '').toLowerCase();
+  const contextName = String(status?.contextName || '').toLowerCase();
+  return genre === 'security' && contextName.includes('snyk');
+}
+
+function statusCheckFromHistory({ name, genre, history, evaluationStatus = null }) {
+  const settled = history.filter((s) => statusVerdict(s.state));
+  const first = settled[0] || null;
+  const latest = settled[settled.length - 1] || null;
+  return {
+    name,
+    genre,
+    type: 'Status',
+    firstRun: first ? statusVerdict(first.state) : null,
+    firstRunDetail: first?.state || null,
+    firstRunAt: first?.creationDate || null,
+    latest: latest ? statusVerdict(latest.state) : policyVerdict(evaluationStatus),
+    latestDetail: latest?.state || evaluationStatus || null,
+    latestAt: latest?.creationDate || null,
+    attempts: settled.length
+  };
+}
+
+function checkAlreadyCoversStatusEntry(checks, matchFn) {
+  return checks.some((c) => matchFn({ contextGenre: c.genre, contextName: c.name }));
+}
+
+/**
+ * Snyk code/security scans often appear only in the status log — CCI policy
+ * evaluations on Front-End repos may omit them even when Azure shows them on the PR.
+ */
+export function appendSnykChecksFromStatusLog(checks, statuses) {
+  if (!checkAlreadyCoversStatusEntry(checks, isSnykCodeStatusEntry)) {
+    const history = (statuses || []).filter(isSnykCodeStatusEntry);
+    if (history.length > 0) {
+      const sample = history[0];
+      checks.push(statusCheckFromHistory({
+        name: sample.contextName,
+        genre: sample.contextGenre,
+        history
+      }));
+    }
+  }
+  if (!checkAlreadyCoversStatusEntry(checks, isSnykSecurityStatusEntry)) {
+    const history = (statuses || []).filter(isSnykSecurityStatusEntry);
+    if (history.length > 0) {
+      const sample = history[0];
+      checks.push(statusCheckFromHistory({
+        name: sample.contextName,
+        genre: sample.contextGenre,
+        history
+      }));
+    }
+  }
+}
+
+/** Back-fill Snyk summary fields and the policies list from synthesized checks. */
+export function enrichPolicySummaryFromChecks(policySummary, checks) {
+  const snykCode = checks.find((c) => isSnykCodeStatusEntry({ contextGenre: c.genre, contextName: c.name }));
+  const snykSec = checks.find((c) => isSnykSecurityStatusEntry({ contextGenre: c.genre, contextName: c.name }));
+  if (snykCode && policySummary.securityCodeScan == null) {
+    policySummary.securityCodeScan = snykCode.latest;
+  }
+  if (snykSec && policySummary.securityScan == null) {
+    policySummary.securityScan = snykSec.latest;
+  }
+  for (const c of [snykCode, snykSec].filter(Boolean)) {
+    const exists = policySummary.policies.some(
+      (p) => p.genre === c.genre && p.name === c.name
+    );
+    if (!exists) {
+      policySummary.policies.push({
+        type: 'Status',
+        name: c.name,
+        genre: c.genre,
+        status: c.latest === 'Passed' ? 'approved' : c.latest === 'Failed' ? 'rejected' : 'queued'
+      });
+    }
+  }
+  return policySummary;
+}
+
+/**
  * Branch-policy evaluations for a PR — the authoritative gate view. Covers the
  * build policy plus external status checks (Sonar quality gate, Snyk), required
  * reviewers and work-item linking, which the build API cannot see. CCI resolves
@@ -425,29 +555,20 @@ export function checksForPullRequest({ evaluations, statuses = [], builds = [] }
       continue;
     }
 
-    // Status check — match the log by genre + name, exactly as the policy names
-    // it. CCI flattens Azure's nested `context` to contextName / contextGenre.
+    // Status check — match the log by genre + name; Sonar policies also accept the
+    // project-scoped `sonarqube` / `qualitygate/…` posts Azure actually emits.
     const name = settings.statusName || settings.displayName || null;
     const genre = settings.statusGenre || null;
-    const history = statuses.filter(
-      (s) => (s.contextName || null) === name && (s.contextGenre || null) === genre
-    );
-    const settled = history.filter((s) => statusVerdict(s.state));
-    const first = settled[0] || null;
-    const latest = settled[settled.length - 1] || null;
-    checks.push({
+    const history = statusHistoryForPolicy(statuses, name, genre);
+    checks.push(statusCheckFromHistory({
       name,
       genre,
-      type: 'Status',
-      firstRun: first ? statusVerdict(first.state) : null,
-      firstRunDetail: first?.state || null,
-      firstRunAt: first?.creationDate || null,
-      latest: latest ? statusVerdict(latest.state) : policyVerdict(evaluation.status),
-      latestDetail: latest?.state || evaluation.status || null,
-      latestAt: latest?.creationDate || null,
-      attempts: settled.length
-    });
+      history,
+      evaluationStatus: evaluation.status
+    }));
   }
+
+  appendSnykChecksFromStatusLog(checks, statuses);
 
   // Judge the checks that actually ran, matching policyPassRate's denominator —
   // the two fields must not disagree about the same evidence. Requiring every

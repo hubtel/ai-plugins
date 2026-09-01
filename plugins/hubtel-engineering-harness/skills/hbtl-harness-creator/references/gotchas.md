@@ -382,21 +382,21 @@ registry.register('shell', {
 
 ## 34. Skipped or Bypassed the Pre-Push SonarQube Review
 
-**Symptom**: On a repo whose `azure-pipelines.yml` declares a `SonarQubeProjectKey`, the agent pushed after only `node init.mjs --build` — never querying the `hubtel-sonarquabe` MCP — so code smells, bugs, or a failing quality gate only surfaced in PR CI. Or it ran a **standalone `aqua sonar-analyze`** instead of letting the quality gate upload the analysis. Or it reported "SonarQube clean" after querying only `search_sonar_issues_in_projects` — missing **security hotspots** and **dependency risks** (separate Sonar surfaces that do not appear in the issues API). Or it treated a **green quality gate** ("Quality Gate: OK", issue counts) as review complete without the full MCP bundle and Sonar overview. Or it **ran the MCP query bundle in parallel with `git push`** (or pushed while MCP calls were still running/timing out). Or it queried with the wrong context (`pullRequest` instead of the branch, or a guessed `projectKey`), or pushed **before** the query bundle.
+**Symptom**: On a repo whose `azure-pipelines.yml` declares a `SonarQubeProjectKey`, the agent pushed after only `node init.mjs --build` — never querying the `hubtel-sonarquabe` MCP — so code smells, bugs, or a failing quality gate only surfaced in PR CI. Or it ran a **standalone `aqua sonar-analyze`** instead of letting the quality gate upload the analysis. Or it reported "SonarQube clean" after querying only `search_sonar_issues_in_projects` — missing **security hotspots** and **dependency risks** (separate Sonar surfaces that do not appear in the issues API). Or it treated a **green quality gate** ("Quality Gate: OK", issue counts) as review complete without the full MCP bundle and Sonar overview. Or it **ran the MCP query bundle in parallel with `git push`** (or pushed while MCP calls were still running/timing out). Or it queried with the wrong context (`pullRequest` instead of the branch, or a guessed `projectKey`), or pushed **before** the query bundle. Or Sonar MCP returned auth/session errors and the agent pushed anyway without calling **`mcp_auth`** and retrying (see gotcha **#40**).
 
 **Cause**: SonarQube ran only in PR CI, and the push gate did not surface its analysis for review. Even when issues were queried, hotspots and SCA risks were skipped — but the quality gate can fail while the issues query looks clean. Agents parallelize MCP + push to save time despite ordered steps. The MCP reads server state but cannot scan, so without the quality gate's upload its queries return stale or empty results for unpushed commits.
 
-**Fix**: On `Push now?` yes, run `node init.mjs --build` (P.2) **first** — the quality gate delegates to `aqua quality-gate`, whose analysis step uploads branch analysis (the harness runs no standalone `aqua sonar-analyze`). Then read `projectKey` + `branch` from `.scanner/report-task.txt` and run the **full MCP query bundle** **sequentially** with the **`branch`** parameter (never `pullRequest` pre-push): all four review tools (issues, quality gate, security hotspots, dependency risks). **Do not** launch MCP review and `git push` in the same parallel batch. **A green quality gate is not MCP review complete** — present the P.5 overview before the push (P.7). Incomplete MCP (timeout, auth failure, partial bundle) is **blocked**. **Block the push by default** when review is incomplete or not clean; only explicit **`push anyway`** overrides. Pause at P.6 (`Awaiting Sonar review consent` in `progress.md`) when not clean. Fixes loop through a new commit → re-run the quality gate → re-query. Connect `hubtel-sonarquabe` in the agent environment before the push gate. PR CI SonarQube stays the authoritative merge gate. See `templates/agents.md` → **Hubtel SonarQube MCP** and **Pushing (quality gate)**.
+**Fix**: On `Push now?` yes, run `node init.mjs --build` (P.2) **first** — the quality gate delegates to `aqua quality-gate`, whose analysis step uploads branch analysis (the harness runs no standalone `aqua sonar-analyze`). Then read `projectKey` + `branch` from `.scanner/report-task.txt` and run the **full MCP query bundle** **sequentially** with the **`branch`** parameter (never `pullRequest` pre-push): all four review tools (issues, quality gate, security hotspots, dependency risks). **Do not** launch MCP review and `git push` in the same parallel batch. **A green quality gate is not MCP review complete** — present the P.5 overview before the push (P.7). Incomplete MCP (timeout, auth failure after `mcp_auth` retry, partial bundle) is **blocked**. **Block the push by default** when review is incomplete or not clean; only explicit **`push anyway`** overrides. Pause at P.6 (`Awaiting Sonar review consent` in `progress.md`) when not clean. Fixes loop through a new commit → re-run the quality gate → re-query. Connect `hubtel-sonarquabe` in the agent environment before the push gate; on auth errors call **`mcp_auth`** and retry once (gotcha **#40**). PR CI SonarQube stays the authoritative merge gate. See `templates/agents.md` → **Hubtel SonarQube MCP** and **Pushing (quality gate)**.
 
 ---
 
 ## 35. Skipped the Post-Push Pull Request Offer or Opened a PR Without Consent
 
-**Symptom**: After pushing, the agent stopped without asking `Open a pull request? (yes / not yet)`, auto-opened a PR without consent, or called `create_pull_request` before the branch was on the remote (push had not succeeded).
+**Symptom**: After pushing, the agent stopped without asking `Open a pull request? (yes / not yet)`, auto-opened a PR without consent, or called `repo_pull_request_write` before the branch was on the remote (push had not succeeded).
 
-**Cause**: The push gate ended at P.7/P.8 with no PR step, or the agent treated PR creation as implicit follow-up to push. The MCP tool is standalone and read-only on git — it assumes push already happened and explicit human consent.
+**Cause**: The push gate ended at P.7/P.8 with no PR step, or the agent treated PR creation as implicit follow-up to push. The Azure DevOps MCP tools are standalone and read-only on git — they assume push already happened and explicit human consent (in `supervised`).
 
-**Fix**: After P.7 succeeds and P.8 records `pushed to origin`, ask **`Open a pull request? (yes / not yet)`**. On **yes**, resolve args with read-only git (`sourceBranch`, `targetBranch` from `git branch -r`, title from last commit subject with AskUserQuestion, `repoLink` from `origin`), link work items from `Closed: #…` commits or row `taskId`s, then call `create_pull_request` (server `hubtel-sprint-planner`). Present title, id, and link; update `progress.md` **PR status**. Never commit/push inside the PR step. See `templates/agents.md` → **Post-push pull request** and **Pushing (quality gate)** P.9–P.12.
+**Fix**: After P.7 succeeds and P.8 records `pushed to origin`, ask **`Open a pull request? (yes / not yet)`** (unless `autopilot`). On **yes**, resolve args with read-only git (`sourceRefName`/`targetRefName` from current branch + `git branch -r`, title from last commit subject with AskUserQuestion, `project` + `repositoryId` parsed from `git remote get-url origin`), link work items from `Closed: #…` commits or row `taskId`s (pass as `workItems: "<id1> <id2>"` — no `#`), then call **`repo_pull_request_write`** (`action: create`) and **`repo_pull_request_label`** (`action: add`, `name: hbtl-harness`) on server `hubtel-azure-devops`. Construct the browser link as `https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{pullRequestId}` — not the REST `url` from the response. Present title, id, and link; update `progress.md` **PR status**. Never commit/push inside the PR step. See `templates/agents.md` → **Hubtel Azure DevOps MCP** → Post-push pull request and **Pushing (quality gate)** P.9–P.12.
 
 ---
 
@@ -432,11 +432,41 @@ registry.register('shell', {
 
 ## 38. Autopilot Over-Reached — Bypassed a Hard Rail or Relaxed Planning
 
-**Symptom**: With `approvalMode: autopilot`, the agent auto-pushed after a **failed** P.2 quality gate; treated a blocked or unclean Sonar review as if `push anyway` were granted (inferring it from the mode itself); pushed a protected branch (`main`/`master`/`development`); committed a dependency change that `audit_packages` blocked; feature-approved a UI feature with an unresolved runtime issue; or skipped the **planning / breakdown / where-to-start** gates because "autopilot means no asking."
+**Symptom**: With `approvalMode: autopilot`, the agent paused at P.6 and asked `Fix Sonar issues and re-run?` instead of fixing inline; or auto-pushed after a **failed** P.2 quality gate; treated incomplete Sonar MCP as fixable; pushed a protected branch; committed a dependency change that `audit_packages` blocked; or skipped planning gates because "autopilot means no asking."
 
 **Cause**: `autopilot` is read as "no gates at all." It is not — it only removes the four **delivery** asks (commit approval, `Push now?`, PR offer, and the `Push now?`-style push pause). The hard safety rails and the planning-phase gates (problem items 1–3) are outside its scope and never relax.
 
-**Fix**: In `autopilot`, still **abort** on a non-zero P.2, still **pause at P.6** when the Sonar review is incomplete or not clean (only an explicit prior human `push anyway` overrides — the mode alone never does), still refuse to push a protected branch, still block on `audit_packages`, and still require UI runtime issue closure before the feature commits. Planning (Phase 1 plan approval), breakdown approval, and the where-to-start ask run identically to `supervised`. `autopilot` only lets the commit land in the same turn as the review overview and runs the push/PR steps inline once every rail is clear. `approvalMode` is a harness-text contract — it never substitutes an IDE-native approval card (Cursor Smart Mode) for these gates. See `templates/agents.md` → **Approval mode** and **Pushing (quality gate)**.
+**Fix**: In `autopilot`, still **abort** on a non-zero P.2, still **auto-fix** unclean Sonar at P.6 inline (fix loop — do not pause to ask), still **pause** on incomplete Sonar MCP (auth/timeout/partial bundle), still refuse to push a protected branch, still block on `audit_packages`, and still require UI runtime issue closure before the feature commits. **`push anyway` is never inferred** from the mode. Planning (Phase 1 plan approval), breakdown approval, and the where-to-start ask run identically to `supervised`. See `templates/agents.md` → **Approval mode** and **Pushing (quality gate)**.
+
+---
+
+## 39. Azure DevOps MCP Not Signed In at P.11
+
+**Symptom**: At P.11 the agent called `repo_pull_request_write` and got an auth error, only `mcp_auth` was visible in tool discovery (`needsAuth`), or PR creation failed with a session-expired / 401-style message mid-push gate.
+
+**Cause**: The Azure DevOps MCP was configured but not authenticated for this session. Fresh Cursor sessions often expose only `mcp_auth` until Hubtel login completes.
+
+**Fix**: Call **`mcp_auth`** on `hubtel-azure-devops`, ask the user to complete login if prompted, then retry the PR create once. If still blocked, record the auth failure in `progress.md` and stop — do **not** fall back to Sprint Planner `create_pull_request` or a local script. Confirm connectivity at session start (Startup step 4b) and at scaffold (`core_list_projects` → `--azure-devops-mcp-verified`). See `templates/agents.md` → **Hubtel Azure DevOps MCP** → Auth.
+
+---
+
+## 40. SonarQube MCP Auth or Session Failure During Push Gate
+
+**Symptom**: At P.4 the agent queried `hubtel-sonarquabe` and got an auth error, only `mcp_auth` was visible in tool discovery (`needsAuth`), or a Sonar tool failed mid-bundle with a session-expired / 401-style message. Or the agent pushed without retrying auth and treated incomplete MCP as clean.
+
+**Cause**: The SonarQube MCP was configured but not authenticated for this session, or the session expired between P.2 (quality gate) and P.4 (query bundle). Fresh Cursor sessions often expose only `mcp_auth` until Hubtel login completes.
+
+**Fix**: Whenever auth or session issues occur — not only at startup — call **`mcp_auth`** on `hubtel-sonarquabe`, ask the user to complete login if prompted, then **retry the failed Sonar call once**. If still blocked, record in `progress.md` and treat as **incomplete MCP review** — pause at P.6 or block push; do **not** substitute a PAT or skip the query bundle. On Sonar-enabled repos, also run **SKILL.md step 7** after scaffold and **AGENTS.md startup 4c** at session open so auth is surfaced before P.4. See gotcha **#41**. See `templates/agents.md` → **Hubtel SonarQube MCP** and **Pushing (quality gate)** P.4–P.6.
+
+---
+
+## 41. Scaffold Completed but Sonar MCP Was Never Authenticated
+
+**Symptom**: Harness files were written successfully; Sonar was installed via `install-mcps.mjs`, but the agent never surfaced `needsAuth` for `hubtel-sonarquabe` until P.4 (or first push in autopilot). The user only discovered Sonar was unauthenticated when the push gate ran.
+
+**Cause**: Scaffold hard-verifies Engineering and Azure DevOps only (`--engineering-mcp-verified`, `--azure-devops-mcp-verified`). The scaffold skill flow (steps 0–6) does not run **AGENTS.md** startup step 4c, and **SKILL.md step 7** (post-scaffold Sonar probe) was skipped. Sonar auth is intentionally not a scaffold gate — but without step 7 or startup 4c, `needsAuth` is never detected.
+
+**Fix**: After `create-harness.mjs` on Sonar-enabled repos (`SonarQubeProjectKey` in `azure-pipelines.yml`), run **SKILL.md step 7** — probe `hubtel-sonarquabe`, call **`mcp_auth`** if `needsAuth`, optionally **`get_current_user`**, and tell the user whether Sonar is ready. On every feature session, run **AGENTS.md startup 4c** at session open (not deferred until push). For auth failures during delivery, see gotcha **#40**.
 
 ---
 

@@ -10,6 +10,8 @@ Before writing code:
 2. Read this file completely
 3. Read project docs if present (`docs/ARCHITECTURE.md`, `docs/PRODUCT.md`, README)
 4. Ensure the **Hubtel Engineering MCP** (`hubtel-engineering`) is connected — it supplies the mandatory code-quality guidelines and Hubtel docs (see **Hubtel Engineering MCP**). If it's missing, register it before implementation work
+4b. Ensure the **Hubtel Azure DevOps MCP** (`hubtel-azure-devops`) is connected — required for PR creation (P.11) and on-demand PR/CI queries (see **Hubtel Azure DevOps MCP**). If not signed in yet (`needsAuth` — only `mcp_auth` visible), call `mcp_auth` before first PR/CI use
+4c. On repos with a **`SonarQubeProjectKey`** in `azure-pipelines.yml`, ensure the **Hubtel SonarQube MCP** (`hubtel-sonarquabe`) is connected **at session startup** — do not defer this probe until the push gate (see **Hubtel SonarQube MCP**). If not signed in yet (`needsAuth` — only `mcp_auth` visible), call `mcp_auth` before first Sonar MCP use; on success optionally call `get_current_user` to confirm connectivity — and call `mcp_auth` again whenever auth or session errors occur mid-session
 5. Run the baseline `node init.mjs` (cross-platform; `./init.sh` is a bash wrapper) to verify the repo is healthy
 6. Read `feature_list.json` for current task state — if any row has a `featId` and status ∈ `{in-progress, verified}`, resume that feature to completion before starting anything else (see **Feature delivery** → Resume); never commit its `verified` rows individually
 7. **Recover task context before resuming existing rows** — if you are picking up rows you did not author this session (fresh context), fetch full Azure specs with `get_task_details` (server `hubtel-sprint-planner`) for **non-completed tasks only** (status ∈ `{not-started, in-progress, blocked}` — skip `verified` and `done` rows since their implementation is already finished). Batch every relevant `taskId` into one call. The local row `description` is a one-line tracking label, not the spec (see **Sprint Planner (Azure tasks)** → Task details on resume)
@@ -44,7 +46,7 @@ One branch covers the whole request (which may span several task rows). Establis
 
 `feature_list.json` carries a top-level **`approvalMode`** — `supervised` (default) or `autopilot`. Read it on session start; when the key is absent, treat it as `supervised`. Mirror the active mode in `progress.md`'s **Current State** section (the **Approval mode** line) so a fresh session resumes with the same policy.
 
-**Scope — the four delivery gates only.** `approvalMode` controls **only**: the commit approval gate (`Approve this commit?`), the post-done push offer (`Push now?`), the Sonar `push anyway` inference, and the post-push PR offer (`Open a pull request?`). It does **not** relax Phase 1 plan approval, breakdown approval, or the **where-to-start** ask — those run identically in every mode. It also never relaxes any hard safety rail (see below).
+**Scope — the four delivery gates only.** `approvalMode` controls **only**: the commit approval gate (`Approve this commit?`), the post-done push offer (`Push now?`), Sonar P.6 behaviour (ask in `supervised` vs auto-fix in `autopilot`), and the post-push PR offer (`Open a pull request?`). It does **not** relax Phase 1 plan approval, breakdown approval, or the **where-to-start** ask — those run identically in every mode. It also never relaxes any hard safety rail (see below).
 
 **Mode behaviour:**
 
@@ -52,13 +54,14 @@ One branch covers the whole request (which may span several task rows). Establis
 |------|------------------------|-------------|
 | **Commit** (`Approve this commit?`) | Pause; present the review overview and commit **only** after an explicit affirmative in a later message (same-turn ban applies) | After the full verification stack passes (steps 1–3.7), present the review overview and commit **in the same turn** — no pause. Closing line unchanged: `Feature <featId>: done — evidence: commit <hash>` |
 | **Push** (`Push now?`) | Ask; push only on an explicit push affirmative | Skip the ask; run the push gate (P.1–P.7) inline. Still emit the **Delivered** body + **Before pushing** sentence so the human sees what ran |
-| **Sonar consent** (`push anyway`) | Pause at P.6 when review is not clean | **No change** — a blocked/unclean Sonar review still pauses at P.6. `push anyway` is **never** inferred; it requires an explicit prior human message |
-| **PR** (`Open a pull request?`) | Ask; open only on `yes` | Skip the ask; run P.10–P.12 (`create_pull_request`, `tags: ["hbtl-harness"]`) inline, then report title/id/link |
+| **Sonar at P.6** | Pause when review is not clean; ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)` | **Auto-fix** — when review is not clean (actionable MCP findings or failed Sonar quality gate), enter the **fix loop** inline without asking. Re-run P.2–P.6 until clean, then push. **`push anyway` is never inferred** in either mode |
+| **PR** (`Open a pull request?`) | Ask; open only on `yes` | Skip the ask; run P.10–P.12 (`repo_pull_request_write` + `repo_pull_request_label`) inline, then report title/id/link |
 
 **Hard rails (never relaxed, any mode — including `autopilot`).** Autopilot must **never** auto-push (or must pause/clarify) when any of these hold:
 
-- P.2 quality gate exits non-zero (abort the push gate — same rule as `supervised`).
-- Sonar MCP review is incomplete or not clean and no explicit prior `push anyway` (pause at P.6).
+- P.2 quality gate exits non-zero (abort the push gate — same rule as `supervised`; fix and re-run P.2 only after explicit **`push anyway`** or a new delivery attempt — do not auto-fix P.2 failures inline unless the human says so).
+- Sonar MCP review is **incomplete** (timeout, auth failure after `mcp_auth` retry, partial bundle) — pause in both modes; do not push.
+- Sonar MCP review is **not clean** (actionable findings or failed Sonar quality gate): in **`supervised`**, pause at P.6 unless explicit prior **`push anyway`**; in **`autopilot`**, enter the fix loop inline (never infer **`push anyway`**).
 - The branch is `main` / `master` / `development` (P.1 branch check).
 - `audit_packages` blocks a dependency change in this feature.
 - A UI row in the feature has an unresolved runtime issue (latest `.harness/ui-runtime/<featId>.json` run does not derive pass).
@@ -71,11 +74,11 @@ One branch covers the whole request (which may span several task rows). Establis
 **Autopilot completion sequence (run all four in the same turn).** In `autopilot`, the feature commit is the **start** of delivery, not the end. Once the full verification stack passes (steps 1–3.7), do **all** of the following in one turn — do **not** stop after the commit:
 
 1. **Commit** — present the review overview and commit in the same turn (the passing verification stack authorizes it; no `Approve this commit?` ask). This lands the `Feature <featId>: done` state, but that is **intermediate** — keep going.
-2. **Push gate inline (P.1–P.7)** — run the push gate straight away, without the `Push now?` ask (see **Pushing (quality gate)**). Every hard rail still binds: P.1 branch check, P.2 quality-gate abort, P.6 Sonar block. A hard rail firing is the **only** thing that stops you here.
-3. **PR inline (P.10–P.12)** — on a successful push, open the PR without the `Open a pull request?` ask (`create_pull_request`, `tags: ["hbtl-harness"]`), then report title/id/link (see **Post-push pull request**).
+2. **Push gate inline (P.1–P.7)** — run the push gate straight away, without the `Push now?` ask (see **Pushing (quality gate)**). Every hard rail still binds: P.1 branch check, P.2 quality-gate abort, incomplete Sonar MCP. When Sonar review is not clean, run the **fix loop** inline (P.6 autopilot path) until clean or blocked — do not pause to ask.
+3. **PR inline (P.10–P.12)** — on a successful push, open the PR without the `Open a pull request?` ask (`repo_pull_request_write` + `repo_pull_request_label`, tag `hbtl-harness`), then report title/id/link (see **Post-push pull request** under **Hubtel Azure DevOps MCP**).
 4. **Record + close** — update `progress.md` (push status, PR status), then emit the **final** autopilot closing line (`Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id>` — see **Closing report**). Do not yield before this line unless a hard rail blocked you.
 
-The single sanctioned pause inside this sequence is the P.6 Sonar review gate on a not-clean/blocked review with no prior `push anyway` — everything else runs inline.
+In **`supervised`**, the single sanctioned pause inside the push gate is P.6 when Sonar review is not clean (unless prior **`push anyway`**). In **`autopilot`**, unclean Sonar review does **not** pause — run the fix loop inline; the only Sonar-related stop is **incomplete MCP** (auth/timeout/partial bundle) or **`blocked`** when remediation cannot complete.
 
 ## Request Triage
 
@@ -325,13 +328,13 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 
 "Task row before code" governs how you **start**; this governs when you may **stop**.
 
-**Do not yield until `done` or `blocked`.** When the user asks for implementation work, you **MUST NOT** end your turn until the active task is either `done` (committed + `evidence` set + `status: done`) or `blocked` (concrete blocker recorded in `progress.md`) — **except when awaiting human commit approval** (see **Commit approval gate**), or **awaiting Sonar review consent at the push gate** (see **Pushing (quality gate)** → P.6), the two sanctioned pauses. **The sanctioned pauses depend on `approvalMode`** (see **Approval mode**): in `supervised`, both the commit-approval pause and the Sonar push pause apply; in `autopilot`, the commit-approval pause does **not** occur (commit lands same-turn) — the **only** sanctioned pause is the Sonar review pause at P.6 (when the review is blocked and there's no prior `push anyway`). "Implemented and tests pass" is the *middle* of the task — it is the signal to run the completion sequence, not to report back. Apart from those pauses, `in-progress` is never a valid hand-off state for the request you were just given.
+**Do not yield until `done` or `blocked`.** When the user asks for implementation work, you **MUST NOT** end your turn until the active task is either `done` (committed + `evidence` set + `status: done`) or `blocked` (concrete blocker recorded in `progress.md`) — **except when awaiting human commit approval** (see **Commit approval gate**), or **awaiting Sonar review consent at the push gate in `supervised`** (see **Pushing (quality gate)** → P.6), or **awaiting Sonar MCP auth / incomplete MCP review** (both modes). **The sanctioned pauses depend on `approvalMode`** (see **Approval mode**): in `supervised`, both the commit-approval pause and the Sonar P.6 ask apply when review is not clean; in `autopilot`, the commit-approval pause does **not** occur (commit lands same-turn) — unclean Sonar review at P.6 **auto-enters the fix loop** without asking; yield only when Sonar MCP is incomplete (auth/timeout) or remediation is **`blocked`**. "Implemented and tests pass" is the *middle* of the task — it is the signal to run the completion sequence, not to report back. Apart from those pauses, `in-progress` is never a valid hand-off state for the request you were just given.
 
 **Features extend this across every task.** For tasks sharing a `featId` (see **Feature delivery**), do not yield between tasks either — implement → fast gate → verification → `verified` → next task, straight through — until every row in the feature is `done` or `blocked`. The one sanctioned pause is the same kind, just feature-scoped: the **feature** commit approval, once, after every row is `verified`.
 
 **Commit only after approval (`supervised`).** In `supervised` mode, completing a feature *includes* committing it, but the commit is **gated**: run the completion sequence straight through to the approval ask, present the review overview, and commit only once the human gives the go-ahead (see **Commit approval gate**). Do not commit autonomously. In **`autopilot`** mode the commit is authorized by the passing verification stack — present the overview and commit in the same turn (see **Approval mode** and **Commit approval gate** → *Autopilot*).
 
-**Autopilot extends the turn through delivery.** In `autopilot`, committing and marking rows `done` is **not** the end of the turn — the `Feature <featId>: done` state is intermediate. After the commit, continue straight into P.1–P.7 (push gate) and, on a successful push, P.10–P.12 (PR) — all in the **same** turn (see **Approval mode** → Autopilot completion sequence). The turn ends only when one of these holds: (a) the PR is opened (push + PR succeeded) and you emit the `delivered` closing line, (b) a hard rail blocks (P.2 abort, P.6 Sonar review not clean with no prior `push anyway`, protected branch, `audit_packages` block), or (c) the task is `blocked`. Do **not** emit a final closing line or yield after the commit until one of these is reached — stopping at `done` is the wrong stopping point in `autopilot`.
+**Autopilot extends the turn through delivery.** In `autopilot`, committing and marking rows `done` is **not** the end of the turn — the `Feature <featId>: done` state is intermediate. After the commit, continue straight into P.1–P.7 (push gate) and, on a successful push, P.10–P.12 (PR) — all in the **same** turn (see **Approval mode** → Autopilot completion sequence). The turn ends only when one of these holds: (a) the PR is opened (push + PR succeeded) and you emit the `delivered` closing line, (b) a hard rail blocks (P.2 abort, incomplete Sonar MCP, Sonar fix loop **`blocked`**, protected branch, `audit_packages` block), or (c) the task is `blocked`. Do **not** emit a final closing line or yield after the commit until one of these is reached — stopping at `done` is the wrong stopping point in `autopilot`. Unclean Sonar at P.6 is **not** a stopping point in `autopilot` — fix inline and re-run P.2–P.6.
 
 ## Working Rules
 
@@ -357,8 +360,8 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 - **Hubtel UI via the design-system MCP (frontend + UI rows)** — call the MCP **tools** for mechanics (`search_components`/`get_composition_pattern` before breakdown; `get_component`/`get_design_tokens`/`find_icons` when implementing); run `validate_imports` + `check_setup` before `verified`/`done` on UI rows (see **Hubtel Design System MCP**)
 - **UI runtime assertion** — for every **UI row**, write `.harness/ui-runtime/<featId>.json` (v3) before `verified`/`done` (tier-1). When `chrome-devtools-mcp` is connected, run the full 3.7 loop and record an **append-only `runs[]`** of `checks`, `issues`, and `criteriaResults`; the gate is **no open issues on the latest run**, not "checks passed." Do not report UI runtime pass or set `verified`/`done` until `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0**. Read what's still open with that helper anytime. When it is not connected, write a **skipped** artifact and note the skip in the review overview. Does not change `requiredTests`/`verification` or CI (see **UI Runtime Assertion**)
 - **Approval-gated commit on done (mode-dependent)** — in `supervised`, present the review overview and commit only after explicit human approval; in `autopilot`, present the overview and commit in the same turn once verification passes (see **Approval mode** and **Commit approval gate**); either way, stage this feature's files, commit with message `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature, and use that commit's hash as evidence
-- **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on push (asked in `supervised`; run inline in `autopilot`), run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → human consent when blocked) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete; the P.6 Sonar pause is **not** relaxed by `autopilot` (see **Hubtel SonarQube MCP** and **Approval mode**)
-- **PR after push (mode-dependent)** — in `supervised`, after a successful push ask `Open a pull request? (yes / not yet)` and call `create_pull_request` on **yes**; in `autopilot`, open the PR inline after a successful push without the ask; always resolve args with read-only git only and tag the PR with `tags: ["hbtl-harness"]` (see **Sprint Planner (Azure tasks)** → Post-push pull request and **Approval mode**)
+- **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on push (asked in `supervised`; run inline in `autopilot`), run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → **`supervised`**: human consent when blocked; **`autopilot`**: auto-fix loop when not clean) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete (see **Hubtel SonarQube MCP** and **Approval mode**)
+- **PR after push (mode-dependent)** — in `supervised`, after a successful push ask `Open a pull request? (yes / not yet)` and open via Azure DevOps MCP on **yes**; in `autopilot`, open the PR inline after a successful push without the ask; always resolve args with read-only git only and tag the PR with `hbtl-harness` via `repo_pull_request_label` (see **Hubtel Azure DevOps MCP** → Post-push pull request and **Approval mode**)
 - **Stay in scope** — don't modify files unrelated to the current task
 - **Leave clean state** — next session runs `node init.mjs` with a clean tree
 
@@ -622,44 +625,11 @@ Do **not** call it for:
 - **Access control is server-side and final.** Details are returned only for tasks the authenticated user created or is currently assigned; a per-task access-denied error is **not retryable** — do not re-ask with the same ids. Handle per-task entries in `failed[]` individually: fall back to the row's `description` + `progress.md` for that row, and ask the human when that isn't enough to implement safely.
 - **Board-state cross-check (bonus, not a sync mechanism).** The returned status can reveal drift (e.g. a row `in-progress` locally while its task still sits `New`); fix drift through the normal **Task status sync** call, and treat `feature_list.json` as the source of truth for local state.
 
-### Post-push pull request (`create_pull_request`)
+**PR creation** is handled by the **Hubtel Azure DevOps MCP** at P.11 — not Sprint Planner. See **Hubtel Azure DevOps MCP** → Post-push pull request.
 
-After a **successful push** (P.7), open an Azure DevOps pull request — asked in `supervised`, run inline in `autopilot` (see **Approval mode**).
+## Hubtel Engineering MCP
 
-**Harness exception to the MCP's standalone rule.** The Sprint Planner MCP documents `create_pull_request` as "call only when the user explicitly asks." In this harness, **`Open a pull request? (yes / not yet)` after a successful push** counts as that explicit ask (`supervised`) — only call the tool when the human answers **yes** (or when they independently say "create/open a PR" at any time). In **`autopilot`**, the human's standing choice of that mode is the explicit authorization — open the PR inline after the successful push without asking. Do **not** auto-open a PR in `supervised` without consent.
-
-**When it runs.** Immediately after P.7 succeeds and P.8 records `pushed to origin` in `progress.md`: in `supervised`, ask:
-
-```text
-Open a pull request? (yes / not yet)
-```
-
-In `autopilot`, skip the ask and proceed to resolve args + open the PR.
-
-On **not yet**, silence, or an ambiguous reply (`supervised`): record `PR status: not opened yet` in `progress.md` and stop.
-
-On **yes**, call `create_pull_request` (server `hubtel-sprint-planner`). **Read-only git only** inside this step — P.7 already pushed; never commit, push, checkout, or edit files here.
-
-| Argument | How to resolve |
-|---|---|
-| `sourceBranch` | Current branch: `git rev-parse --abbrev-ref HEAD` (unless the human named a different source) |
-| `targetBranch` | Infer from branch type, then verify with `git branch -r`: **hotfix** branches (`hotfix/*`) → `main` or `master`; **feature** branches (including `users/<username>/feature/*`) → the repo's integration branch — prefer the first match among `origin/develop`, `origin/development`, `origin/staging`, `origin/stage`. **Never guess** if none match — AskUserQuestion (type=input) for the target before calling the tool. **Note:** you must never **push** to `development`/`develop`, but the PR **target** is often that branch — that is normal. |
-| `title` | `git log -1 --pretty=%s` on the source branch, then AskUserQuestion with exactly one option: `Use last commit message: "<subject>"` (AskUserQuestion adds **Other…** for a custom title). Skip the question only when the human already supplied an explicit title. |
-| `repoLink` | `git remote get-url origin` if not supplied (HTTPS or `git@ssh.dev.azure.com:v3/...` forms both work) |
-| `tags` | Always `["hbtl-harness"]` — a constant string array so every PR this harness opens is identifiable as harness-originated. Not resolved from git; do not ask the human. |
-
-**Work item linking (handled by the MCP).** Prefer ids already on the branch: parse `Closed: #…` from commit messages on the feature branch (same ids as the harness commit format). If none, use `taskId`s from the delivered feature row(s). If still none, AskUserQuestion for comma-separated ids (e.g. `#375924, #375925`).
-
-**On success**, present the PR **title**, **id**, and a **clickable link** in plain language (no MCP/tool names). Update `progress.md` **PR status** with the id, target branch, and link.
-
-**On success**, present the PR **title**, **id**, and a **clickable link** in plain language (no MCP/tool names). Update `progress.md` **PR status** with the id, target branch, and link.
-
-**On failure**, surface the error plainly (e.g. an active PR already exists for these branches; source branch not on remote — should not happen immediately after P.7) and stop. Do **not** call `how_to_use`, write a preview, or `submit_task`.
-
-**Sonar note.** Pre-push Sonar used **`branch`** analysis. After the PR exists, **PR CI Sonar** (using `pullRequest` context) remains the authoritative merge gate — opening the PR does not replace that.
-
-
-This is a **Hubtel** harness, so the **Hubtel Engineering MCP** is a required dependency alongside the Sprint Planner MCP. It exposes Hubtel's authoritative code-quality **guidelines**, internal engineering **docs**, and a package compliance registry (`audit_packages`).
+This is a **Hubtel** harness, so the **Hubtel Engineering MCP** is a required dependency alongside the Sprint Planner and Azure DevOps MCPs. It exposes Hubtel's authoritative code-quality **guidelines**, internal engineering **docs**, and a package compliance registry (`audit_packages`).
 
 **Verified at scaffold.** The harness is only created after the engineering MCP is confirmed live (a successful `get_guidelines_catalog` call gates `create-harness.mjs`), so in a scaffolded project the server `hubtel-engineering` should already be connected. If the tools are unavailable at session start, register the server in your agent's MCP configuration before implementation work — the config is agent-agnostic (use `.mcp.json`, `claude mcp add-json`, `.cursor/mcp.json`, etc.):
 
@@ -828,7 +798,9 @@ Backend/infra/script/test-only rows skip step 3.7 and the runtime artifact entir
 
 **Applies when** `azure-pipelines.yml` declares a `SonarQubeProjectKey` (this repo's CI runs SonarQube on PRs). When it does, the **SonarQube analysis runs as a step inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and a **local MCP review of that analysis is part of the push gate** — it runs **after** the quality gate, before push, matching Hubtel CI ordering. Repos without a `SonarQubeProjectKey` skip this section.
 
-**Required MCP when Sonar CI is enabled.** Connect the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`) in the agent environment before the push gate on repos with a `SonarQubeProjectKey`. If its tools aren't connected when you need them, register the server first. Auth is **MCP-owned** — surface its login, wait, retry; never build a parallel path.
+**Required MCP when Sonar CI is enabled.** Connect the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`) in the agent environment on repos with a `SonarQubeProjectKey`. **Not verified at scaffold** — Engineering and Azure DevOps are verified before files are written; Sonar auth is probed after scaffold (skill step 7) and **at session startup** (step 4c above). If its tools aren't connected when you need them, register the server via Hubtel's standard MCP setup first.
+
+Auth is **MCP-owned** — whenever auth or session issues occur (not only at startup): if tool discovery shows **`needsAuth`** (only `mcp_auth` visible), or any Sonar MCP call returns an auth/session error, call **`mcp_auth`** on `hubtel-sonarquabe`, ask the user to complete login if prompted, then **retry the failed call once**. If still blocked, record in `progress.md` and treat as **incomplete MCP review** — block the push gate (see P.4/P.6). **No script fallback** — do not substitute a PAT or local CLI for Sonar MCP queries.
 
 **The quality gate uploads the analysis; the MCP reads server state.** The MCP has no "run scan" tool, and the harness runs **no standalone `aqua sonar-analyze`** — the SonarQube analysis is one step inside `aqua quality-gate`, so running `node init.mjs --build` (P.2) uploads fresh branch analysis for the MCP to query. Do **not** invoke `aqua sonar-analyze` yourself.
 
@@ -852,7 +824,7 @@ If `node init.mjs --build` exits non-zero or no `.scanner/report-task.txt` is wr
 
 | Tool | When |
 |---|---|
-| `get_current_user` | Once per session, before first Sonar MCP use |
+| `get_current_user` | Once per session before first Sonar MCP use — after `mcp_auth` if `needsAuth` |
 | `search_sonar_issues_in_projects` | **Every push** — branch issues (bugs, vulnerabilities, code smells). Pass `projectKey` + `branch` from the report; **filtering is MCP-owned** |
 | `get_project_quality_gate_status` | **Every push** — quality gate for `projectKey` + `branch` |
 | `search_security_hotspots` | **Every push** — security hotspots (separate from the issues tool). Pass `projectKey` + `branch`; **filtering is MCP-owned** |
@@ -864,11 +836,96 @@ If `node init.mjs --build` exits non-zero or no `.scanner/report-task.txt` is wr
 
 **Query bundle (every push, after the quality gate).** After P.3 parses `.scanner/report-task.txt`, call **all review tools above marked Every push** with the same `projectKey` and `branch` (use path where the tool requires it). Do not skip hotspots or dependency risks because the feature "didn't touch auth/deps" — they are separate Sonar surfaces. Do not prescribe Sonar filter parameters in harness calls — each tool applies its own defaults for pre-push review.
 
-**Sequential gate (no parallel push).** P.4 → P.5 → P.6 run **after** the P.2 quality gate and must **fully complete** before **`git push` (P.7)**. Run MCP review tools **sequentially** (wait for each to finish); **do not** launch the query bundle in the same parallel batch as `git push` or other shell commands. A timeout, auth error, or partial bundle (fewer than all Every-push review tools returned) is **incomplete review** — block, retry MCP (or surface auth/install), or wait for explicit `push anyway`; do not treat incomplete MCP as clean.
+**Sequential gate (no parallel push).** P.4 → P.5 → P.6 run **after** the P.2 quality gate and must **fully complete** before **`git push` (P.7)**. Run MCP review tools **sequentially** (wait for each to finish); **do not** launch the query bundle in the same parallel batch as `git push` or other shell commands. On **auth or session errors** from any Sonar tool: call **`mcp_auth`** on `hubtel-sonarquabe`, retry that call once, then continue or block. A timeout, auth failure after retry, or partial bundle (fewer than all Every-push review tools returned) is **incomplete review** — block, or wait for explicit `push anyway`; do not treat incomplete MCP as clean.
 
-**Sonar review gate (sanctioned pause).** After P.5, if review is **not** clean (quality gate failed, actionable MCP findings, or incomplete MCP): **stop** — present the overview, record `Awaiting Sonar review consent` in `progress.md`, and ask: `Fix Sonar issues and re-run? (yes / push anyway / not yet)`. Only **`push anyway`** (explicit, same approval semantics as commit approval) may proceed to push without fixing. On **`not yet`**, end the push-gate turn without pushing.
+**Sonar review gate (P.6).** After P.5, if review is **not** clean (failed Sonar quality gate from MCP, actionable MCP findings):
+
+- **`supervised`** — **pause** (sanctioned hand-off): present the overview, record `Awaiting Sonar review consent` in `progress.md`, and ask: `Fix Sonar issues and re-run? (yes / push anyway / not yet)`. Only **`push anyway`** (explicit, same approval semantics as commit approval) may proceed to push without fixing. On **`not yet`**, end the push-gate turn without pushing.
+- **`autopilot`** — **do not ask** — present the overview briefly, then **enter the fix loop inline** (see **Fix loop** below). Re-run P.2–P.6 after each Sonar fix commit until review is clean, then proceed to P.7. If remediation cannot complete, mark **`blocked`** and emit `push blocked — Sonar remediation blocked (autopilot)`. **`push anyway` is never inferred** — only an explicit prior human message overrides.
+
+If review is **incomplete MCP** (timeout, auth failure after retry, partial bundle) in **either mode**: **stop** — record in `progress.md`, do not push; wait for auth recovery or explicit **`push anyway`**.
 
 **Block by default.** Do **not** push when review is incomplete or not clean per MCP results and quality gate. On `yes` to fix, run the fix loop (see **Pushing (quality gate)** → fix loop). PR CI SonarQube remains the authoritative merge gate — a clean pre-push review reduces surprise but does not guarantee CI passes.
+
+## Hubtel Azure DevOps MCP
+
+**Required dependency.** Connect the Azure DevOps MCP (`hubtel-azure-devops`; Cursor: `user-hubtel-azure-devops`) in the agent environment. Register via Hubtel standard MCP setup:
+
+```json
+{
+  "hubtel-azure-devops": {
+    "url": "https://eng-mcp.hubtel.com/azure/mcp"
+  }
+}
+```
+
+**Verified at scaffold.** The harness is only created after the Azure DevOps MCP is confirmed live (`mcp_auth` if needed, then `core_list_projects` with `{ top: 1 }` gates `create-harness.mjs` via `--azure-devops-mcp-verified`).
+
+Auth is **MCP-owned** — when not signed in yet (`needsAuth` — only `mcp_auth` visible), call `mcp_auth` and complete login. On mid-session auth errors, call `mcp_auth` once and retry; if still blocked, record in `progress.md` and tell the user plainly. **No script fallback** — do not substitute a local CLI or PAT path for PR/CI queries or PR creation.
+
+**Sprint Planner scope.** Sprint Planner handles **tasks and boards only** (`harness_create_tasks`, `get_task_details`, `update_task_status`, …). It does **not** create pull requests in this harness.
+
+### On-demand PR / CI queries (not lifecycle-gated)
+
+When the user asks about PR state, CI failures, review comments, or merge status — answer from live Azure DevOps data via this MCP. **Do not** gate startup, commit, push, or `done` on these reads; run them only when the question needs live state.
+
+1. Ensure signed in (`mcp_auth` if only that tool is available).
+2. Resolve **project** + **repository** from `git remote get-url origin` (parse org/project/repo from the Azure remote URL).
+3. **`repo_pull_request`** — `list` with `sourceRefName: refs/heads/<current-branch>` or `get` with known id.
+4. **`repo_pull_request_reviewer`** — approval state.
+5. **`repo_pull_request_thread`** — unresolved comments (`status: Active`).
+6. **`pipelines_build`** — latest build for the branch; if failed → **`pipelines_timeline`** → **`pipelines_build_log`**.
+
+Present results in plain language (title, link, gate summary, blockers). Do not dump raw JSON.
+
+### Post-push pull request (`repo_pull_request_write`)
+
+After a **successful push** (P.7), open an Azure DevOps pull request — asked in `supervised`, run inline in `autopilot` (see **Approval mode**).
+
+**When it runs.** Immediately after P.7 succeeds and P.8 records `pushed to origin` in `progress.md`: in `supervised`, ask:
+
+```text
+Open a pull request? (yes / not yet)
+```
+
+In `autopilot`, skip the ask and proceed to resolve args + open the PR.
+
+On **not yet**, silence, or an ambiguous reply (`supervised`): record `PR status: not opened yet` in `progress.md` and stop.
+
+On **yes** (or inline in `autopilot`), use **`repo_pull_request_write`** and **`repo_pull_request_label`** (server `hubtel-azure-devops`). **Read-only git only** inside this step — P.7 already pushed; never commit, push, checkout, or edit files here.
+
+| P.10 field | How to resolve |
+|---|---|
+| `project` | Parse from `git remote get-url origin` (Azure DevOps project name between org and `_git`) |
+| `repositoryId` | Repository name from the same remote (e.g. `My-Repo`) |
+| `sourceRefName` | `refs/heads/<branch>` — branch from `git rev-parse --abbrev-ref HEAD` (unless the human named a different source) |
+| `targetRefName` | `refs/heads/<target>` — infer from branch type, then verify with `git branch -r`: **hotfix** (`hotfix/*`) → `refs/heads/main` or `refs/heads/master`; **feature** branches (including `users/<username>/feature/*`) → integration branch — prefer the first match among `origin/develop`, `origin/development`, `origin/staging`, `origin/stage`. **Never guess** if none match — AskUserQuestion before calling the tool. **Note:** you must never **push** to `development`/`develop`, but the PR **target** is often that branch — that is normal. |
+| `title` | `git log -1 --pretty=%s`, then AskUserQuestion with exactly one option: `Use last commit message: "<subject>"` (AskUserQuestion adds **Other…** for a custom title). Skip only when the human already supplied an explicit title. |
+| `workItems` | Parse `Closed: #…` from commits on the feature branch (same ids as the harness commit format). If none, use numeric `taskId`s from the delivered feature row(s). If still none, AskUserQuestion for comma-separated ids. Pass as `workItems: "<id1> <id2>"` (space-separated, **no `#` prefix). Commit trailers still use `Closed: #…` — this is Azure API transport only. |
+| `isDraft` | `false` unless the human explicitly asks for a draft PR |
+| `autoComplete` | **Never** set `true` — merge stays human-owned |
+
+**P.11 — create:** `repo_pull_request_write` with `action: create` and the resolved fields above. **`action: create` only** — never `update`, `vote`, or `autoComplete`.
+
+**P.11b — label:** immediately after create, `repo_pull_request_label` with `action: add`, `name: hbtl-harness`, same `project`, `repositoryId`, and `pullRequestId` from the create response.
+
+**On success**, read `pullRequestId` and `title` from the create response. Build the browser link (the response `url` is the REST API URL, **not** the human link):
+
+```text
+https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{pullRequestId}
+```
+
+Parse `{org}`, `{project}`, `{repo}` from `git remote get-url origin`. Present title, `#pullRequestId`, and the link in plain language (no MCP/tool names). Update `progress.md` **PR status**:
+
+```text
+PR status: opened — PR #<pullRequestId> → <targetBranch> (<link>)
+```
+
+(`targetBranch` = target ref with `refs/heads/` stripped.)
+
+**On failure**, surface the error plainly and stop. **No Sprint Planner fallback.**
+
+**Sonar note.** Pre-push Sonar used **`branch`** analysis. After the PR exists, **PR CI Sonar** (using `pullRequest` context) remains the authoritative merge gate — opening the PR does not replace that.
 
 ## Verification
 
@@ -1061,7 +1118,7 @@ Feature feat-001: done — evidence: commit 59e826f (task-001, task-002, task-00
 Feature feat-001: delivered — evidence: commit 59e826f, pushed, PR #4821 (task-001, task-002, task-003)
 ```
 
-(If a hard rail blocks — P.2 non-zero, P.6 Sonar not clean, protected branch, or an `audit_packages` block — stop at that gate and close with the matching blocked line from **Closing report** instead; do not fabricate a push/PR result.)
+(If a hard rail blocks — P.2 non-zero, incomplete Sonar MCP, Sonar remediation blocked in `autopilot`, P.6 Sonar not clean in `supervised` (no prior `push anyway`), protected branch, or an `audit_packages` block — stop at that gate and close with the matching blocked line from **Closing report** instead; do not fabricate a push/PR result.)
 
 For a feature, emit **one** feature closing line — **do not** emit a separate `Task <id>: done` line per task.
 
@@ -1098,7 +1155,7 @@ Feature <featId>: push blocked — <one-line reason + what you need> (autopilot)
 
 - `committed — running push gate` is a **transient** progress line only — never the last line of a completed turn; you must proceed to `delivered` or a blocked line in the same turn.
 - `delivered — evidence: commit <hash>, pushed, PR #<id>` is the **final** autopilot line after push + PR both succeed.
-- `push blocked — <reason> (autopilot)` is the final line when a hard rail fires at the push gate (P.2 abort, P.6 Sonar not clean with no prior `push anyway`, protected branch, `audit_packages` block); it is a legitimate stopping point.
+- `push blocked — <reason> (autopilot)` is the final line when a hard rail fires at the push gate (P.2 abort, incomplete Sonar MCP, Sonar remediation blocked, protected branch, `audit_packages` block); it is a legitimate stopping point. Unclean Sonar with fixable findings is **not** a stopping point — remediate inline first.
 
 `in progress — <id> verified (<n>/<total>)` reports where the feature stands (for `progress.md`/resume, and the rare case a task is legitimately `blocked`) — it is **not** a routine stopping point; per **Completion Is Mandatory**, keep moving through tasks without yielding until the feature reaches `awaiting commit approval`, `done`, or `blocked` (`supervised`), or `delivered` / `push blocked` (`autopilot`).
 
@@ -1120,22 +1177,22 @@ commit a1b2c3d
 
 The full CI-parity quality checks are validated here, not per feature. When row(s) are `done`, include the push offer in the **post-done message** (see **Post-done message**). **`supervised`**: don't auto-push and don't fold push consent into commit approval — wait for `Push now?` → yes. **`autopilot`**: the push gate runs **inline** right after the commit — this is **not** bypassing consent; the human authorized it by choosing autopilot (see **Approval mode** → Autopilot completion sequence). Either way the gate itself (P.1–P.7) is identical.
 
-**In `supervised`**, the push gate runs on **`Push now?` → yes** only — not on commit approval, and not on earlier `commit and push` / `ship it` wording (see **Commit approval gate** → **Approval semantics**). **In `autopilot`**, the push gate runs **inline** right after the commit — without the `Push now?` ask — but the gate itself is **identical**: P.2 abort, the P.6 Sonar block, and the P.1 branch check all bind exactly as in `supervised` (see **Approval mode** → Hard rails). The quality gate (`node init.mjs --build` → `aqua quality-gate`) runs **first**; on repos with a `SonarQubeProjectKey` (see **Hubtel SonarQube MCP**), the analysis it uploads is then reviewed via the Sonar MCP before push, and blocks by default. **Consent (or the `autopilot` inline run) covers the sequence — not skipping P.2 or P.4–P.6, or running the MCP review in parallel with the push.** Steps:
+**In `supervised`**, the push gate runs on **`Push now?` → yes** only — not on commit approval, and not on earlier `commit and push` / `ship it` wording (see **Commit approval gate** → **Approval semantics**). **In `autopilot`**, the push gate runs **inline** right after the commit — without the `Push now?` ask — but P.2 abort, incomplete Sonar MCP, branch check, and **`supervised`-only P.6 ask** bind as documented (see **Approval mode** → Hard rails). In **`autopilot`**, unclean Sonar at P.6 auto-enters the fix loop. The quality gate (`node init.mjs --build` → `aqua quality-gate`) runs **first**; on repos with a `SonarQubeProjectKey` (see **Hubtel SonarQube MCP**), the analysis it uploads is then reviewed via the Sonar MCP before push, and blocks push until clean (or explicit **`push anyway`**). **Consent (or the `autopilot` inline run) covers the sequence — not skipping P.2 or P.4–P.6, or running the MCP review in parallel with the push.** Steps:
 
 1. **P.1 Branch check** — confirm you're on a compliant `users/<username>/feature/<short-desc>` branch (never push `main`/`master`/`development`; see **Branch Discipline**).
 2. **P.2 Quality gate** — run `node init.mjs --build` from repo root (delegates to `aqua quality-gate` — the CI-parity checks; must pass). **Non-zero exit → abort the push gate immediately** — report the failure and **stop** (no P.3–P.7, no `git push`). Only a **later** explicit **`push anyway`** (same approval semantics as commit approval — not `commit and push`, not `Push now?` yes retroactively) may proceed without fixing. On `SonarQubeProjectKey` repos this step also uploads the SonarQube analysis; a missing `.scanner/report-task.txt` after a clean exit is a quality-gate failure — same abort rule. A green quality gate is **not** MCP review complete — proceed to P.3.
 3. **P.3 Parse report** *(SonarQubeProjectKey repos only)* — read `.scanner/report-task.txt` for `projectKey`, `branch`, and `dashboardUrl`.
-4. **P.4 Query MCP** *(SonarQubeProjectKey repos only)* — run the **query bundle** sequentially (all Every-push review tools complete) with `projectKey` + `branch` from the report (see **Hubtel SonarQube MCP**). **Do not** start P.7 (push) in the same turn or parallel batch. Incomplete MCP (timeout, auth failure, partial bundle) → blocked.
+4. **P.4 Query MCP** *(SonarQubeProjectKey repos only)* — ensure signed in (`mcp_auth` on `hubtel-sonarquabe` if `needsAuth` or if a prior Sonar call failed with auth/session error); run the **query bundle** sequentially (all Every-push review tools complete) with `projectKey` + `branch` from the report (see **Hubtel SonarQube MCP**). On auth failure mid-bundle: `mcp_auth`, retry that tool once, then continue or block. **Do not** start P.7 (push) in the same turn or parallel batch. Incomplete MCP (timeout, auth failure after retry, partial bundle) → blocked.
 5. **P.5 Sonar overview** *(SonarQubeProjectKey repos only)* — **mandatory before push** — present each tool's results, quality gate outcome, and the **`dashboardUrl`** from the report as a clickable dashboard link (verbatim).
-6. **P.6 Sonar review gate** *(SonarQubeProjectKey repos only)* — if review is incomplete or not clean, **pause** (sanctioned hand-off): ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)`; record `Awaiting Sonar review consent` in `progress.md`; do not push until **`push anyway`** or review is clean after a fix loop. If clean, proceed to P.7.
+6. **P.6 Sonar review gate** *(SonarQubeProjectKey repos only)* — if review is incomplete (MCP timeout/auth/partial bundle), **pause** in both modes; do not push. If review is not clean (actionable findings or failed Sonar quality gate): in **`supervised`**, **pause** and ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)`; record `Awaiting Sonar review consent` in `progress.md`; do not push until **`push anyway`** or review is clean after a fix loop. In **`autopilot`**, **do not ask** — enter the **fix loop** inline immediately; re-run P.2–P.6 after each fix commit until clean or **`blocked`**, then proceed to P.7 when clean. If clean, proceed to P.7.
 7. **P.7 Push** — push to origin.
 8. **P.8 Record** — update `progress.md` (quality-gate status + SonarQube status + push status → `pushed to origin`).
 9. **P.9 PR offer (mode-dependent)** — in `supervised`, ask explicitly: `Open a pull request? (yes / not yet)` — do not auto-open; PR consent is separate from push consent. In **`autopilot`**, skip the ask and proceed straight to P.10–P.12 to open the PR inline after the successful push (see **Approval mode**).
-10. **P.10 Resolve PR args** *(on yes, or always in `autopilot`)* — read-only git: current branch, integration target (`git branch -r`), last commit subject for title choice, `origin` remote URL; gather work-item ids from `Closed: #…` commits or row `taskId`s (see **Post-push pull request**).
-11. **P.11 Open PR** — call `create_pull_request` (server `hubtel-sprint-planner`) with `tags: ["hbtl-harness"]`; present title, id, and link on success.
+10. **P.10 Resolve PR args** *(on yes, or always in `autopilot`)* — read-only git: current branch, integration target (`git branch -r`), last commit subject for title choice, `origin` remote URL (parse `project` + `repositoryId`); gather work-item ids from `Closed: #…` commits or row `taskId`s (see **Hubtel Azure DevOps MCP** → Post-push pull request).
+11. **P.11 Open PR** — `repo_pull_request_write` (`action: create`) then `repo_pull_request_label` (`action: add`, `name: hbtl-harness`); present title, id, and constructed link on success.
 12. **P.12 Record PR** — update `progress.md` **PR status** (id, target, link, or `not opened yet`).
 
-**Fix loop** *(on `yes` at P.6)* — fix → `node init.mjs` (fast gate) → affected row's `verification` (re-run 3.6/3.7 only if UI changed) → **new commit** → **re-run P.2–P.6** (the quality gate re-runs the analysis). Sonar-only fix commits use a normal message describing the remediations; do not re-run commit approval for them.
+**Fix loop** — fix → `node init.mjs` (fast gate) → affected row's `verification` (re-run 3.6/3.7 only if UI changed) → **new commit** → **re-run P.2–P.6** (the quality gate re-runs the analysis). Sonar-only fix commits use a normal message describing the remediations; do not re-run commit approval for them. In **`supervised`**, enter on **`yes`** at P.6. In **`autopilot`**, enter **automatically** when P.6 finds unclean review — no ask.
 
 On **`Push now?` → not yet** (before the push gate runs): record in `progress.md` the same **Before pushing:** sentence (project checks in plain language, Sonar included when present; not run yet — no script names).
 
@@ -1172,7 +1229,7 @@ State hygiene, not an integration gate (build belongs to the push gate). Before 
 3. Run `validate-harness.mjs --target .` when available; fix tier-1 errors (especially invalid `evidence`)
 4. Update `progress.md` (if the push gate hasn't run yet, mirror the post-done **Before pushing:** sentence in plain language — no script names) and record **Blockers** / **Next Step**
 5. Update `feature_list.json` status + evidence (only on `done`)
-6. If pushing, run the push gate first, then push — that means `node init.mjs --build` (the quality gate) and, on repos with a `SonarQubeProjectKey`, the Sonar MCP review of the analysis it uploaded (block by default) before pushing (see **Pushing (quality gate)**). After a successful push, offer `Open a pull request? (yes / not yet)` (see **Post-push pull request**).
+6. If pushing, run the push gate first, then push — that means `node init.mjs --build` (the quality gate) and, on repos with a `SonarQubeProjectKey`, the Sonar MCP review of the analysis it uploaded (block by default) before pushing (see **Pushing (quality gate)**). After a successful push, offer `Open a pull request? (yes / not yet)` (see **Hubtel Azure DevOps MCP** → Post-push pull request).
 
 ## Verification Commands
 

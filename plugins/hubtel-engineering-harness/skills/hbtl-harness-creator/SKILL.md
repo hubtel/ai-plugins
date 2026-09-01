@@ -35,15 +35,18 @@ Every useful coding-agent harness has five subsystems:
 
 ### Create a harness
 
-Azure tracking is **mandatory** — every harness this skill creates records work on a Hubtel Azure sprint board. Two MCPs gate the scaffold: the **Sprint Planner MCP** (to capture the board **before** scaffolding) and the **Hubtel Engineering MCP** (guidelines gate). Ensure both are connected in the agent environment (Hubtel standard MCP setup — not part of this skill), then capture the board.
+Azure tracking is **mandatory** — every harness this skill creates records work on a Hubtel Azure sprint board. Four MCPs gate the scaffold: the **Sprint Planner MCP** (to capture the board **before** scaffolding), the **Hubtel Engineering MCP** (guidelines gate), the **Hubtel Azure DevOps MCP** (PR create + PR/CI context), and **SonarQube MCP** (pre-push review on Sonar-enabled repos). Install them via Aqua before verify + scaffold.
+
+0. Run **`node scripts/install-mcps.mjs --target /path/to/project`** (Aqua CLI required). Registers `hubtel-engineering`, `hubtel-sprint-planner`, `hubtel-azure-devops`, and `hubtel-sonarquabe` for `cursor`, `claude-code`, and `codex`; auto-appends `hubtel-design-system` + `chrome-devtools` on frontend targets. Exit **2** if `aqua` is missing; exit **3** if a required server fails. Idempotent — safe to re-run.
 
 1. Call **`get_current_user`** (server `hubtel-sprint-planner`) to get the authenticated engineer's email.
 2. Call **`get_active_sprint_boards`** with that email — it lists the engineer's active boards and validates them internally.
 3. The human picks a board → capture the **`sprintBoardUrl`** and the **parent story** (`id` + `title`).
 4. Confirm the **Hubtel Engineering MCP** (`hubtel-engineering`) is reachable — a successful **`get_guidelines_catalog`** call. If it fails, surface the MCP's login command and retry. Auth/session is **MCP-owned** — wait for its flow; don't build a parallel auth path.
+4b. Confirm the **Hubtel Azure DevOps MCP** (`hubtel-azure-devops`) is reachable — call **`mcp_auth`** if not signed in yet (`needsAuth`), then a successful **`core_list_projects`** call with `{ top: 1 }`. Auth is MCP-owned; no script fallback.
 5. **Ask the user for the approval mode.** Present a single-select question; "Which mode do you want the harness to run in?" as an `elicitationForm` (same contract as the planning subagent — render through AskUserQuestion, or as structured Markdown when that tool is unavailable). Never assume a default; never skip the ask. The option labels shown to the user are short descriptive phrases (not raw mode names); the agent maps the chosen option back to its mode value for `--approval-mode`. Two options:
    - "**Supervised**: Require human review and approval of every step" (Recommended)** → maps to `supervised`. Keeps every user checkpoint on delivery: you review and approve each commit, confirm the push, and confirm opening the pull request. Best when you want to eyeball each step before it lands.
-   - "**Autopilot**: Grant agent complete autonomy to commit, push, and create PRs after delivery" → maps to `autopilot`. After the verification stack passes the agent commits, pushes, and opens the PR without asking. It still stops on a failed quality gate, a blocked or unclean Sonar review, a protected branch, or a blocked dependency, and never relaxes planning, breakdown, or where-to-start approvals. Best for well-scoped, low-risk work you trust the agent and CI to catch.
+   - "**Autopilot**: Grant agent complete autonomy to commit, push, and create PRs after delivery" → maps to `autopilot`. After the verification stack passes the agent commits, pushes, and opens the PR without asking. It still stops on a failed quality gate (P.2 abort), **auto-fixes** unclean Sonar review at P.6 inline (fix loop until clean or blocked), a protected branch, or a blocked dependency, and never relaxes planning, breakdown, or where-to-start approvals. Best for well-scoped, low-risk work you trust the agent and CI to catch.
 6. Run the scaffolder with those values:
 
 ```bash
@@ -52,10 +55,13 @@ node scripts/create-harness.mjs --target /path/to/project \
   --parent-story-id "12345" \
   --parent-story-title "CCI ..." \
   --engineering-mcp-verified \
+  --azure-devops-mcp-verified \
   --approval-mode supervised
 ```
 
-`--sprint-board-url`, `--parent-story-id`, and `--engineering-mcp-verified` are **required**; the scaffolder hard-fails (exit 1, nothing written) without them. `--engineering-mcp-verified` asserts you confirmed the engineering MCP is live (step 4) — never pass it blind. There is no ungated, plain-harness route.
+7. **Sonar MCP readiness (Sonar-enabled repos only).** After step 6 succeeds, if the target's `azure-pipelines.yml` declares a `SonarQubeProjectKey` (see `hasSonarQubeProjectKey()` in `harness-utils.mjs`): probe **`hubtel-sonarquabe`**. If tool discovery shows **`needsAuth`** (only `mcp_auth` visible), or a Sonar call fails with an auth/session error, call **`mcp_auth`**, ask the user to complete login if prompted, then retry once. Optionally call **`get_current_user`** to confirm connectivity. Tell the user plainly whether Sonar MCP is ready or still needs login before first delivery. **Non-blocking** — harness files are already written; there is no `--sonarqube-mcp-verified` gate. Skip silently when the repo has no `SonarQubeProjectKey`. This bridges scaffold (Engineering + Azure verified pre-write) and runtime startup (**AGENTS.md** step 4c on every session). See gotcha **#41**.
+
+`--sprint-board-url`, `--parent-story-id`, `--engineering-mcp-verified`, and `--azure-devops-mcp-verified` are **required**; the scaffolder hard-fails (exit 1, nothing written) without them. `--engineering-mcp-verified` asserts the engineering MCP is live (step 4); `--azure-devops-mcp-verified` asserts the Azure DevOps MCP is live (step 4b) — never pass either blind. There is no ungated, plain-harness route.
 
 Other options:
 
@@ -65,7 +71,7 @@ Other options:
 - `--commands "cmd one,cmd two"` for custom verification.
 - `--force` only after confirming overwrites are acceptable.
 
-The harness uses six core Sprint Planner tools — `get_active_sprint_boards` and `validate_sprint_board` at scaffold, `get_harness_task_structure` (template only) and `harness_create_tasks` at triage (one batch per breakdown), `update_task_status` to mirror a row's `in-progress` state to Azure **Active**, and `get_task_details` at session resume (read-only: recovers the full task spec for rows a fresh session didn't author) — plus `get_current_user` to resolve the engineer email that `get_active_sprint_boards` and status sync require. `get_harness_task_structure` is called only for its `data.template` (the required task-description shape); its `nextStep` is ignored, since the harness creates tasks via `harness_create_tasks`, not the interactive flow. It does **not** call the other interactive-flow tools (`how_to_use`, `submit_task`, `search_developer`, etc.).
+The harness uses six core Sprint Planner tools — `get_active_sprint_boards` and `validate_sprint_board` at scaffold, `get_harness_task_structure` (template only) and `harness_create_tasks` at triage (one batch per breakdown), `update_task_status` to mirror a row's `in-progress` state to Azure **Active**, and `get_task_details` at session resume (read-only: recovers the full task spec for rows a fresh session didn't author) — plus `get_current_user` to resolve the engineer email that `get_active_sprint_boards` and status sync require. `get_harness_task_structure` is called only for its `data.template` (the required task-description shape); its `nextStep` is ignored, since the harness creates tasks via `harness_create_tasks`, not the interactive flow. It does **not** call the other interactive-flow tools (`how_to_use`, `submit_task`, `search_developer`, etc.) or **`create_pull_request`** — PR creation is via the Azure DevOps MCP at P.11.
 
 Then explain what was created. `feature_list.json` ships with a top-level `approvalMode` (the human's step-5 choice; default `supervised`), a mandatory `sprintPlanner` block (the captured board + parent story), and one bootstrap placeholder task — the **agent** replaces the placeholder with real tasks as work arrives; humans prompt in natural language.
 
@@ -134,9 +140,9 @@ On **frontend** projects, connect the Chrome DevTools MCP (`chrome-devtools-mcp`
 
 ### SonarQube pre-push review (`hubtel-sonarquabe`)
 
-Connect the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`) in the agent environment when the pre-push review workflow applies. The **review workflow** activates only on repos whose `azure-pipelines.yml` declares a `SonarQubeProjectKey` (`hasSonarQubeProjectKey()` in `harness-utils.mjs`).
+Connect the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`) in the agent environment when the pre-push review workflow applies. The **review workflow** activates only on repos whose `azure-pipelines.yml` declares a `SonarQubeProjectKey` (`hasSonarQubeProjectKey()` in `harness-utils.mjs`). **Scaffold does not verify Sonar auth** — after scaffold on Sonar-enabled repos, run **Create a harness** step 7; on every feature session, run **AGENTS.md** startup step 4c at session open.
 
-On such repos, the SonarQube analysis runs as a step **inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and the **MCP review of that analysis runs after** the quality gate, before push (matching Hubtel CI). On `Push now?` yes: the agent runs `node init.mjs --build` (P.2), which uploads branch analysis (the MCP has no scan tool, and the harness runs no standalone `aqua sonar-analyze`), reads `projectKey`, `branch`, and `dashboardUrl` from `.scanner/report-task.txt`, then runs the **full MCP query bundle** **sequentially** (issues, quality gate, security hotspots, dependency risks) with **`branch`** from the report (never `pullRequest` pre-push). **Do not** run MCP review and `git push` in parallel. **A green quality gate is not MCP review complete** — present the overview (P.5) before the push (P.7). Incomplete MCP (timeout, auth failure, partial bundle) is blocked. Harness passes `projectKey` + `branch` only — **filtering and what counts as actionable are MCP-owned**. Pause at P.6 when not clean (`Awaiting Sonar review consent` in `progress.md`); only explicit **`push anyway`** overrides. Fixes loop through a new commit → re-run the quality gate → re-query. PR CI SonarQube remains the authoritative merge gate. See `templates/agents.md` → **Hubtel SonarQube MCP** and **Pushing (quality gate)**; design in `SONARQUBE-PRE-PUSH-REVIEW-PLAN.md`. Gotcha #34 covers skip/bypass/parallel-push failure modes.
+On such repos, the SonarQube analysis runs as a step **inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and the **MCP review of that analysis runs after** the quality gate, before push (matching Hubtel CI). On `Push now?` yes: the agent runs `node init.mjs --build` (P.2), which uploads branch analysis (the MCP has no scan tool, and the harness runs no standalone `aqua sonar-analyze`), reads `projectKey`, `branch`, and `dashboardUrl` from `.scanner/report-task.txt`, then runs the **full MCP query bundle** **sequentially** (issues, quality gate, security hotspots, dependency risks) with **`branch`** from the report (never `pullRequest` pre-push). **Do not** run MCP review and `git push` in parallel. **A green quality gate is not MCP review complete** — present the overview (P.5) before the push (P.7). Incomplete MCP (timeout, auth failure after `mcp_auth` retry, partial bundle) is blocked. **Auth** — on `needsAuth` or any auth/session error from `hubtel-sonarquabe`, call `mcp_auth`, retry once, then block if still failing (anytime in the session, not only at setup). Harness passes `projectKey` + `branch` only — **filtering and what counts as actionable are MCP-owned**. Pause at P.6 when not clean (`Awaiting Sonar review consent` in `progress.md`); only explicit **`push anyway`** overrides. Fixes loop through a new commit → re-run the quality gate → re-query. PR CI SonarQube remains the authoritative merge gate. See `templates/agents.md` → **Hubtel SonarQube MCP** and **Pushing (quality gate)**; design in `SONARQUBE-PRE-PUSH-REVIEW-PLAN.md`. Gotcha #34 covers skip/bypass/parallel-push failure modes; gotcha #40 covers Sonar auth/session recovery.
 
 ### Selective builds (.NET backend monorepos)
 
@@ -154,9 +160,19 @@ The `build: -Proj1 -Proj2` suffix is **backend-only** — Conventional Commits (
 
 The auto-detected services at commit time are authoritative. The validator adds a soft warning on .NET monorepos when a `done` row's commit message lacks a `build:` clause but its diff touched `src/<Project>/` paths — selective-build pipelines would not have packaged the service. Frontend monorepo selective-build tagging is deferred until the frontend team publishes an equivalent format.
 
-### Post-push pull request (`create_pull_request`)
+### Hubtel Azure DevOps MCP (PR create + PR/CI context)
 
-After a **successful push** (P.7), the agent asks **`Open a pull request? (yes / not yet)`** — separate consent from push. Answering **yes** counts as the explicit ask required by the Sprint Planner MCP's standalone `create_pull_request` tool (server `hubtel-sprint-planner`). On yes: resolve `sourceBranch`, `targetBranch` (feature/`users/…/feature/…` → integration branch from `git branch -r`; hotfix → `main`/`master`), `title` (last commit subject with AskUserQuestion), and `repoLink` (`git remote get-url origin`) using **read-only git only**; always pass `tags: ["hbtl-harness"]` so every harness-opened PR is tagged; link work items from `Closed: #…` commits or row `taskId`s; call the tool; present PR title, id, and link; update `progress.md` **PR status**. Do not auto-open without consent. See `templates/agents.md` → **Post-push pull request** and **Pushing (quality gate)** P.9–P.12; design in `POST-PUSH-PR-PLAN.md`. Gotcha #35 covers skip/bypass.
+Every harness depends on the **Hubtel Azure DevOps MCP** (`hubtel-azure-devops`), connected before scaffolding (see **Create a harness** step 4b). Reachability is **enforced at scaffold** — `create-harness.mjs` won't run without `--azure-devops-mcp-verified`, passed only after `mcp_auth` (if needed) and a live `core_list_projects({ top: 1 })` call.
+
+- **PR creation (P.11 only)** — `repo_pull_request_write` (`action: create`) + `repo_pull_request_label` (`hbtl-harness`); work items via `workItems: "<id1> <id2>"` (ids from `Closed: #…` commits, no `#` prefix); construct browser URL from git remote + `pullRequestId`. No Sprint Planner fallback.
+- **On-demand PR/CI queries** — when the user asks about PR/CI state: `repo_pull_request`, reviewers, threads, `pipelines_build` / timeline / logs. **Not** lifecycle-gated (never gate startup, commit, push, or `done`).
+- **Auth** — `mcp_auth` when not signed in; retry once on auth errors; no script substitute.
+
+See `templates/agents.md` → **Hubtel Azure DevOps MCP** and `AZURE-DEVOPS-MCP-INTEGRATION.md`.
+
+### Post-push pull request (`repo_pull_request_write`)
+
+After a **successful push** (P.7), the agent asks **`Open a pull request? (yes / not yet)`** in `supervised` (inline in `autopilot`) — separate consent from push. On yes: resolve branch, target, title, project/repository from read-only git; link work items from `Closed: #…` commits or row `taskId`s; call **`repo_pull_request_write`** then **`repo_pull_request_label`** (`hbtl-harness`); present PR title, id, and constructed link; update `progress.md` **PR status**. Do not auto-open without consent in `supervised`. See `templates/agents.md` → **Hubtel Azure DevOps MCP** → Post-push pull request and **Pushing (quality gate)** P.9–P.12. Gotcha #35 covers skip/bypass.
 
 ### Verification model
 
@@ -203,10 +219,10 @@ Optional `requiredTests`: `unit`, `integration`, `e2e`, `karate`. When `e2e` is 
 
 ### Approval mode
 
-Every harness carries a per-repo `approvalMode` at the top of `feature_list.json` (`supervised` default, or `autopilot`). It controls **only** the delivery gates — commit approval, the `Push now?` offer, Sonar `push anyway` inference, and the `Open a pull request?` offer (problem items 4–7). It does **not** relax planning (Phase 1 plan approval), breakdown approval, or the where-to-start ask, and it does **not** relax any hard safety rail (P.2 quality-gate abort, blocked Sonar review, protected branches, `audit_packages`, UI runtime issue closure).
+Every harness carries a per-repo `approvalMode` at the top of `feature_list.json` (`supervised` default, or `autopilot`). It controls **only** the delivery gates — commit approval, the `Push now?` offer, Sonar P.6 behaviour (`supervised` ask vs `autopilot` auto-fix), and the `Open a pull request?` offer (problem items 4–7). It does **not** relax planning (Phase 1 plan approval), breakdown approval, or the where-to-start ask, and it does **not** relax hard safety rails (P.2 quality-gate abort, incomplete Sonar MCP, protected branches, `audit_packages`, UI runtime issue closure, or inferring **`push anyway`**).
 
-- **`supervised`** — all human gates as documented in `templates/agents.md`: pause for explicit commit approval, ask `Push now?`, ask `Open a pull request?`.
-- **`autopilot`** — after the full verification stack passes, present the review overview and commit in the same turn; then run the push gate inline (still blocking on P.2/Sonar/branch/audit rails) and open the PR after a successful push, without the `Push now?` / `Open a pull request?` asks.
+- **`supervised`** — all human gates as documented in `templates/agents.md`: pause for explicit commit approval, ask `Push now?`, ask at P.6 when Sonar review is not clean, ask `Open a pull request?`.
+- **`autopilot`** — after the full verification stack passes, present the review overview and commit in the same turn; then run the push gate inline; **auto-enter the Sonar fix loop** at P.6 when review is not clean (no ask); open the PR after a successful push, without the `Push now?` / `Open a pull request?` asks.
 
 **Persistence is per-repo** — the value lives in `feature_list.json` and applies to every session on that repo until changed. A human can flip it mid-session in natural language (e.g. `approval mode: autopilot`); the agent writes the new value into `feature_list.json` once, mirrors it in `progress.md`, and applies it. `approvalMode` is a **harness-text contract only** — it does not depend on Cursor Smart Mode or any IDE-native approval card. Gate mechanics live in `templates/agents.md` → **Approval mode**.
 
@@ -267,6 +283,9 @@ For a usable minimal harness, leave the target project with:
 - [ ] Each task in `feature_list.json` has a `verification` command
 - [ ] `node init.mjs` runs repo baseline checks (with `./init.sh` bash wrapper)
 - [ ] Hubtel Engineering MCP (`hubtel-engineering`) verified live before scaffolding; guidelines gate wired into the completion sequence
+- [ ] **`node scripts/install-mcps.mjs`** run before scaffold (includes `hubtel-azure-devops` via Aqua)
+- [ ] Hubtel Azure DevOps MCP (`hubtel-azure-devops`) verified live before scaffolding; PR create via `repo_pull_request_write` at P.11
+- [ ] On Sonar-enabled targets (`SonarQubeProjectKey` in `azure-pipelines.yml`): Sonar MCP probed after scaffold (step 7) and at session startup (AGENTS.md 4c)
 - [ ] Optional `session-handoff.md` for multi-session work
 - [ ] Documented verification evidence or next action
 

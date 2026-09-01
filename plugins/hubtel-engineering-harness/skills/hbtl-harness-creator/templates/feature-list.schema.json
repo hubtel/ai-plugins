@@ -8,7 +8,7 @@
       "type": "string",
       "enum": ["supervised", "autopilot"],
       "default": "supervised",
-      "description": "Per-repo human-checkpoint policy for the delivery gates (commit, push, Sonar push-anyway inference, PR). 'supervised' (default) keeps every human gate; 'autopilot' auto-commits after verification passes, auto-pushes when the quality gate and Sonar review are clean, and auto-opens the PR after a successful push. Does NOT relax planning, breakdown, or where-to-start gates. Absent means 'supervised'. See AGENTS.md **Approval mode**."
+      "description": "Per-repo human-checkpoint policy for the delivery gates (commit, push, Sonar P.6, PR). 'supervised' (default) keeps every human gate including the P.6 Sonar ask when review is not clean; 'autopilot' auto-commits after verification passes, auto-fixes unclean Sonar at P.6 inline (fix loop until clean or blocked), auto-pushes when clean, and auto-opens the PR after a successful push. Does NOT relax planning, breakdown, or where-to-start gates. Absent means 'supervised'. See AGENTS.md **Approval mode**."
     },
     "sprintPlanner": {
       "type": "object",
