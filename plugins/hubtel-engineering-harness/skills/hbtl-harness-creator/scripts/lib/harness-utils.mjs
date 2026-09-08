@@ -1489,6 +1489,7 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['On-demand PR / CI queries', 'not lifecycle-gated', 'repo_pull_request', 'pipelines_build'], 'On-demand PR/CI query flow documented'),
       textHas(agents, ['Post-push pull request', 'repo_pull_request_write', 'Open a pull request?'], 'Post-push pull request documented'),
       textHas(agents, ['repo_pull_request_label', 'hbtl-harness'], 'Post-push PR label step documented'),
+      textHas(agents, ['Documentation Gate', 'hbtl-dac-update', 'hbtl-dac-generate', 'Harness Documentation', 'Documentation gate'], 'Documentation gate documented'),
       textHas(agents, ['hbtl-harness'], 'hbtl-harness label tagging documented'),
       textHas(agents, ['Closing report', 'evidence: commit'], 'Closing report status line documented'),
       textHas(agents, ['Invalid', 'commit'], 'Invalid verbose evidence examples documented')
@@ -1700,4 +1701,251 @@ export async function copyFileSafe(source, target, { force = false } = {}) {
   await mkdir(path.dirname(target), { recursive: true });
   await copyFile(source, target);
   return { path: target, status: 'written' };
+}
+
+// --- Harness upgrade -------------------------------------------------------
+// Per-repo upgrade refreshes the skill-owned instruction block while preserving
+// user content outside it. See HARNESS-UPGRADE-PLAN.md.
+//
+// Marker contract (inverted from the early "user pocket" sketch):
+//   <!-- harness:managed:start --> … <!-- harness:managed:end -->
+// wraps the skill-owned harness instructions and is REPLACED on upgrade.
+// Everything outside the markers (including PROJECT_PURPOSE) is PRESERVED.
+
+export const HARNESS_MANAGED_START = '<!-- harness:managed:start -->';
+export const HARNESS_MANAGED_END = '<!-- harness:managed:end -->';
+
+// Legacy 2.5.0 user-pocket markers — migrated into the user zone on first
+// managed-region upgrade, then discarded.
+const HARNESS_LOCAL_START = '<!-- harness:local:start -->';
+const HARNESS_LOCAL_END = '<!-- harness:local:end -->';
+
+export async function readSkillMetadata() {
+  return readJson(path.join(SKILL_ROOT, 'metadata.json'));
+}
+
+export async function resolveAgentFile(root) {
+  if (await exists(path.join(root, 'AGENTS.md'))) return 'AGENTS.md';
+  if (await exists(path.join(root, 'CLAUDE.md'))) return 'CLAUDE.md';
+  return null;
+}
+
+// First non-empty paragraph after the "# <name>" title heading. Stops at the
+// next heading or a harness marker comment.
+export function extractProjectPurpose(content) {
+  const lines = String(content).split('\n');
+  let i = 0;
+  while (i < lines.length && !/^#\s+/.test(lines[i])) i += 1;
+  if (i < lines.length) i += 1;
+  while (i < lines.length && lines[i].trim() === '') i += 1;
+  const paragraph = [];
+  while (i < lines.length && lines[i].trim() !== '') {
+    const line = lines[i];
+    if (/^#{1,6}\s/.test(line)) break;
+    if (line.trim().startsWith('<!--')) break;
+    paragraph.push(line);
+    i += 1;
+  }
+  return paragraph.join('\n').trim();
+}
+
+export function hasHarnessManagedRegion(content) {
+  const text = String(content);
+  const startIdx = text.indexOf(HARNESS_MANAGED_START);
+  const endIdx = text.indexOf(HARNESS_MANAGED_END);
+  return startIdx !== -1 && endIdx !== -1 && endIdx > startIdx;
+}
+
+export function extractHarnessManagedRegion(content) {
+  const text = String(content);
+  const startIdx = text.indexOf(HARNESS_MANAGED_START);
+  const endIdx = text.indexOf(HARNESS_MANAGED_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return '';
+  return text.slice(startIdx + HARNESS_MANAGED_START.length, endIdx).trim();
+}
+
+export function injectHarnessManagedRegion(content, managedBody) {
+  const text = String(content);
+  const startIdx = text.indexOf(HARNESS_MANAGED_START);
+  const endIdx = text.indexOf(HARNESS_MANAGED_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return text;
+  const body = String(managedBody || '').trim();
+  const before = text.slice(0, startIdx + HARNESS_MANAGED_START.length);
+  const after = text.slice(endIdx);
+  return `${before}${body ? `\n${body}\n` : '\n'}${after}`;
+}
+
+function extractLegacyLocalRegion(content) {
+  const text = String(content);
+  const startIdx = text.indexOf(HARNESS_LOCAL_START);
+  const endIdx = text.indexOf(HARNESS_LOCAL_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return '';
+  return text.slice(startIdx + HARNESS_LOCAL_START.length, endIdx).trim();
+}
+
+export async function buildAgentsReplacements(target, { agentFile = 'AGENTS.md', projectPurpose } = {}) {
+  const project = await detectProject(target);
+  project.packageManager = detectPackageManager(target, undefined, project.appDir);
+  const commands = verificationCommands(project);
+  const { fast } = splitBuildCommands(commands);
+  const purpose = projectPurpose && projectPurpose.trim()
+    ? projectPurpose.trim()
+    : (project.stack === 'generic'
+      ? 'Project harness for reliable agent-assisted development.'
+      : `Project harness for reliable agent-assisted development in a ${project.stack} codebase.`);
+  return {
+    AGENT_FILE_NAME: agentFile,
+    PROJECT_PURPOSE: purpose,
+    VERIFICATION_COMMANDS: renderVerificationList(fast),
+    PRIMARY_VERIFICATION_COMMAND: 'node init.mjs'
+  };
+}
+
+export async function renderAgentsFromTemplate(replacements) {
+  let contents = await readText(path.join(TEMPLATE_DIR, 'agents.md'));
+  for (const [key, value] of Object.entries(replacements)) {
+    contents = contents.split(`{{${key}}}`).join(value);
+  }
+  return contents;
+}
+
+// Build the post-upgrade agent file:
+// - With harness:managed markers: replace only the managed body; keep user content outside.
+// - Without markers (first upgrade): write the full template (purpose preserved).
+//   Legacy harness:local pocket content is migrated into the user zone above the managed block.
+export function composeUpgradedAgentsFile(liveContent, renderedTemplate) {
+  const newManagedBody = extractHarnessManagedRegion(renderedTemplate);
+  if (hasHarnessManagedRegion(liveContent)) {
+    return {
+      content: injectHarnessManagedRegion(liveContent, newManagedBody),
+      mode: 'managed-splice',
+      migratedLocalBytes: 0
+    };
+  }
+
+  const legacyLocal = extractLegacyLocalRegion(liveContent);
+  let content = renderedTemplate;
+  if (legacyLocal) {
+    content = content.replace(
+      HARNESS_MANAGED_START,
+      `${legacyLocal}\n\n${HARNESS_MANAGED_START}`
+    );
+  }
+  return {
+    content,
+    mode: 'full-replace',
+    migratedLocalBytes: Buffer.byteLength(legacyLocal, 'utf8')
+  };
+}
+
+// Warn when content INSIDE the managed region will be replaced (edits to skill text).
+// Content outside the markers is preserved and is not a warning.
+export function detectManagedRegionEdits(liveContent, newManagedBody) {
+  if (!hasHarnessManagedRegion(liveContent)) {
+    const legacyLocal = extractLegacyLocalRegion(liveContent);
+    return {
+      hasManagedMarkers: false,
+      hasManagedEdits: false,
+      summary: legacyLocal
+        ? 'No harness:managed markers yet — upgrade will replace the instruction file from the template (PROJECT_PURPOSE preserved). Legacy harness:local content will be moved above the new managed block.'
+        : 'No harness:managed markers yet — upgrade will replace the instruction file from the template (PROJECT_PURPOSE preserved). After this upgrade, put repo-only rules outside the managed markers so they survive future upgrades.'
+    };
+  }
+
+  const liveManaged = extractHarnessManagedRegion(liveContent);
+  const normalize = (text) => String(text).replace(/\s+/g, ' ').trim();
+  if (normalize(liveManaged) === normalize(newManagedBody)) {
+    return { hasManagedMarkers: true, hasManagedEdits: false, summary: '' };
+  }
+  return {
+    hasManagedMarkers: true,
+    hasManagedEdits: true,
+    summary: 'Content inside harness:managed markers differs from this skill version and will be replaced. Content outside the markers is preserved.'
+  };
+}
+
+export async function mergeApprovalModeIfMissing(featureListPath) {
+  const parsed = JSON.parse(await readText(featureListPath));
+  if (Object.prototype.hasOwnProperty.call(parsed, 'approvalMode')) {
+    return { changed: false, previous: parsed.approvalMode };
+  }
+  const merged = { approvalMode: 'supervised', ...parsed };
+  await writeText(featureListPath, `${JSON.stringify(merged, null, 2)}\n`);
+  return { changed: true, previous: null };
+}
+
+export async function writeHarnessManifest(target, { agentFile, version }) {
+  const manifestPath = path.join(target, '.harness', 'manifest.json');
+  const manifest = {
+    harnessCreatorVersion: version,
+    upgradedAt: new Date().toISOString(),
+    agentFile
+  };
+  await writeText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return { path: manifestPath, manifest };
+}
+
+export async function buildUpgradePlan(target) {
+  const agentFile = await resolveAgentFile(target);
+  const featureListPath = path.join(target, 'feature_list.json');
+  const legacyFeatureListPath = path.join(target, 'feature-list.json');
+  const activeFeatureListPath = await exists(featureListPath)
+    ? featureListPath
+    : (await exists(legacyFeatureListPath) ? legacyFeatureListPath : null);
+
+  if (!agentFile || !activeFeatureListPath) {
+    return { isHarness: false, agentFile, hasFeatureList: Boolean(activeFeatureListPath), readyToApply: false };
+  }
+
+  const liveContent = await readText(path.join(target, agentFile));
+  const projectPurpose = extractProjectPurpose(liveContent);
+  const replacements = await buildAgentsReplacements(target, { agentFile, projectPurpose });
+  const renderedTemplate = await renderAgentsFromTemplate(replacements);
+  const newManagedBody = extractHarnessManagedRegion(renderedTemplate);
+  const composed = composeUpgradedAgentsFile(liveContent, renderedTemplate);
+  const managedEdits = detectManagedRegionEdits(liveContent, newManagedBody);
+
+  const files = await loadHarnessFiles(target);
+  const project = await detectProject(target).catch(() => null);
+  const dotnetMonorepo = project ? detectDotnetMonorepo(project) : { isMonorepo: false };
+  const validation = scoreHarness(files, { repoRoot: target, projectStack: project?.stack, dotnetMonorepo });
+
+  const metadata = await readSkillMetadata();
+  const manifestPath = path.join(target, '.harness', 'manifest.json');
+  const currentManifest = await exists(manifestPath) ? await readJson(manifestPath) : null;
+
+  let approvalModeMissing = false;
+  try {
+    const featureList = await readJson(activeFeatureListPath);
+    approvalModeMissing = !Object.prototype.hasOwnProperty.call(featureList, 'approvalMode');
+  } catch {
+    approvalModeMissing = false;
+  }
+
+  const willChange = [agentFile, '.harness/manifest.json'];
+  if (approvalModeMissing) willChange.push('feature_list.json (approvalMode merge)');
+
+  return {
+    isHarness: true,
+    agentFile,
+    skillVersion: metadata.version,
+    currentManifest,
+    projectPurpose: replacements.PROJECT_PURPOSE,
+    hasManagedMarkers: managedEdits.hasManagedMarkers,
+    upgradeMode: composed.mode,
+    migratedLocalBytes: composed.migratedLocalBytes,
+    managedRegionBytes: Buffer.byteLength(newManagedBody, 'utf8'),
+    validation,
+    managedEdits,
+    // Back-compat alias used by early plan consumers / tests
+    unmarkedEdits: {
+      hasUnmarkedEdits: managedEdits.hasManagedEdits || !managedEdits.hasManagedMarkers,
+      summary: managedEdits.summary
+    },
+    approvalModeMissing,
+    willChange,
+    renderedContent: composed.content,
+    featureListPath: activeFeatureListPath,
+    readyToApply: true
+  };
 }

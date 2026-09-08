@@ -2,13 +2,15 @@
 
 {{PROJECT_PURPOSE}}
 
+<!-- harness:managed:start -->
+
 ## Startup Workflow
 
 Before writing code:
 
 1. Confirm working directory with `pwd`
 2. Read this file completely
-3. Read project docs if present (`docs/ARCHITECTURE.md`, `docs/PRODUCT.md`, README)
+3. **Read existing project documentation for context if present** — this is the project's own source of truth; read it before implementing so you inherit prior decisions and architecture. Start at `README.md` and `docs/index.md`, then the DAC sections relevant to the task: `docs/overview.md`, `docs/architecture/`, `docs/flows/`, `docs/operations/`, and `docs/adr/` (these are the same docs the **Documentation Gate** keeps fresh — see **Documentation Gate**)
 4. Ensure the **Hubtel Engineering MCP** (`hubtel-engineering`) is connected — it supplies the mandatory code-quality guidelines and Hubtel docs (see **Hubtel Engineering MCP**). If it's missing, register it before implementation work
 4b. Ensure the **Hubtel Azure DevOps MCP** (`hubtel-azure-devops`) is connected — required for PR creation (P.11) and on-demand PR/CI queries (see **Hubtel Azure DevOps MCP**). If not signed in yet (`needsAuth` — only `mcp_auth` visible), call `mcp_auth` before first PR/CI use
 4c. On repos with a **`SonarQubeProjectKey`** in `azure-pipelines.yml`, ensure the **Hubtel SonarQube MCP** (`hubtel-sonarquabe`) is connected **at session startup** — do not defer this probe until the push gate (see **Hubtel SonarQube MCP**). If not signed in yet (`needsAuth` — only `mcp_auth` visible), call `mcp_auth` before first Sonar MCP use; on success optionally call `get_current_user` to confirm connectivity — and call `mcp_auth` again whenever auth or session errors occur mid-session
@@ -171,7 +173,7 @@ Both phases run on **one** subagent instance (Resumable Coordinator — context 
 
 - `Role: hbtl-harness-planner` at the top when the spawn tool has no visible-name parameter (always include this line in the prompt body so the worker self-identifies; omit duplicate role prose when the UI already shows **Hubtel Harness Planner**)
 - The raw user request (verbatim — the subagent handles clarification itself)
-- Codebase context: project structure, stack, relevant file contents, existing `feature_list.json` state
+- Codebase context: project structure, stack, relevant file contents, existing `feature_list.json` state, and **existing project documentation** when present — the contents of `docs/index.md`, `docs/overview.md`, and the relevant `docs/architecture/` and `docs/flows/` files — so the plan is grounded in the project's documented architecture and flows, not just source. This project-local documentation **complements** (does not replace) the Hubtel Engineering MCP docs probe, which covers platform-wide docs
 - The clarification policy (from **Clarification policy** above) so the subagent knows when and how to ask questions
 - The plan schema (`templates/plan.schema.json`) so the subagent knows the required output shape
 - The **Azure task-description template** — fetch `get_harness_task_structure` **once** (see **Task descriptions** → *Fetch once per session*) and paste `data.template` verbatim into the prompt, plus the **Content bar** rules (Summary / Objectives / Regression Risks / Test Plan / Technical Notes) and the **HTML output requirement** (the template is Markdown for reference; the `description` must be emitted as accurate HTML — see **Task descriptions** → *Output format*) from **Task descriptions**, so the subagent authors each task's full template-shaped Azure `description` in HTML itself. This keeps "fetch once per session" intact — the main agent fetches, the subagent reuses. Also pass each feature's `requiredTests` and `verification` command so the Test Plan can tie to them
@@ -360,6 +362,7 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 - **Hubtel UI via the design-system MCP (frontend + UI rows)** — call the MCP **tools** for mechanics (`search_components`/`get_composition_pattern` before breakdown; `get_component`/`get_design_tokens`/`find_icons` when implementing); run `validate_imports` + `check_setup` before `verified`/`done` on UI rows (see **Hubtel Design System MCP**)
 - **UI runtime assertion** — for every **UI row**, write `.harness/ui-runtime/<featId>.json` (v3) before `verified`/`done` (tier-1). When `chrome-devtools-mcp` is connected, run the full 3.7 loop and record an **append-only `runs[]`** of `checks`, `issues`, and `criteriaResults`; the gate is **no open issues on the latest run**, not "checks passed." Do not report UI runtime pass or set `verified`/`done` until `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0**. Read what's still open with that helper anytime. When it is not connected, write a **skipped** artifact and note the skip in the review overview. Does not change `requiredTests`/`verification` or CI (see **UI Runtime Assertion**)
 - **Approval-gated commit on done (mode-dependent)** — in `supervised`, present the review overview and commit only after explicit human approval; in `autopilot`, present the overview and commit in the same turn once verification passes (see **Approval mode** and **Commit approval gate**); either way, stage this feature's files, commit with message `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature, and use that commit's hash as evidence
+- **Documentation gate before the push (all repos)** — on push (asked in `supervised`; run inline in `autopilot`), **before** the branch check/quality gate (push gate `P.0`), dispatch the **Harness Documentation** subagent (`claude-sonnet-5-thinking-medium`) to refresh docs via the installed DAC skills — `hbtl-dac-generate --ci` when `docs/index.md` is absent, else `hbtl-dac-update --ci --target-branch <integrationBranch>` — and commit them as a docs-only `docs:` commit so the change ships documented in the same PR; a DAC `ERROR` aborts the push (see **Documentation Gate**)
 - **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on push (asked in `supervised`; run inline in `autopilot`), run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → **`supervised`**: human consent when blocked; **`autopilot`**: auto-fix loop when not clean) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete (see **Hubtel SonarQube MCP** and **Approval mode**)
 - **PR after push (mode-dependent)** — in `supervised`, after a successful push ask `Open a pull request? (yes / not yet)` and open via Azure DevOps MCP on **yes**; in `autopilot`, open the PR inline after a successful push without the ask; always resolve args with read-only git only and tag the PR with `hbtl-harness` via `repo_pull_request_label` (see **Hubtel Azure DevOps MCP** → Post-push pull request and **Approval mode**)
 - **Stay in scope** — don't modify files unrelated to the current task
@@ -794,6 +797,7 @@ Each run also carries **`issues`** — the findings that actually gate the row. 
 
 Backend/infra/script/test-only rows skip step 3.7 and the runtime artifact entirely.
 
+
 ## Hubtel SonarQube MCP (pre-push review)
 
 **Applies when** `azure-pipelines.yml` declares a `SonarQubeProjectKey` (this repo's CI runs SonarQube on PRs). When it does, the **SonarQube analysis runs as a step inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and a **local MCP review of that analysis is part of the push gate** — it runs **after** the quality gate, before push, matching Hubtel CI ordering. Repos without a `SonarQubeProjectKey` skip this section.
@@ -926,6 +930,37 @@ PR status: opened — PR #<pullRequestId> → <targetBranch> (<link>)
 **On failure**, surface the error plainly and stop. **No Sprint Planner fallback.**
 
 **Sonar note.** Pre-push Sonar used **`branch`** analysis. After the PR exists, **PR CI Sonar** (using `pullRequest` context) remains the authoritative merge gate — opening the PR does not replace that.
+
+## Documentation Gate (hbtl-dac-* skills)
+
+At Hubtel, every project is documented and its documentation stays fresh with the code. This harness enforces that as a **read + write loop**:
+
+- **Read (context).** Agents read existing project docs before implementing — Startup Workflow step 3 and the planning subagent's codebase context (`docs/` is the project's own source of truth; see **Startup Workflow** and **Planning Phase**).
+- **Write (this gate).** Before the code leaves the machine, the docs are regenerated/refreshed so no feature ships undocumented.
+
+**Delegation, not duplication.** The documentation *mechanics* (the DAC structure, anti-hallucination rules, diagram conventions, CI status blocks) are owned by the Hubtel **`hbtl-dac-generate`** and **`hbtl-dac-update`** skills, installed in the agent environment. This harness re-derives none of that — it pins only **when** documentation runs (before the push gate) and **how** it is invoked (non-interactively, via a dedicated subagent). Do not copy DAC templates or steps here; invoke the skill.
+
+**When it runs — before the push gate.** The documentation gate is its own phase that runs **on push consent** (`Push now? → yes`), **before** the push gate's `P.1` (see **Pushing (quality gate)**). The docs are committed as their own `docs:` commit, and then the push gate (`P.2` quality gate → Sonar → `P.7` push) runs over everything — so the docs commit is itself gated and travels in the **same push and PR** as the code. In `autopilot`, the gate runs inline before P.1 with no separate ask.
+
+**Which skill — by docs presence.** Detect whether the project is already documented:
+
+- **No docs** (`docs/index.md` absent) → invoke **`hbtl-dac-generate`** with **`--ci`** (non-interactive: skips the external-resource prompts and generates the full DAC structure from the codebase).
+- **Docs exist** (`docs/index.md` present) → invoke **`hbtl-dac-update`** with **`--ci`** (Auto mode, git-diff driven). Pass **`--target-branch <integrationBranch>`** using the same integration branch the PR step resolves (`origin/develop` → `development` → `staging` → …; see **Post-push pull request**) so the diff spans the whole feature branch, not just the last commit.
+
+**The Harness Documentation subagent.** Delegate the run to a dedicated subagent so the DAC skill's context stays out of the main thread:
+
+- **Model** — pin **`claude-sonnet-5-thinking-medium`**.
+- **Label** — dispatch with the stable visible label **`Harness Documentation`**. When the client's spawn tool exposes a `description` (or equivalent) field, set it to `Harness Documentation`; otherwise prepend `Role: harness-documentation` to the prompt body. The label is presentation metadata only.
+- **Single-shot** — `--ci` is non-interactive, so no resumable-coordinator loop is needed; the subagent runs once and returns the DAC skill's machine-readable status block.
+- **Self-contained prompt** — the subagent has no access to this conversation. Include: the repo path; the integration branch (for `--target-branch`); the stack; whether docs already exist; **which DAC skill to invoke and with which flags**; and the instruction to follow that skill's CI protocol verbatim and return its final status block.
+
+**Handling the result (main agent):**
+
+- **`DAC_UPDATE_STATUS=UPDATED`** (or generate produced files) → stage the doc files and commit a **docs-only** commit: `docs: refresh DAC documentation for <feature/scope>`. This commit has **no `Closed: #…` trailer** (it closes no Azure task — see **Commit message format** → *docs: exception*). Then proceed to the push gate `P.1`.
+- **`DAC_UPDATE_STATUS=NO_CHANGES_REQUIRED`** → nothing to commit; the docs already describe the current system. Note it in `progress.md` and proceed to the push gate `P.1`.
+- **`DAC_UPDATE_STATUS=ERROR` / `EXIT_CODE=1`** (or subagent failure) → **abort before entering the push gate** (no `P.1`, no push) — same abort semantics as a `P.2` quality-gate failure. Surface the error; record it in `progress.md`. Only a later explicit **`skip docs`** (same approval semantics as `push anyway`) may proceed to the push gate without documentation.
+
+**Progress.** Record the outcome in `progress.md` (**Documentation status**: `refreshed (commit <hash>)`, `up-to-date (no changes)`, `generated (commit <hash>)`, or `blocked (<reason>)`).
 
 ## Verification
 
@@ -1064,6 +1099,7 @@ Closed: #12348
 - **Body** — exactly one blank line after the subject, then a slightly detailed summary describing what and why. **Max 300 characters** (excluding subject and trailer). Feature commits should always carry a body; the validator soft-warns above 300 chars.
 - **Trailer** — `Closed: #<taskId1> #<taskId2> …` on its **own line** at the bottom (space-separated, no commas). `<taskIdN>` is each task row's Azure work-item id (`task.taskId`, the numeric `azureId` from `harness_create_tasks`). Task ids come from triage `data.commitMessage` — that MCP response is comma-separated (`"Closed: #12346, #12347"`); treat it only as the **source of task ids**, and format the trailer per this convention (space-separated), not by copying the raw string.
 - **One commit per feature** ⇒ every task row's `taskId` sharing the same `featId` in one message. Store this in `progress.md`'s Active feature section and the feature review overview.
+- **`docs:` exception (documentation gate).** The documentation gate's docs-only commit (push gate `P.0` — see **Documentation Gate**) uses subject `docs: refresh DAC documentation for <feature/scope>` and carries **no `Closed: #…` trailer** — it closes no Azure task. This is the one sanctioned commit without a `Closed:` trailer; it is not part of a feature's `done` evidence and does not need commit approval.
 - **Backward compatibility** — legacy single-line `Closed: #<id> …` commits from harnesses scaffolded before this convention still parse (validator soft-warns them but does not fail tier-1); new commits must follow the shape above.
 
 Scope and proof live on the task row (`description`, `verification`); the commit message subject/body describes the change, and the trailer is for Azure closure tracking.
@@ -1077,7 +1113,7 @@ After committing and marking row(s) `done`, your response has two parts: a **bod
 - **Delivered** — one bullet per task: `**task-NNN** — <one-line "done" definition from the row>` (feature delivery: every task in the feature)
 - **Commit** — `` `<hash>` `` from step 6's `git rev-parse --short HEAD` — the **same** hash on this line, every row's `evidence`, and the closing line — plus the commit message (`Closed: #…`)
 - **Branch** — current branch name and whether commits are **local only** or already pushed
-- **Before pushing** — one plain sentence for the **human** (no harness script names — do not mention `init.mjs`, `init.sh`, `aqua`, or `--build`). Say what **will run** if they push: the **same quality checks as the CI pipeline** for this project, in everyday terms (e.g. lint, typecheck, full test suite, production build, and code analysis — whichever the stack's CI runs). **When this repo has a `SonarQubeProjectKey`** (see **Hubtel SonarQube MCP**), note that a SonarQube analysis and review is part of that gate. **Never copy a fixed checklist from this doc** — a Python repo might say "full pytest run"; a frontend repo might list lint, typecheck, tests, and build. End with whether the gate has **already run on this branch** or **not run yet**
+- **Before pushing** — one plain sentence for the **human** (no harness script names — do not mention `init.mjs`, `init.sh`, `aqua`, or `--build`). Say what **will run** if they push: first the **documentation refresh** (docs are regenerated/updated to match the change and committed so they ship in this PR), then the **same quality checks as the CI pipeline** for this project, in everyday terms (e.g. lint, typecheck, full test suite, production build, and code analysis — whichever the stack's CI runs). **When this repo has a `SonarQubeProjectKey`** (see **Hubtel SonarQube MCP**), note that a SonarQube analysis and review is part of that gate. **Never copy a fixed checklist from this doc** — a Python repo might say "full pytest run"; a frontend repo might list lint, typecheck, tests, and build. End with whether the gate has **already run on this branch** or **not run yet**
 - **Push offer (mode-dependent)** — in `supervised`, ask explicitly: `Push now? (yes / not yet)` — do not auto-push; push consent is separate from commit approval. In **`autopilot`**, skip the ask and run the push gate (P.1–P.7) inline right after the post-done body; still show the **Before pushing** sentence and report the push result (the P.2/Sonar/branch/audit rails still bind — see **Approval mode** and **Pushing (quality gate)**)
 
 Example (feature delivery — **shape only**; substitute task ids, hash, branch, and **Before pushing** checks from this project's **Verification Commands** build-gate lines — never copy a fixed checklist):
@@ -1090,7 +1126,7 @@ Example (feature delivery — **shape only**; substitute task ids, hash, branch,
 
 **Commit:** `59e826f` — `Closed: #375605 #375606 #375607`
 **Branch:** `users/jane/feature/centered-login` — local, not pushed
-**Before pushing:** the same CI quality checks — lint, typecheck, full test suite, production build, and a SonarQube analysis and review — will run — not run on this branch yet.
+**Before pushing:** documentation will be refreshed to match this change, then the same CI quality checks — lint, typecheck, full test suite, production build, and a SonarQube analysis and review — will run — not run on this branch yet.
 
 Push now? (yes / not yet)
 
@@ -1177,8 +1213,9 @@ commit a1b2c3d
 
 The full CI-parity quality checks are validated here, not per feature. When row(s) are `done`, include the push offer in the **post-done message** (see **Post-done message**). **`supervised`**: don't auto-push and don't fold push consent into commit approval — wait for `Push now?` → yes. **`autopilot`**: the push gate runs **inline** right after the commit — this is **not** bypassing consent; the human authorized it by choosing autopilot (see **Approval mode** → Autopilot completion sequence). Either way the gate itself (P.1–P.7) is identical.
 
-**In `supervised`**, the push gate runs on **`Push now?` → yes** only — not on commit approval, and not on earlier `commit and push` / `ship it` wording (see **Commit approval gate** → **Approval semantics**). **In `autopilot`**, the push gate runs **inline** right after the commit — without the `Push now?` ask — but P.2 abort, incomplete Sonar MCP, branch check, and **`supervised`-only P.6 ask** bind as documented (see **Approval mode** → Hard rails). In **`autopilot`**, unclean Sonar at P.6 auto-enters the fix loop. The quality gate (`node init.mjs --build` → `aqua quality-gate`) runs **first**; on repos with a `SonarQubeProjectKey` (see **Hubtel SonarQube MCP**), the analysis it uploads is then reviewed via the Sonar MCP before push, and blocks push until clean (or explicit **`push anyway`**). **Consent (or the `autopilot` inline run) covers the sequence — not skipping P.2 or P.4–P.6, or running the MCP review in parallel with the push.** Steps:
+**In `supervised`**, the push gate runs on **`Push now?` → yes** only — not on commit approval, and not on earlier `commit and push` / `ship it` wording (see **Commit approval gate** → **Approval semantics**). **In `autopilot`**, the push gate runs **inline** right after the commit — without the `Push now?` ask — but P.2 abort, incomplete Sonar MCP, branch check, and **`supervised`-only P.6 ask** bind as documented (see **Approval mode** → Hard rails). In **`autopilot`**, unclean Sonar at P.6 auto-enters the fix loop. The **documentation gate (P.0)** runs **first** — before the branch check — so docs are committed and travel in this same push (see **Documentation Gate**); then the quality gate (`node init.mjs --build` → `aqua quality-gate`) runs; on repos with a `SonarQubeProjectKey` (see **Hubtel SonarQube MCP**), the analysis it uploads is then reviewed via the Sonar MCP before push, and blocks push until clean (or explicit **`push anyway`**). **Consent (or the `autopilot` inline run) covers the sequence — not skipping P.0, P.2, or P.4–P.6, or running the MCP review in parallel with the push.** Steps:
 
+0. **P.0 Documentation gate** — before anything else, refresh the project's documentation so it ships with this push (see **Documentation Gate**). Dispatch the **Harness Documentation** subagent (`claude-sonnet-5-thinking-medium`): if `docs/index.md` is absent → `hbtl-dac-generate --ci`; if present → `hbtl-dac-update --ci --target-branch <integrationBranch>`. On `UPDATED`/generated files → commit a docs-only `docs:` commit (no `Closed:` trailer). On `NO_CHANGES_REQUIRED` → proceed. On `ERROR`/`EXIT_CODE=1` or subagent failure → **abort the push gate immediately** (no P.1–P.7, no push); only a later explicit **`skip docs`** (same approval semantics as `push anyway`) proceeds without documentation. Record the outcome in `progress.md` (**Documentation status**).
 1. **P.1 Branch check** — confirm you're on a compliant `users/<username>/feature/<short-desc>` branch (never push `main`/`master`/`development`; see **Branch Discipline**).
 2. **P.2 Quality gate** — run `node init.mjs --build` from repo root (delegates to `aqua quality-gate` — the CI-parity checks; must pass). **Non-zero exit → abort the push gate immediately** — report the failure and **stop** (no P.3–P.7, no `git push`). Only a **later** explicit **`push anyway`** (same approval semantics as commit approval — not `commit and push`, not `Push now?` yes retroactively) may proceed without fixing. On `SonarQubeProjectKey` repos this step also uploads the SonarQube analysis; a missing `.scanner/report-task.txt` after a clean exit is a quality-gate failure — same abort rule. A green quality gate is **not** MCP review complete — proceed to P.3.
 3. **P.3 Parse report** *(SonarQubeProjectKey repos only)* — read `.scanner/report-task.txt` for `projectKey`, `branch`, and `dashboardUrl`.
@@ -1219,6 +1256,7 @@ A task is `done` only when every step of **Completing a feature** is satisfied:
 - [ ] **Post-done message** sent: **Delivered** summary, commit/branch/**Before pushing** sentence; **`supervised`** ends with `Push now? (yes / not yet)` and **one** closing report line; **`autopilot`** runs the push gate + PR inline (no `Push now?` / `Open a pull request?` asks) and ends with the `delivered` closing line (or a `push blocked` line if a hard rail fired) — see **Approval mode** → Autopilot completion sequence; `progress.md` matches `feature_list.json`
 - [ ] Repo restartable from `node init.mjs` with a clean tree; structural validation passes (no tier-1)
 - [ ] Full CI-parity checks deferred to the push gate (`node init.mjs --build` → `aqua quality-gate`); on repos with a `SonarQubeProjectKey`, the quality gate uploads the SonarQube analysis and the Sonar MCP review runs after it and blocks by default (see **Hubtel SonarQube MCP**)
+- [ ] Documentation refreshed before the push (push gate `P.0`) via the **Harness Documentation** subagent (`hbtl-dac-generate`/`hbtl-dac-update` in `--ci`), so the code lands documented in the same PR (see **Documentation Gate**)
 
 ## End of Session
 
@@ -1229,7 +1267,7 @@ State hygiene, not an integration gate (build belongs to the push gate). Before 
 3. Run `validate-harness.mjs --target .` when available; fix tier-1 errors (especially invalid `evidence`)
 4. Update `progress.md` (if the push gate hasn't run yet, mirror the post-done **Before pushing:** sentence in plain language — no script names) and record **Blockers** / **Next Step**
 5. Update `feature_list.json` status + evidence (only on `done`)
-6. If pushing, run the push gate first, then push — that means `node init.mjs --build` (the quality gate) and, on repos with a `SonarQubeProjectKey`, the Sonar MCP review of the analysis it uploaded (block by default) before pushing (see **Pushing (quality gate)**). After a successful push, offer `Open a pull request? (yes / not yet)` (see **Hubtel Azure DevOps MCP** → Post-push pull request).
+6. If pushing, run the push gate first, then push — that means the documentation gate (P.0: Harness Documentation subagent refreshes docs and commits them — see Documentation Gate), then `node init.mjs --build` (the quality gate) and, on repos with a `SonarQubeProjectKey`, the Sonar MCP review of the analysis it uploaded (block by default) before pushing (see **Pushing (quality gate)**). After a successful push, offer `Open a pull request? (yes / not yet)` (see **Hubtel Azure DevOps MCP** → Post-push pull request).
 
 ## Verification Commands
 
@@ -1247,3 +1285,5 @@ Commands run by `node init.mjs` (and `./init.sh`):
 - **Architecture / requirements unclear** — consult project docs, else ask the user
 - **Repeated test failures** — update `progress.md`, flag for human review
 - **Scope ambiguity** — re-read `feature_list.json`; for an existing row, fetch its full Azure spec (`get_task_details` — see **Task details on resume**) before asking; for new work, run Request Triage, or ask
+
+<!-- harness:managed:end -->

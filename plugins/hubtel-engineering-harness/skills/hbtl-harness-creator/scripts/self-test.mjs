@@ -6,14 +6,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CONVENTIONAL_COMMIT_TYPES,
+  buildAgentsReplacements,
+  composeUpgradedAgentsFile,
   deriveRunStatus,
   detectDotnetMonorepo,
+  detectManagedRegionEdits,
+  extractHarnessManagedRegion,
+  extractProjectPurpose,
   formatBuildTag,
+  hasHarnessManagedRegion,
+  injectHarnessManagedRegion,
+  mergeApprovalModeIfMissing,
+  readSkillMetadata,
+  renderAgentsFromTemplate,
   resolveTouchedServices,
   summarizeUiRuntimeArtifact,
   validateCommitMessage,
   validateFeatureList,
-  validateUiRuntimeArtifact
+  validateUiRuntimeArtifact,
+  writeHarnessManifest
 } from './lib/harness-utils.mjs';
 import { azureWorkItemUrl, metricsHtmlReport, parsePlanTitle, repairUtf8Mojibake } from './lib/metrics-utils.mjs';
 import { checksForPullRequest, firstBuildOutcome, parseAzureRemote, summarizePolicies, tokenExpired } from './lib/azure-devops.mjs';
@@ -21,6 +32,7 @@ import { checksForPullRequest, firstBuildOutcome, parseAzureRemote, summarizePol
 const skillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const createScript = path.join(skillRoot, 'scripts', 'create-harness.mjs');
 const validateScript = path.join(skillRoot, 'scripts', 'validate-harness.mjs');
+const upgradeScript = path.join(skillRoot, 'scripts', 'upgrade-harness.mjs');
 const summarizeScript = path.join(skillRoot, 'scripts', 'summarize-ui-runtime.mjs');
 
 // Azure tracking is mandatory: the scaffolder now requires sprint planner args
@@ -276,6 +288,9 @@ try {
   }
   if (scaffoldAgents.includes('(build gate: run via `node init.mjs --build` before pushing)')) {
     throw new Error('AGENTS.md Verification Commands should no longer emit per-command "(build gate: …)" lines');
+  }
+  if (!checkPasses('Documentation gate documented')) {
+    throw new Error('fresh scaffold is missing the Documentation gate instruction check');
   }
   if (!checkPasses('Post-push pull request')) {
     throw new Error('fresh scaffold is missing the Post-push pull request instruction check');
@@ -1216,13 +1231,13 @@ try {
 
   // SKILL + agents.md doc anchors — surface Karate, two-phase planning, selective builds.
   const skillText = await readFile(path.join(skillRoot, 'SKILL.md'), 'utf8');
-  for (const marker of ['Karate', 'Selective builds', 'Phase 1', 'Phase 2']) {
+  for (const marker of ['Karate', 'Selective builds', 'Phase 1', 'Phase 2', 'Documentation gate', 'hbtl-dac-update', 'hbtl-dac-generate']) {
     if (!skillText.includes(marker)) {
       throw new Error(`SKILL.md is missing the "${marker}" section/reference`);
     }
   }
   const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
-  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services']) {
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate']) {
     if (!agentsTemplate.includes(marker)) {
       throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
     }
@@ -1804,6 +1819,256 @@ status: draft
     if (!Array.isArray(m.notes.manualFieldsRequired) || !m.notes.manualFieldsRequired.includes('reviewTimeHours')) {
       throw new Error('metrics.notes.manualFieldsRequired should list Phase 3 engineer fields');
     }
+  }
+
+  // --- Harness upgrade (managed-region semantics) ---------------------------
+
+  // Managed markers wrap skill-owned body; user content lives outside.
+  const sampleAgents = [
+    '# AGENTS.md',
+    '',
+    'Custom purpose for this repo.',
+    '',
+    'User note above the managed block.',
+    '',
+    '<!-- harness:managed:start -->',
+    '',
+    '## Startup Workflow',
+    'skill body',
+    '',
+    '<!-- harness:managed:end -->',
+    '',
+    'User note below the managed block.'
+  ].join('\n');
+  if (extractProjectPurpose(sampleAgents) !== 'Custom purpose for this repo.') {
+    throw new Error(`extractProjectPurpose should read the first paragraph after the title (got ${JSON.stringify(extractProjectPurpose(sampleAgents))})`);
+  }
+  if (!hasHarnessManagedRegion(sampleAgents)) {
+    throw new Error('hasHarnessManagedRegion should detect the managed markers');
+  }
+  if (extractHarnessManagedRegion(sampleAgents) !== '## Startup Workflow\nskill body') {
+    throw new Error(`extractHarnessManagedRegion should return the skill body (got ${JSON.stringify(extractHarnessManagedRegion(sampleAgents))})`);
+  }
+  const replaced = injectHarnessManagedRegion(sampleAgents, '## Startup Workflow\nnew skill body');
+  if (extractHarnessManagedRegion(replaced) !== '## Startup Workflow\nnew skill body') {
+    throw new Error('injectHarnessManagedRegion should round-trip a new managed body');
+  }
+  if (!replaced.includes('User note above the managed block.') || !replaced.includes('User note below the managed block.')) {
+    throw new Error('injectHarnessManagedRegion must preserve user content outside the markers');
+  }
+
+  // Edits inside the managed region are flagged; outside content is not.
+  const editedInside = injectHarnessManagedRegion(sampleAgents, '## Startup Workflow\nskill body (tweaked)');
+  const managedWarn = detectManagedRegionEdits(editedInside, '## Startup Workflow\nskill body');
+  if (!managedWarn.hasManagedEdits || !managedWarn.hasManagedMarkers) {
+    throw new Error('detectManagedRegionEdits should flag an edit inside the managed region');
+  }
+  const cleanManaged = detectManagedRegionEdits(sampleAgents, '## Startup Workflow\nskill body');
+  if (cleanManaged.hasManagedEdits) {
+    throw new Error('detectManagedRegionEdits should not flag an unchanged managed body');
+  }
+
+  // User content outside is preserved across composeUpgradedAgentsFile.
+  const renderedTemplate = [
+    '# AGENTS.md',
+    '',
+    'Custom purpose for this repo.',
+    '',
+    '<!-- harness:managed:start -->',
+    '',
+    '## Startup Workflow',
+    'NEW skill body from template',
+    '',
+    '<!-- harness:managed:end -->',
+    ''
+  ].join('\n');
+  const composed = composeUpgradedAgentsFile(sampleAgents, renderedTemplate);
+  if (composed.mode !== 'managed-splice') {
+    throw new Error(`composeUpgradedAgentsFile should use managed-splice when markers exist (got ${composed.mode})`);
+  }
+  if (!composed.content.includes('User note above the managed block.') || !composed.content.includes('User note below the managed block.')) {
+    throw new Error('managed-splice upgrade must preserve user notes outside the markers');
+  }
+  if (extractHarnessManagedRegion(composed.content) !== '## Startup Workflow\nNEW skill body from template') {
+    throw new Error('managed-splice upgrade must replace the managed body from the template');
+  }
+  if (!composed.content.includes('Custom purpose for this repo.')) {
+    throw new Error('managed-splice upgrade must preserve PROJECT_PURPOSE outside the markers');
+  }
+
+  // Legacy harness:local pocket migrates above the new managed block on first upgrade.
+  const legacyLocalFile = [
+    '# AGENTS.md',
+    '',
+    'Legacy purpose.',
+    '',
+    '<!-- harness:local:start -->',
+    'Legacy pocket rule.',
+    '<!-- harness:local:end -->',
+    '',
+    '## Startup Workflow',
+    'old body'
+  ].join('\n');
+  const legacyComposed = composeUpgradedAgentsFile(legacyLocalFile, renderedTemplate.replace('Custom purpose for this repo.', 'Legacy purpose.'));
+  if (legacyComposed.mode !== 'full-replace') {
+    throw new Error('composeUpgradedAgentsFile without managed markers should full-replace');
+  }
+  if (!legacyComposed.content.includes('Legacy pocket rule.') || !legacyComposed.content.includes('<!-- harness:managed:start -->')) {
+    throw new Error('first managed upgrade should migrate legacy harness:local content above the managed block');
+  }
+  if (legacyComposed.content.includes('<!-- harness:local:start -->')) {
+    throw new Error('first managed upgrade should not keep legacy harness:local markers');
+  }
+
+  // Scaffold a fresh harness to upgrade.
+  const upgradeRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-upgrade-'));
+  try {
+    const upgradeScaffold = runNode(createScript, ['--target', upgradeRoot, ...SPRINT_ARGS]);
+    if (upgradeScaffold.status !== 0) {
+      console.error(upgradeScaffold.stdout);
+      console.error(upgradeScaffold.stderr);
+      throw new Error('create-harness.mjs failed while preparing the upgrade fixture');
+    }
+
+    // Scaffolded AGENTS.md wraps the skill body in harness:managed markers.
+    const scaffoldedAgents = await readFile(path.join(upgradeRoot, 'AGENTS.md'), 'utf8');
+    if (!hasHarnessManagedRegion(scaffoldedAgents)) {
+      throw new Error('scaffolded AGENTS.md must include harness:managed markers around the skill body');
+    }
+    if (scaffoldedAgents.includes('<!-- harness:local:start -->')) {
+      throw new Error('scaffolded AGENTS.md must not include the legacy harness:local pocket');
+    }
+
+    // Customize: bespoke purpose + user note outside markers + extra task;
+    // remove approvalMode so the merge has work to do.
+    const customPurpose = 'Bespoke purpose that upgrade must preserve.';
+    const customRule = 'Repo-only rule: deploys go through ops-only pipeline.';
+    let customized = scaffoldedAgents.replace(
+      /(# AGENTS\.md\n\n)([^\n]*)/,
+      `$1${customPurpose}`
+    );
+    customized = customized.replace(
+      '<!-- harness:managed:start -->',
+      `${customRule}\n\n<!-- harness:managed:start -->`
+    );
+    await writeFile(path.join(upgradeRoot, 'AGENTS.md'), customized);
+
+    const featureListPath = path.join(upgradeRoot, 'feature_list.json');
+    const featureList = JSON.parse(await readFile(featureListPath, 'utf8'));
+    featureList.tasks.push({
+      id: 'task-900',
+      featId: 'feat-900',
+      name: 'Preserve me',
+      description: 'A task that must survive the upgrade',
+      verification: 'node init.mjs',
+      status: 'in-progress',
+      evidence: '',
+      taskId: '654321',
+      dependencies: []
+    });
+    delete featureList.approvalMode;
+    await writeFile(featureListPath, `${JSON.stringify(featureList, null, 2)}\n`);
+
+    // Plan mode (--json) writes nothing and reports readiness + skill version.
+    const metadata = await readSkillMetadata();
+    const planRun = runNode(upgradeScript, ['--target', upgradeRoot, '--json']);
+    if (planRun.status !== 0) {
+      console.error(planRun.stdout);
+      console.error(planRun.stderr);
+      throw new Error('upgrade-harness.mjs plan mode (--json) should exit 0 on a valid harness');
+    }
+    const planJson = JSON.parse(planRun.stdout);
+    if (!planJson.readyToApply || planJson.skillVersion !== metadata.version) {
+      throw new Error(`plan JSON should report readyToApply:true and skillVersion ${metadata.version} (got ${JSON.stringify({ readyToApply: planJson.readyToApply, skillVersion: planJson.skillVersion })})`);
+    }
+    if (planJson.upgradeMode !== 'managed-splice' || planJson.hasManagedMarkers !== true) {
+      throw new Error(`plan JSON should report managed-splice when markers exist (got ${JSON.stringify({ upgradeMode: planJson.upgradeMode, hasManagedMarkers: planJson.hasManagedMarkers })})`);
+    }
+    let manifestExistsAfterPlan = true;
+    try {
+      await readFile(path.join(upgradeRoot, '.harness', 'manifest.json'), 'utf8');
+    } catch {
+      manifestExistsAfterPlan = false;
+    }
+    if (manifestExistsAfterPlan) {
+      throw new Error('plan mode must not write .harness/manifest.json');
+    }
+
+    // Plan mode (default) prints a human-readable report.
+    const planText = runNode(upgradeScript, ['--target', upgradeRoot]);
+    if (planText.status !== 0 || !/Harness upgrade plan for/.test(planText.stdout)) {
+      throw new Error('upgrade-harness.mjs default plan mode should print a human-readable report');
+    }
+
+    // Deterministic apply-effect coverage via the same helpers the script
+    // composes (no install-mcps / Aqua dependency).
+    const liveAgents = await readFile(path.join(upgradeRoot, 'AGENTS.md'), 'utf8');
+    const purpose = extractProjectPurpose(liveAgents);
+    const replacements = await buildAgentsReplacements(upgradeRoot, { agentFile: 'AGENTS.md', projectPurpose: purpose });
+    const renderedTemplate = await renderAgentsFromTemplate(replacements);
+    const upgraded = composeUpgradedAgentsFile(liveAgents, renderedTemplate);
+    if (upgraded.mode !== 'managed-splice') {
+      throw new Error('scaffold with managed markers should upgrade via managed-splice');
+    }
+    if (!upgraded.content.includes(customPurpose)) {
+      throw new Error('upgraded AGENTS.md must preserve the custom PROJECT_PURPOSE');
+    }
+    if (!upgraded.content.includes(customRule)) {
+      throw new Error('upgraded AGENTS.md must preserve user content outside harness:managed markers');
+    }
+    if (!hasHarnessManagedRegion(upgraded.content)) {
+      throw new Error('upgraded AGENTS.md must retain harness:managed markers');
+    }
+
+    const approval = await mergeApprovalModeIfMissing(featureListPath);
+    if (!approval.changed) {
+      throw new Error('mergeApprovalModeIfMissing should merge when approvalMode is absent');
+    }
+    const mergedFeatures = JSON.parse(await readFile(featureListPath, 'utf8'));
+    if (mergedFeatures.approvalMode !== 'supervised') {
+      throw new Error('approvalMode should be merged as "supervised" when missing');
+    }
+    if (!mergedFeatures.tasks.some((t) => t.id === 'task-900' && t.taskId === '654321')) {
+      throw new Error('upgrade must preserve existing tasks and their taskIds');
+    }
+    if (!mergedFeatures.sprintPlanner?.sprintBoardUrl) {
+      throw new Error('upgrade must preserve the sprintPlanner block');
+    }
+    // A second merge must be a no-op (never overwrite an existing mode).
+    mergedFeatures.approvalMode = 'autopilot';
+    await writeFile(featureListPath, `${JSON.stringify(mergedFeatures, null, 2)}\n`);
+    const secondMerge = await mergeApprovalModeIfMissing(featureListPath);
+    if (secondMerge.changed) {
+      throw new Error('mergeApprovalModeIfMissing must not overwrite an existing approvalMode');
+    }
+
+    const manifestWrite = await writeHarnessManifest(upgradeRoot, { agentFile: 'AGENTS.md', version: metadata.version });
+    const manifest = JSON.parse(await readFile(manifestWrite.path, 'utf8'));
+    if (manifest.harnessCreatorVersion !== metadata.version || manifest.agentFile !== 'AGENTS.md' || !manifest.upgradedAt) {
+      throw new Error(`manifest must record harnessCreatorVersion, agentFile, and upgradedAt (got ${JSON.stringify(manifest)})`);
+    }
+
+    // Post-upgrade the harness still validates.
+    await writeFile(path.join(upgradeRoot, 'AGENTS.md'), upgraded.content);
+    const postValidate = runNode(validateScript, ['--target', upgradeRoot]);
+    if (postValidate.status !== 0) {
+      console.error(postValidate.stdout);
+      console.error(postValidate.stderr);
+      throw new Error('post-upgrade harness should pass validate-harness.mjs');
+    }
+
+    // "Not a harness" guard: an empty directory exits 1.
+    const emptyRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-empty-'));
+    try {
+      const notHarness = runNode(upgradeScript, ['--target', emptyRoot]);
+      if (notHarness.status !== 1) {
+        throw new Error('upgrade-harness.mjs should exit 1 when no harness is present');
+      }
+    } finally {
+      await rm(emptyRoot, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(upgradeRoot, { recursive: true, force: true });
   }
 
   console.log('harness self-test passed');

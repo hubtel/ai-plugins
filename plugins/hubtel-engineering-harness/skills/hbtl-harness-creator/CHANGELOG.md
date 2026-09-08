@@ -4,7 +4,19 @@ All notable changes to `hbtl-harness-creator` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+
+## [2.5.1] - 2026-09-08
+
+### Added
+
+- **Documentation gate (pre-PR) — features ship documented.** Harnesses now enforce Hubtel's "document every project, keep docs fresh" rule as a **read + write loop**, delegating all documentation mechanics to the installed `hbtl-dac-generate` / `hbtl-dac-update` skills (no DAC structure re-derived in the harness). **Read side:** Startup Workflow step 3 now points at the DAC layout (`README.md`, `docs/index.md`, `docs/overview.md`, `docs/architecture/`, `docs/flows/`, `docs/operations/`, `docs/adr/`) and the planning subagent receives present DAC docs in its codebase context, so agents gather context from existing documentation before implementing. **Write side:** a new push gate **`P.0` Documentation gate** runs **before** the branch check/quality gate (on push consent, inline in `autopilot`): a dedicated **Harness Documentation** subagent — pinned to **`claude-sonnet-5-thinking-medium`** — invokes `hbtl-dac-generate --ci` when `docs/index.md` is absent, else `hbtl-dac-update --ci --target-branch <integrationBranch>` (non-interactive). Produced docs are committed as a docs-only `docs:` commit (no `Closed:` trailer — new exception in **Commit message format**) so they travel in the same push and PR as the code; `NO_CHANGES_REQUIRED` proceeds and a DAC `ERROR`/`EXIT_CODE=1` aborts the push (only an explicit `skip docs` overrides). Wired through `templates/agents.md` (new **Documentation Gate** section, push gate `P.0`, Definition of Done, Post-done **Before pushing** sentence, working-rules bullet, End of Session), `SKILL.md` (**Documentation gate** section + Deliverable Checklist item + PR-ordering note), and `references/gotchas.md` (#43). New `scoreHarness()` anchor **Documentation gate documented** + `self-test.mjs` assertions (instruction check + SKILL/agents doc-anchor markers) keep the scaffold carrying it.
+
+## [2.5.0] — 2026-09-02
+
+### Added
+
+- **Per-repo harness upgrade — `scripts/upgrade-harness.mjs`.** Upgrades a live harness to the current skill version **without** wiping state. Plan mode (default, no `--apply`) validates the harness and prints what would change — and writes nothing. Apply mode (`--apply`) runs `install-mcps.mjs`, refreshes the skill-owned `<!-- harness:managed:start/end -->` instruction block (preserving `PROJECT_PURPOSE` and any content **outside** the markers), merges `approvalMode: "supervised"` when the key is absent, writes `.harness/manifest.json` (`harnessCreatorVersion`, `upgradedAt`, `agentFile`), and re-validates. Preserves `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, and `.harness/plans/`. No `--force` and no `--skip-mcps`. New helpers in `harness-utils.mjs` (`buildUpgradePlan`, `composeUpgradedAgentsFile`, `extract`/`injectHarnessManagedRegion`, `detectManagedRegionEdits`, `mergeApprovalModeIfMissing`, `writeHarnessManifest`, …). New gotcha **#42** (upgrade vs `create-harness --force`). See `HARNESS-UPGRADE-PLAN.md` and SKILL.md → **Upgrade an existing harness**.
+- **`templates/agents.md` managed markers.** New scaffolds wrap the skill-owned instruction body in `<!-- harness:managed:start -->` … `<!-- harness:managed:end -->`. Repo-only rules go **outside** the markers and survive upgrades; the managed block is replaced on upgrade. First upgrade of a file without markers does a full-file write (purpose preserved); any legacy `harness:local` pocket content is migrated above the managed block.
 
 ### Changed
 
@@ -18,7 +30,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **BREAKING: P.11 PR creation moves to `hubtel-azure-devops`.** `create-harness.mjs` now requires **`--azure-devops-mcp-verified`** alongside `--engineering-mcp-verified` (verify with `mcp_auth` if needed, then `core_list_projects({ top: 1 })`). Post-push PR open at P.11 uses **`repo_pull_request_write`** (`action: create`) + **`repo_pull_request_label`** (`hbtl-harness`) instead of Sprint Planner **`create_pull_request`**. Sprint Planner scope is tasks/boards/triage only. On-demand PR/CI queries (`repo_pull_request`, `pipelines_build`, …) are documented under **Hubtel Azure DevOps MCP** and are explicitly not lifecycle-gated. Pre-push Sonar stays on `hubtel-sonarquabe`. **`scripts/install-mcps.mjs` restored** — installs `hubtel-engineering`, `hubtel-sprint-planner`, **`hubtel-azure-devops`**, and `hubtel-sonarquabe` via `aqua install-mcp` (step 0 of **Create a harness**). Marketplace plugin `hubtel-engineering-harness` adds `hubtel-azure-devops` to `mcp.json`. See `AZURE-DEVOPS-MCP-INTEGRATION.md` (live-verified: PR create response, `workItems` linking, scaffold probe).
 
-## [Unreleased]
 
 ## [2.3.0] — 2026-08-26
 

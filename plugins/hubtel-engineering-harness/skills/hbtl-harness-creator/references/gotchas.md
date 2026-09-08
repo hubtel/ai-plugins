@@ -470,6 +470,26 @@ registry.register('shell', {
 
 ---
 
+## 42. Used `create-harness --force` to Update a Live Harness and Lost Task State
+
+**Symptom**: An engineer wanted a live repo's harness on the newer skill version, ran `create-harness.mjs --force`, and afterward `feature_list.json` was back to a single placeholder task — real tasks, Azure `taskId`s, evidence, and `progress.md` history were gone.
+
+**Cause**: `create-harness --force` is a **destructive re-scaffold**: it overwrites `AGENTS.md`, `progress.md`, `init.mjs`, and **resets `feature_list.json` to the placeholder**. It exists for greenfield or a deliberate reset — not for updating a repo that already has accumulated state. Refreshing skill instructions is a different operation.
+
+**Fix**: Use **`upgrade-harness.mjs`** instead. Run it with no `--apply` first to see the plan, confirm with the engineer via an `elicitationForm`, then `--apply`. Upgrade **preserves** `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, `.harness/plans/`, and any `AGENTS.md` content **outside** `<!-- harness:managed:start/end -->`; it refreshes only the skill-owned managed block, merges `approvalMode` if missing, installs MCPs, and stamps `.harness/manifest.json`. Reserve `--force` for an intentional wipe. See SKILL.md → **Upgrade an existing harness** and `HARNESS-UPGRADE-PLAN.md`.
+
+---
+
+## 43. Opened a PR With Stale or Missing Documentation
+
+**Symptom**: The agent pushed and opened a PR without ever refreshing the project's documentation — so a new feature shipped with no `docs/` entry, or the existing DAC docs still described the old behavior. Or it re-derived the DAC structure by hand (inventing `docs/` files) instead of invoking the installed DAC skills, producing docs that don't match Hubtel's standard. Or it ran the documentation subagent **interactively** (waiting on external-resource prompts) and stalled. Or a DAC `ERROR`/`EXIT_CODE=1` was ignored and the push proceeded anyway. Or docs were generated but committed **after** the push (or on a separate branch), so they never made it into the PR.
+
+**Cause**: Documentation is treated as optional polish rather than a gate. The DAC mechanics live in separate skills (`hbtl-dac-generate` / `hbtl-dac-update`), so an agent that doesn't know to delegate either skips docs or hand-rolls them. Without the `--ci` flag the DAC skills prompt for external resources and block. And running docs *after* the push puts them outside the PR the reviewer sees.
+
+**Fix**: Documentation is push gate **`P.0`** — it runs **before** the branch check/quality gate, on push consent (or inline in `autopilot`), so the docs commit is gated and travels in the **same push and PR** as the code. Dispatch the **Harness Documentation** subagent (pinned to `claude-sonnet-5-thinking-medium`, label `Harness Documentation`) and **delegate** to the installed DAC skills — never re-derive the structure: `hbtl-dac-generate --ci` when `docs/index.md` is absent, else `hbtl-dac-update --ci --target-branch <integrationBranch>`. Always pass `--ci` (non-interactive: skips external-resource prompts). Handle the machine-readable status block: `UPDATED`/generated → commit a docs-only `docs:` commit (no `Closed:` trailer) then continue the push gate; `NO_CHANGES_REQUIRED` → proceed; `ERROR`/`EXIT_CODE=1` → **abort the push** (only an explicit `skip docs` overrides). Read existing `docs/` for context on the way in (Startup Workflow step 3 + the planning subagent's codebase context) so the write side has something to update. See `templates/agents.md` → **Documentation Gate** and **Pushing (quality gate)** `P.0`; `scoreHarness()` anchor `Documentation gate documented` + a self-test assertion keep the scaffold carrying it.
+
+---
+
 ## Related Reading
 
 - [Memory Persistence Pattern](memory-persistence-pattern.md) — Gotchas #1, #3, #4, #15

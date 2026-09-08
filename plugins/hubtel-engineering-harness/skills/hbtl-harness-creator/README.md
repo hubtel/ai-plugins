@@ -30,9 +30,14 @@ node scripts/create-harness.mjs --target /path/to/project \
   --azure-devops-mcp-verified
 node scripts/validate-harness.mjs --target /path/to/project
 node scripts/run-benchmark.mjs --target /path/to/project --html /path/to/report.html
+# Upgrade a live harness to the current skill version (plan first, then --apply)
+node scripts/upgrade-harness.mjs --target /path/to/project
+node scripts/upgrade-harness.mjs --target /path/to/project --apply
 # Inspect a feature's UI runtime artifact (latest-run status + open issues)
 node scripts/summarize-ui-runtime.mjs --target /path/to/project feat-002
 ```
+
+`upgrade-harness.mjs` upgrades an existing harness to the current skill version without wiping task state. Without `--apply` it prints a plan (validation gaps, what will change, and any edits **inside** the `harness:managed` markers that would be replaced) and writes nothing; with `--apply` it runs `install-mcps.mjs`, refreshes the skill-owned block between `<!-- harness:managed:start -->` and `<!-- harness:managed:end -->` (preserving `PROJECT_PURPOSE` and any user content **outside** those markers), merges `approvalMode` if absent, and stamps `.harness/manifest.json`. It preserves `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `init.mjs`, and `.harness/plans/`. There is no `--force` and no `--skip-mcps`. See `HARNESS-UPGRADE-PLAN.md` and SKILL.md → **Upgrade an existing harness**.
 
 `summarize-ui-runtime.mjs` reads `.harness/ui-runtime/<featId>.json` (the v3 UI runtime artifact) and prints the latest run's derived status, open issues, criteria results, and screenshot paths. It exits `0` when the artifact is closed (no open issues) or skipped, `1` when issues are open or the file is invalid, and `2` when the file is missing — so an agent can see what step 3.7 still has open without hand-parsing JSON.
 
@@ -91,6 +96,7 @@ hbtl-harness-creator/
 ├── scripts/
 │   ├── create-harness.mjs
 │   ├── validate-harness.mjs
+│   ├── upgrade-harness.mjs
 │   ├── render-assessment-html.mjs
 │   ├── run-benchmark.mjs
 │   ├── self-test.mjs

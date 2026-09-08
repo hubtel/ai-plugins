@@ -144,6 +144,15 @@ Connect the SonarQube MCP (`hubtel-sonarquabe`; Cursor: `user-hubtel-sonarquabe`
 
 On such repos, the SonarQube analysis runs as a step **inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and the **MCP review of that analysis runs after** the quality gate, before push (matching Hubtel CI). On `Push now?` yes: the agent runs `node init.mjs --build` (P.2), which uploads branch analysis (the MCP has no scan tool, and the harness runs no standalone `aqua sonar-analyze`), reads `projectKey`, `branch`, and `dashboardUrl` from `.scanner/report-task.txt`, then runs the **full MCP query bundle** **sequentially** (issues, quality gate, security hotspots, dependency risks) with **`branch`** from the report (never `pullRequest` pre-push). **Do not** run MCP review and `git push` in parallel. **A green quality gate is not MCP review complete** — present the overview (P.5) before the push (P.7). Incomplete MCP (timeout, auth failure after `mcp_auth` retry, partial bundle) is blocked. **Auth** — on `needsAuth` or any auth/session error from `hubtel-sonarquabe`, call `mcp_auth`, retry once, then block if still failing (anytime in the session, not only at setup). Harness passes `projectKey` + `branch` only — **filtering and what counts as actionable are MCP-owned**. Pause at P.6 when not clean (`Awaiting Sonar review consent` in `progress.md`); only explicit **`push anyway`** overrides. Fixes loop through a new commit → re-run the quality gate → re-query. PR CI SonarQube remains the authoritative merge gate. See `templates/agents.md` → **Hubtel SonarQube MCP** and **Pushing (quality gate)**; design in `SONARQUBE-PRE-PUSH-REVIEW-PLAN.md`. Gotcha #34 covers skip/bypass/parallel-push failure modes; gotcha #40 covers Sonar auth/session recovery.
 
+### Documentation gate (hbtl-dac-* skills)
+
+At Hubtel every project is documented, and the docs stay fresh with the code. The harness enforces this as a **read + write loop**, delegating all documentation mechanics to the installed Hubtel **`hbtl-dac-generate`** / **`hbtl-dac-update`** skills — it re-derives no DAC structure (same delegation model as `hbtl-software-development` for code mechanics).
+
+- **Read (context).** Agents read existing project docs before implementing: Startup Workflow step 3 points at the DAC layout (`README.md`, `docs/index.md`, `docs/overview.md`, `docs/architecture/`, `docs/flows/`, `docs/operations/`, `docs/adr/`), and the planning subagent gets the present DAC docs in its codebase context so plans are grounded in documented architecture and flows.
+- **Write (pre-PR gate).** Documentation is refreshed **before the push gate** (push gate `P.0`, on push consent) so it lands in the **same push and PR** as the code. A dedicated **Harness Documentation** subagent — pinned to **`claude-sonnet-5-thinking-medium`**, dispatched with the visible label `Harness Documentation` (`Role: harness-documentation` fallback) — invokes the DAC skill **non-interactively**: `hbtl-dac-generate --ci` when the project has no docs (`docs/index.md` absent), else `hbtl-dac-update --ci --target-branch <integrationBranch>` (Auto mode, git-diff driven, diffed against the integration branch the PR targets). The main agent commits any produced docs as a docs-only `docs:` commit (no `Closed:` trailer), then runs the rest of the push gate over it; `NO_CHANGES_REQUIRED` proceeds, and a DAC `ERROR`/`EXIT_CODE=1` aborts the push (only an explicit `skip docs` overrides).
+
+`scoreHarness()` anchor `Documentation gate documented` (keys on `Documentation Gate` / `hbtl-dac-update` / `hbtl-dac-generate`) + a self-test assertion keep the scaffold carrying the section. See `templates/agents.md` → **Documentation Gate** and **Pushing (quality gate)** `P.0`. Gotcha #43 covers skip/bypass and DAC `--ci` status handling.
+
 ### Selective builds (.NET backend monorepos)
 
 On Hubtel .NET backend monorepos (`src/*.sln` + multiple `src/<Project>/*.csproj`), the CI artifact/deployment pipeline uses a commit-message pattern to decide which services get built and published — see the Hubtel dev-docs entry `pipelines-selective-changes` (fetch via engineering MCP `get_docs_catalog({query:"selective build"})` → `get_doc("pipelines-selective-changes")`; the harness embeds no citation URL). The pattern extends the harness's Conventional Commits subject line with a suffix:
@@ -172,7 +181,7 @@ See `templates/agents.md` → **Hubtel Azure DevOps MCP** and `AZURE-DEVOPS-MCP-
 
 ### Post-push pull request (`repo_pull_request_write`)
 
-After a **successful push** (P.7), the agent asks **`Open a pull request? (yes / not yet)`** in `supervised` (inline in `autopilot`) — separate consent from push. On yes: resolve branch, target, title, project/repository from read-only git; link work items from `Closed: #…` commits or row `taskId`s; call **`repo_pull_request_write`** then **`repo_pull_request_label`** (`hbtl-harness`); present PR title, id, and constructed link; update `progress.md` **PR status**. Do not auto-open without consent in `supervised`. See `templates/agents.md` → **Hubtel Azure DevOps MCP** → Post-push pull request and **Pushing (quality gate)** P.9–P.12. Gotcha #35 covers skip/bypass.
+By the time a PR is opened the code is already documented: the documentation gate (push gate `P.0`) refreshes docs and commits them before the push, so they are on the branch the PR is raised from (see **Documentation gate** above). After a **successful push** (P.7), the agent asks **`Open a pull request? (yes / not yet)`** in `supervised` (inline in `autopilot`) — separate consent from push. On yes: resolve branch, target, title, project/repository from read-only git; link work items from `Closed: #…` commits or row `taskId`s; call **`repo_pull_request_write`** then **`repo_pull_request_label`** (`hbtl-harness`); present PR title, id, and constructed link; update `progress.md` **PR status**. Do not auto-open without consent in `supervised`. See `templates/agents.md` → **Hubtel Azure DevOps MCP** → Post-push pull request and **Pushing (quality gate)** P.9–P.12. Gotcha #35 covers skip/bypass.
 
 ### Verification model
 
@@ -236,6 +245,28 @@ node scripts/validate-harness.mjs --target /path/to/project
 
 Report the five subsystem scores, the lowest-scoring area, and the first 2-3 changes that would improve reliability. Include tier-1 structural errors and warnings when present — they fail the run even when the overall score looks high. Exit code 1 means structural checks failed or the score is below `--min-score`.
 
+### Upgrade an existing harness
+
+Use this when a live repo already has a harness and you want it on the current skill version — new instructions and MCP wiring — **without** losing tasks, Azure `taskId`s, `sprintPlanner`, plans, or session progress. This is **not** `create-harness --force` (which resets `feature_list.json` and `progress.md`). See `HARNESS-UPGRADE-PLAN.md` for the full spec.
+
+**Prerequisite:** the global `hbtl-harness-creator` skill is already at the target version (sync it first). Then, per repo:
+
+1. **Plan.** Run `node scripts/upgrade-harness.mjs --target /path/to/project` (add `--json` for structured fields). This validates the harness and reports what an upgrade would change — no writes. Use it **once, to decide**; do not re-run it as a response to a decline.
+2. **Confirm with the engineer.** Summarize the gaps and, critically, any warning about edits **inside** `<!-- harness:managed:start -->` … `<!-- harness:managed:end -->` — that block is skill-owned and **replaced** on upgrade. Content **outside** the markers (including `PROJECT_PURPOSE` and repo-only notes above/below the block) is **preserved**. Advise putting durable repo-only rules outside the managed markers. Then present the go/no-go as a single-select **`elicitationForm`** — same contract as **Create a harness** step 5 (render through AskUserQuestion, or as structured Markdown when that tool is unavailable). Never assume a default; never skip the ask; never ask as free-text chat ("Reply with…").
+
+   Question text: **"Apply this harness upgrade?"**  
+   Header: **"Upgrade"**  
+   `multiSelect: false`  
+   Two options (labels are short descriptive phrases; map the choice to apply vs stop):
+   - "**Apply the upgrade**: refresh the harness:managed instruction block, install MCPs, merge approvalMode, stamp the manifest, re-validate" (Recommended when the plan looks right) → run `--apply`
+   - "**Don't upgrade**: make no changes" → **stop** — there is no partial upgrade
+
+   The upgrade **is** refreshing the managed instruction block; if they choose not to upgrade, stop.
+3. **Apply** (only after an explicit yes): `node scripts/upgrade-harness.mjs --target /path/to/project --apply`. This runs `install-mcps.mjs`, refreshes the `harness:managed` instruction block (preserving `PROJECT_PURPOSE` and any content outside the markers), merges `approvalMode: "supervised"` if the key is absent, writes `.harness/manifest.json` with the skill version, and re-validates.
+4. On Sonar-enabled repos, probe `hubtel-sonarquabe` afterward (same `mcp_auth` flow as scaffold step 7 and startup 4c).
+
+There is **no** `--force` and **no** `--skip-mcps` — the upgrade is all-or-nothing and always installs MCPs. Preserved: `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, `.harness/plans/`. See gotcha **#42** for the upgrade-vs-`--force` distinction.
+
 ### Produce a report
 
 Use when the user wants a shareable assessment:
@@ -258,6 +289,7 @@ Load only the reference needed for the user's problem:
 - Delegation and parallel agents (including the planning subagent's Coordinator pattern): [Multi-Agent Coordination](references/multi-agent-pattern.md)
 - Hooks, startup, long-running work: [Lifecycle & Bootstrap](references/lifecycle-bootstrap-pattern.md)
 - Non-obvious failure modes: [Gotchas](references/gotchas.md)
+- Upgrading a live harness to a new skill version: [HARNESS-UPGRADE-PLAN.md](HARNESS-UPGRADE-PLAN.md)
 - Change history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Design Rules
@@ -286,6 +318,7 @@ For a usable minimal harness, leave the target project with:
 - [ ] **`node scripts/install-mcps.mjs`** run before scaffold (includes `hubtel-azure-devops` via Aqua)
 - [ ] Hubtel Azure DevOps MCP (`hubtel-azure-devops`) verified live before scaffolding; PR create via `repo_pull_request_write` at P.11
 - [ ] On Sonar-enabled targets (`SonarQubeProjectKey` in `azure-pipelines.yml`): Sonar MCP probed after scaffold (step 7) and at session startup (AGENTS.md 4c)
+- [ ] Documentation gate wired before the push gate (push gate `P.0`): the **Harness Documentation** subagent refreshes docs via `hbtl-dac-generate`/`hbtl-dac-update` in `--ci` so features ship documented in the same PR
 - [ ] Optional `session-handoff.md` for multi-session work
 - [ ] Documented verification evidence or next action
 
