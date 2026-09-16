@@ -292,6 +292,9 @@ try {
   if (!checkPasses('Documentation gate documented')) {
     throw new Error('fresh scaffold is missing the Documentation gate instruction check');
   }
+  if (!checkPasses('Usage telemetry documented')) {
+    throw new Error('fresh scaffold is missing the Usage telemetry instruction check');
+  }
   if (!checkPasses('Post-push pull request')) {
     throw new Error('fresh scaffold is missing the Post-push pull request instruction check');
   }
@@ -1237,7 +1240,7 @@ try {
     }
   }
   const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
-  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate']) {
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold']) {
     if (!agentsTemplate.includes(marker)) {
       throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
     }
@@ -1259,6 +1262,146 @@ try {
     await readFile(scaffoldedGitkeep, 'utf8');
   } catch {
     throw new Error('create-harness.mjs must scaffold .harness/plans/.gitkeep');
+  }
+
+  // Usage telemetry scaffold: dir + gitignore entries + AGENTS.md anchor.
+  const telemetryGitkeep = path.join(tempRoot, '.harness', 'telemetry', '.gitkeep');
+  try {
+    await readFile(telemetryGitkeep, 'utf8');
+  } catch {
+    throw new Error('create-harness.mjs must scaffold .harness/telemetry/.gitkeep');
+  }
+  const { USAGE_EVENTS } = await import('./lib/usage-telemetry.mjs');
+  if (!USAGE_EVENTS.includes('scaffold')) {
+    throw new Error('USAGE_EVENTS must include scaffold');
+  }
+  // create-harness appends scaffold and best-effort ships (ship may clear the file if CCI is reachable).
+  const scaffoldOut = `${scaffold.stdout || ''}\n${scaffold.stderr || ''}`;
+  if (!/usage telemetry: appended scaffold/.test(scaffoldOut)) {
+    throw new Error('create-harness.mjs must append a scaffold usage event');
+  }
+  if (!/ship-usage-telemetry:/.test(scaffoldOut)) {
+    throw new Error('create-harness.mjs must best-effort ship-usage-telemetry after scaffold');
+  }
+  const scaffoldJsonl = path.join(tempRoot, '.harness', 'telemetry', 'usage.jsonl');
+  try {
+    const scaffoldBody = await readFile(scaffoldJsonl, 'utf8');
+    if (!scaffoldBody.includes('"event":"scaffold"') && !scaffoldBody.includes('"event": "scaffold"')) {
+      throw new Error('create-harness.mjs must append a scaffold usage event when the buffer is still local');
+    }
+  } catch (error) {
+    if (error && error.code !== 'ENOENT' && !String(error.message).includes('must append')) {
+      throw error;
+    }
+    if (error && String(error.message).includes('must append')) throw error;
+    // ENOENT → shipped and cleared; acceptable.
+  }
+  const scaffoldGitignore = await readFile(path.join(tempRoot, '.gitignore'), 'utf8');
+  for (const entry of ['.harness/telemetry/usage.jsonl', '.harness/telemetry/shipped.offset']) {
+    if (!scaffoldGitignore.split(/\r?\n/).some((line) => line.trim() === entry)) {
+      throw new Error(`create-harness.mjs must add ${entry} to .gitignore`);
+    }
+  }
+  if (!checkPasses('Usage telemetry documented')) {
+    throw new Error('scoreHarness should pass "Usage telemetry documented" after scaffold');
+  }
+
+  // append-usage-event + ship-usage-telemetry (fail-open without Aqua / when API down).
+  {
+    const appendScript = path.join(skillRoot, 'scripts', 'append-usage-event.mjs');
+    const shipScript = path.join(skillRoot, 'scripts', 'ship-usage-telemetry.mjs');
+    const usageRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-usage-'));
+    // Minimal harness bits for approvalMode + git remote identity.
+    await writeFile(path.join(usageRoot, 'feature_list.json'), JSON.stringify({
+      approvalMode: 'supervised',
+      sprintPlanner: SPRINT_BLOCK,
+      tasks: []
+    }, null, 2));
+    const gitInit = spawnSync('git', ['init', '-q'], { cwd: usageRoot, encoding: 'utf8' });
+    if ((gitInit.status ?? 1) === 0) {
+      spawnSync('git', ['remote', 'add', 'origin', 'https://dev.azure.com/hubtel/Front-End/_git/Usage-Test-Repo'], {
+        cwd: usageRoot,
+        encoding: 'utf8'
+      });
+    }
+    const append = runNode(appendScript, [
+      '--target', usageRoot,
+      '--event', 'feature-done',
+      '--session-id', 'test-session-1',
+      '--client', 'cursor',
+      '--feature-name', 'OTP verification on checkout',
+      '--turns', '3'
+    ]);
+    if (append.status !== 0) {
+      throw new Error(`append-usage-event.mjs failed: ${append.stderr || append.stdout}`);
+    }
+    const jsonlPath = path.join(usageRoot, '.harness', 'telemetry', 'usage.jsonl');
+    const jsonl = await readFile(jsonlPath, 'utf8');
+    const row = JSON.parse(jsonl.trim().split('\n')[0]);
+    if (row.event !== 'feature-done' || row.featureName !== 'OTP verification on checkout') {
+      throw new Error(`append-usage-event wrote unexpected row: ${JSON.stringify(row)}`);
+    }
+    if (row.model !== 'unknown' || row.modelSource !== 'unknown') {
+      throw new Error('append-usage-event should default model/modelSource to unknown');
+    }
+    if (!row.harnessVersion || typeof row.harnessVersion !== 'string') {
+      throw new Error('append-usage-event should stamp harnessVersion from skill metadata');
+    }
+    if (!row.repoName) {
+      throw new Error('append-usage-event should set repoName');
+    }
+
+    const appendTasks = runNode(appendScript, [
+      '--target', usageRoot,
+      '--event', 'tasks-created',
+      '--session-id', 'test-session-1',
+      '--client', 'cursor',
+      '--task-count', '7'
+    ]);
+    if (appendTasks.status !== 0) {
+      throw new Error(`append-usage-event tasks-created failed: ${appendTasks.stderr || appendTasks.stdout}`);
+    }
+    const jsonlAfterTasks = await readFile(jsonlPath, 'utf8');
+    const taskRow = JSON.parse(jsonlAfterTasks.trim().split('\n').at(-1));
+    if (taskRow.event !== 'tasks-created' || taskRow.taskCount !== 7) {
+      throw new Error(`append-usage-event tasks-created missing taskCount: ${JSON.stringify(taskRow)}`);
+    }
+
+    // Force a dead API host so ship fail-opens without depending on local CCI.
+    const prevBase = process.env.HARNESS_USAGE_API_BASE;
+    process.env.HARNESS_USAGE_API_BASE = 'http://127.0.0.1:9';
+    const shipFail = runNode(shipScript, ['--target', usageRoot, '--stdout']);
+    if (prevBase !== undefined) process.env.HARNESS_USAGE_API_BASE = prevBase;
+    else delete process.env.HARNESS_USAGE_API_BASE;
+    if (shipFail.status !== 0) {
+      throw new Error(`ship-usage-telemetry.mjs should exit 0 on API failure — got ${shipFail.status}: ${shipFail.stderr}`);
+    }
+    // Failed ship must keep the local buffer (unless Aqua missing — then skip still keeps file).
+    try {
+      await readFile(jsonlPath, 'utf8');
+    } catch {
+      throw new Error('ship-usage-telemetry must not clear usage.jsonl when the usage API submit fails or is skipped');
+    }
+
+    // clearShippedUsageLocal removes buffer files but keeps the telemetry dir.
+    const { clearShippedUsageLocal, usageTelemetryDir } = await import('./lib/usage-telemetry.mjs');
+    await clearShippedUsageLocal(usageRoot);
+    let clearedGone = false;
+    try {
+      await readFile(jsonlPath, 'utf8');
+    } catch {
+      clearedGone = true;
+    }
+    if (!clearedGone) {
+      throw new Error('clearShippedUsageLocal should remove usage.jsonl');
+    }
+    try {
+      await readFile(path.join(usageTelemetryDir(usageRoot), '.gitkeep'), 'utf8');
+    } catch {
+      throw new Error('clearShippedUsageLocal must keep .harness/telemetry/ (gitkeep)');
+    }
+
+    await rm(usageRoot, { recursive: true, force: true });
   }
 
   // detectDotnetMonorepo detects src/*.sln + ≥ 2 src/<Project>/*.csproj.
@@ -1944,7 +2087,7 @@ status: draft
     const customPurpose = 'Bespoke purpose that upgrade must preserve.';
     const customRule = 'Repo-only rule: deploys go through ops-only pipeline.';
     let customized = scaffoldedAgents.replace(
-      /(# AGENTS\.md\n\n)([^\n]*)/,
+      /(# AGENTS\.md\r?\n\r?\n)([^\r\n]*)/,
       `$1${customPurpose}`
     );
     customized = customized.replace(

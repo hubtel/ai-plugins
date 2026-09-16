@@ -5,6 +5,40 @@ All notable changes to `hbtl-harness-creator` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [2.6.2] - 2026-09-16
+
+### Added
+
+- **`taskCount` on `tasks-created`.** Append `--task-count` from `harness_create_tasks` `succeededCount` (Azure tasks actually created). Schema, CLI, and AGENTS checkpoint/rules updated; soft-warn when omitted.
+
+## [2.6.1] - 2026-09-15
+
+### Added
+
+- **Cycle feedback telemetry.** After a successful `pr-opened` (+ ship), soft-ask how the harness performed (rating 1–5 + optional comments/issues). New event `feedback` with required `rating` (and optional `reason` as comment). Prefer AskUserQuestion single-question `elicitationForm` (1–5: Poor→Excellent; Other/custom for comments); fall back to Markdown soft-ask when AskUserQuestion is unavailable. Soft-ask sits **after** the `delivered` closing line in the same delivery message. Dismiss/silence / no clear 1–5 = decline (no re-ask, fail-open). Wired in schema, append CLI (`--rating`), `templates/agents.md` (**Cycle feedback**, Autopilot step 4, P.12), ship-after-append list, and gotcha #45.
+
+### Changed
+
+- **Ship after plan approval.** Best-effort `ship-usage-telemetry` now runs after `plan-approved` (in addition to `scaffold` / `feature-done` / `session-end` / `pr-opened`), so approved plans land in CCI sooner.
+- **Ship after `tasks-created`.** After Azure tasks + rows are written, append `tasks-created` and best-effort ship (same fail-open contract).
+- **P.12 is `pr-opened` only.** Autopilot/push-gate instructions forbid re-appending `feature-done` after PR open — append + ship `pr-opened` at P.12 only.
+- **Autopilot skips where-to-start ask.** In `autopilot`, after breakdown approval + `harness_create_tasks`, start the earliest feature in plan order without asking (same default as `all`). `supervised` still asks. Phase 1 plan approval and breakdown approval remain required in both modes. Wired in `templates/agents.md` (**Approval mode**, **Where to start**), `SKILL.md`, `templates/feature-list.schema.json`, and gotcha #38.
+- **Autopilot is the Recommended approval mode** on scaffold step 5 (AskUserQuestion) — present **Autopilot** first, then **Supervised**. The CLI omit-default remains `supervised` when `--approval-mode` is not passed.
+- **Cycle feedback form is verbatim.** Agents must copy the pinned AskUserQuestion `elicitationForm` / Markdown fallback unchanged (no paraphrased questions or richer option blurbs). Gotcha #45 covers skip **and** paraphrase. Map `--rating` from option labels `1`–`5` only.
+- **Usage ship default base is production CCI.** `HARNESS_USAGE_API_BASE_DEFAULT` is `https://code-confidence-index.hubtel.com` (override with `HARNESS_USAGE_API_BASE` for local CCI, e.g. `http://localhost:3000`).
+- **Drop `push-completed`.** Redundant with `feature-done` → `pr-opened` (especially in autopilot). Removed from the v1 event set, schema, AGENTS checkpoint map, and CCI ingest allowlist.
+- **`sessionId` is chat-scoped only.** AGENTS.md / SKILL / schema / plan forbid embedding `feat-NNN` or feature titles in `--session-id` (one chat often covers multiple features — use `--feature-name` instead). Append soft-warns via `looksFeatureScopedSessionId` but still writes. Gotcha #44.
+
+## [2.6.0] - 2026-09-14
+
+### Added
+
+- **Usage telemetry.** Soft, non-blocking lifecycle events append to `.harness/telemetry/usage.jsonl` via `scripts/append-usage-event.mjs` (events: `scaffold` · `session-start` · `session-end` · `plan-approved` · `breakdown-approved` · `tasks-created` · `feature-started` · `feature-done` · `blocked` · `pr-opened`). Body uses human-readable `featureName` (not `featId`); no prompts; model defaults to `unknown`. Each row stamps `harnessVersion` from skill `metadata.json`. Scaffold/upgrade creates `.harness/telemetry/` and gitignores `usage.jsonl` + `shipped.offset`. `create-harness.mjs` appends `scaffold` and best-effort ships (stdout forwarded). Ship checkpoints: `scaffold` / `plan-approved` / `tasks-created` / `feature-done` / `session-end` / `pr-opened`.
+
+### Changed
+
+- **Usage telemetry ships to CCI-Frontend durable API** (`POST /api/harness-usage/events` → Upstash), authenticated with the same Aqua Bearer as metrics. Replaces Datadog as the primary sink. Configure base with `HARNESS_USAGE_API_BASE` (default `https://code-confidence-index.hubtel.com`). Fail-open; on full success deletes `usage.jsonl` + `shipped.offset` (folder kept). Wired in `templates/agents.md` (**Usage telemetry**), `scripts/lib/usage-telemetry.mjs` / `cci-usage-api.mjs`, schema `references/usage-telemetry.schema.json`, `scoreHarness()` anchor **Usage telemetry documented**, and `self-test.mjs`. See `HARNESS-USAGE-TELEMETRY-PLAN.md`.
+
 ## [2.5.1] - 2026-09-08
 
 ### Added

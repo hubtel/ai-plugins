@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "usage-telemetry.schema.json",
+  "title": "Harness usage telemetry event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "ts",
+    "event",
+    "repoName",
+    "client",
+    "model",
+    "modelSource",
+    "role",
+    "approvalMode",
+    "sessionId",
+    "harnessVersion"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "ts": { "type": "string", "format": "date-time" },
+    "event": {
+      "type": "string",
+      "enum": [
+        "scaffold",
+        "session-start",
+        "session-end",
+        "plan-approved",
+        "breakdown-approved",
+        "tasks-created",
+        "feature-started",
+        "feature-done",
+        "blocked",
+        "pr-opened",
+        "feedback"
+      ]
+    },
+    "repoName": { "type": "string", "minLength": 1 },
+    "repoRemote": { "type": ["string", "null"] },
+    "client": {
+      "type": "string",
+      "enum": ["cursor", "claude-code", "codex", "unknown"]
+    },
+    "model": { "type": "string" },
+    "modelSource": {
+      "type": "string",
+      "enum": ["runtime", "stated", "unknown"]
+    },
+    "role": {
+      "type": "string",
+      "enum": ["main", "harness-planner", "harness-documentation"]
+    },
+    "approvalMode": {
+      "type": "string",
+      "enum": ["supervised", "autopilot"]
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable id for the entire agent chat (e.g. ISO start time). Reuse on every event in the chat. Do not embed feat-NNN or feature titles — use featureName for that."
+    },
+    "harnessVersion": { "type": "string", "minLength": 1 },
+    "featureName": {
+      "type": ["string", "null"],
+      "description": "Human-readable feature name from the plan; null on session-level events. Not part of sessionId."
+    },
+    "turns": { "type": ["number", "null"] },
+    "clarificationRounds": { "type": ["number", "null"] },
+    "durationMinutes": { "type": ["number", "null"] },
+    "taskCount": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "On tasks-created: number of Azure tasks actually created (harness_create_tasks succeededCount / rows written). Null on other events."
+    },
+    "manualTakeover": { "type": "boolean" },
+    "reason": { "type": ["string", "null"] },
+    "rating": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 5,
+      "description": "Required on feedback events: harness cycle satisfaction 1–5"
+    }
+  }
+}

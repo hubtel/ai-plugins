@@ -1,6 +1,6 @@
 {
   "name": "hubtel-engineering-harness",
-  "version": "2.5.1",
+  "version": "2.6.2",
   "description": "Equips coding agents to run Hubtel's full engineering workflow on a repo — from feature breakdown and Azure tasks through implementation, verification, documentation, and PR lifecycle — so features ship the Hubtel way end to end.",
   "author": {
     "name": "Hubtel Enablement Team",

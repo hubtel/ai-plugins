@@ -30,6 +30,7 @@ import {
   writeHarnessManifest,
   writeText
 } from './lib/harness-utils.mjs';
+import { ensureTelemetryScaffold } from './lib/usage-telemetry.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
@@ -187,6 +188,13 @@ actions.push({ step: 'agent-file', path: plan.agentFile, mode: plan.upgradeMode 
 
 const approval = await mergeApprovalModeIfMissing(plan.featureListPath);
 actions.push({ step: 'approval-mode', merged: approval.changed });
+
+const telemetry = await ensureTelemetryScaffold(target);
+actions.push({
+  step: 'telemetry-scaffold',
+  dir: path.relative(target, telemetry.dir) || telemetry.dir,
+  gitignoreUpdated: telemetry.gitignore.changed
+});
 
 const metadata = await readSkillMetadata();
 const manifest = await writeHarnessManifest(target, { agentFile: plan.agentFile, version: metadata.version });

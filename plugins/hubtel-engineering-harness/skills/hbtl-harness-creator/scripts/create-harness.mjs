@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { chmod, mkdir } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   buildFeatureListWithSprintPlanner,
@@ -16,11 +18,12 @@ import {
   writeText,
   hasSonarQubeProjectKey
 } from './lib/harness-utils.mjs';
+import { ensureTelemetryScaffold, appendUsageEvent } from './lib/usage-telemetry.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
-  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified --azure-devops-mcp-verified [--parent-story-title TITLE] [--approval-mode supervised|autopilot] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
+  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified --azure-devops-mcp-verified [--parent-story-title TITLE] [--approval-mode autopilot|supervised] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
 
 Creates a minimal production harness:
   AGENTS.md or CLAUDE.md
@@ -29,6 +32,7 @@ Creates a minimal production harness:
   session-handoff.md
   init.sh
   .harness/plans/ (directory for per-feature plan files)
+  .harness/telemetry/ (usage event log dir; usage.jsonl gitignored)
 
 Azure tracking is mandatory. Capture the board via the Sprint Planner MCP
 (get_active_sprint_boards) FIRST, then pass the results:
@@ -47,8 +51,8 @@ call with { top: 1 }, then pass:
 
 Approval mode controls the delivery gates (commit / push / PR). Ask the human
 which they want, then pass it (defaults to supervised when omitted):
-  --approval-mode supervised  (default) all human gates: commit approval, push offer, PR offer
-  --approval-mode autopilot   auto-commit after verification, auto-push when clean, auto-open PR
+  --approval-mode autopilot   (Recommended) auto-commit after verification, auto-push when clean, auto-open PR
+  --approval-mode supervised  all human gates: commit approval, push offer, PR offer
 
 Existing files are skipped unless --force is set.`);
   process.exit(0);
@@ -75,7 +79,7 @@ if (!azureDevopsMcpVerified) {
   process.exit(1);
 }
 
-const APPROVAL_MODES = ['supervised', 'autopilot'];
+const APPROVAL_MODES = ['autopilot', 'supervised'];
 const approvalMode = typeof args.approvalMode === 'string' && args.approvalMode.trim()
   ? args.approvalMode.trim()
   : 'supervised';
@@ -158,6 +162,44 @@ if (force || !await exists(gitkeepPath)) {
   results.push({ path: gitkeepPath, status: 'written' });
 } else {
   results.push({ path: gitkeepPath, status: 'skipped', reason: 'exists' });
+}
+
+// Usage telemetry dir + gitignore entries for usage.jsonl / shipped.offset.
+const telemetry = await ensureTelemetryScaffold(target);
+results.push({ path: path.join(telemetry.dir, '.gitkeep'), status: 'written' });
+results.push({
+  path: path.join(target, '.gitignore'),
+  status: telemetry.gitignore.changed ? 'written' : 'skipped',
+  reason: telemetry.gitignore.changed ? 'telemetry ignores' : 'telemetry ignores present'
+});
+
+// Record scaffold adoption (append + best-effort ship). Never fail create-harness on telemetry.
+try {
+  const sessionId = `scaffold-${new Date().toISOString()}`;
+  await appendUsageEvent(target, {
+    event: 'scaffold',
+    sessionId,
+    client: 'unknown',
+    role: 'main'
+  });
+  console.log('usage telemetry: appended scaffold event');
+  const shipScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ship-usage-telemetry.mjs');
+  const ship = spawnSync(process.execPath, [shipScript, '--target', target], {
+    cwd: target,
+    encoding: 'utf8',
+    timeout: 20_000,
+    env: process.env
+  });
+  const shipOut = `${ship.stdout || ''}${ship.stderr || ''}`.trim();
+  if (shipOut) {
+    for (const line of shipOut.split(/\r?\n/)) {
+      console.log(line);
+    }
+  } else if ((ship.status ?? 1) !== 0) {
+    console.log(`usage telemetry: ship-usage-telemetry exited ${ship.status}${ship.error ? ` (${ship.error.message})` : ''}`);
+  }
+} catch (error) {
+  console.log(`usage telemetry scaffold event skipped: ${error.message}`);
 }
 
 console.log(`Created harness for ${target}`);

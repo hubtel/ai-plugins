@@ -434,9 +434,9 @@ registry.register('shell', {
 
 **Symptom**: With `approvalMode: autopilot`, the agent paused at P.6 and asked `Fix Sonar issues and re-run?` instead of fixing inline; or auto-pushed after a **failed** P.2 quality gate; treated incomplete Sonar MCP as fixable; pushed a protected branch; committed a dependency change that `audit_packages` blocked; or skipped planning gates because "autopilot means no asking."
 
-**Cause**: `autopilot` is read as "no gates at all." It is not — it only removes the four **delivery** asks (commit approval, `Push now?`, PR offer, and the `Push now?`-style push pause). The hard safety rails and the planning-phase gates (problem items 1–3) are outside its scope and never relax.
+**Cause**: `autopilot` is read as "no gates at all." It is not — it removes the **delivery** asks (commit approval, `Push now?`, PR offer) **and** the where-to-start ask (starts earliest plan-order feature). The hard safety rails and the planning-phase gates (Phase 1 plan approval, breakdown approval) are outside its scope and never relax.
 
-**Fix**: In `autopilot`, still **abort** on a non-zero P.2, still **auto-fix** unclean Sonar at P.6 inline (fix loop — do not pause to ask), still **pause** on incomplete Sonar MCP (auth/timeout/partial bundle), still refuse to push a protected branch, still block on `audit_packages`, and still require UI runtime issue closure before the feature commits. **`push anyway` is never inferred** from the mode. Planning (Phase 1 plan approval), breakdown approval, and the where-to-start ask run identically to `supervised`. See `templates/agents.md` → **Approval mode** and **Pushing (quality gate)**.
+**Fix**: In `autopilot`, still **abort** on a non-zero P.2, still **auto-fix** unclean Sonar at P.6 inline (fix loop — do not pause to ask), still **pause** on incomplete Sonar MCP (auth/timeout/partial bundle), still refuse to push a protected branch, still block on `audit_packages`, and still require UI runtime issue closure before the feature commits. **`push anyway` is never inferred** from the mode. Planning (Phase 1 plan approval) and breakdown approval still require human confirmation — only where-to-start is skipped (plan-order start). See `templates/agents.md` → **Approval mode** and **Pushing (quality gate)**.
 
 ---
 
@@ -487,6 +487,33 @@ registry.register('shell', {
 **Cause**: Documentation is treated as optional polish rather than a gate. The DAC mechanics live in separate skills (`hbtl-dac-generate` / `hbtl-dac-update`), so an agent that doesn't know to delegate either skips docs or hand-rolls them. Without the `--ci` flag the DAC skills prompt for external resources and block. And running docs *after* the push puts them outside the PR the reviewer sees.
 
 **Fix**: Documentation is push gate **`P.0`** — it runs **before** the branch check/quality gate, on push consent (or inline in `autopilot`), so the docs commit is gated and travels in the **same push and PR** as the code. Dispatch the **Harness Documentation** subagent (pinned to `claude-sonnet-5-thinking-medium`, label `Harness Documentation`) and **delegate** to the installed DAC skills — never re-derive the structure: `hbtl-dac-generate --ci` when `docs/index.md` is absent, else `hbtl-dac-update --ci --target-branch <integrationBranch>`. Always pass `--ci` (non-interactive: skips external-resource prompts). Handle the machine-readable status block: `UPDATED`/generated → commit a docs-only `docs:` commit (no `Closed:` trailer) then continue the push gate; `NO_CHANGES_REQUIRED` → proceed; `ERROR`/`EXIT_CODE=1` → **abort the push** (only an explicit `skip docs` overrides). Read existing `docs/` for context on the way in (Startup Workflow step 3 + the planning subagent's codebase context) so the write side has something to update. See `templates/agents.md` → **Documentation Gate** and **Pushing (quality gate)** `P.0`; `scoreHarness()` anchor `Documentation gate documented` + a self-test assertion keep the scaffold carrying it.
+
+---
+
+## 44. Embedded `feat-NNN` in Usage `sessionId`
+
+**Symptom**: CCI harness-usage **Sessions** dropdown shows one row per feature (`…-feat-001`, `…-feat-002`) instead of one row per chat. Multi-feature work in a single agent session is split across fake "sessions"; avg feature time / session timelines look fragmented.
+
+**Cause**: Agents treated `sessionId` as feature-scoped (e.g. `2026-09-15T11:00-feat-002`) even though AGENTS.md says pick a stable id **for this chat**. Feature identity belongs on `--feature-name`, not in the session key.
+
+**Fix**: At `session-start`, pick one chat-stable id (ISO start time is enough) and **reuse it** on every append until `session-end`. Put plan titles on `--feature-name` for `feature-started` / `feature-done` / etc. Never concatenate `feat-NNN` into `--session-id`. The append path soft-warns when `sessionId` looks feature-scoped (`looksFeatureScopedSessionId`) but still writes (fail-open). See `templates/agents.md` → **Usage telemetry** Rules.
+
+---
+
+## 45. Closed With `delivered` and Skipped / Paraphrased Cycle Feedback
+
+**Symptom**: PR opened and the agent emitted `Feature …: delivered` without asking for harness cycle feedback — or it asked with a rewritten question/options (e.g. "How useful was this harness cycle?", labels like `5 — Excellent` with long planning/delivery blurbs, header `Feedback` instead of `Harness`).
+
+**Cause**: Agents treated the PR report + `delivered` line as the end of the turn and dropped **Cycle feedback**, or they treated the pinned form as a draft and applied planning-elicitation habits (richer labels/descriptions) instead of copying it.
+
+**Fix**: Put the soft-ask **in the same delivery message**, **after** the `delivered` closing line. Render the **pinned** AskUserQuestion `elicitationForm` **verbatim** (question, header `Harness`, labels `1`–`5`, descriptions Poor→Excellent, order unchanged) — map `--rating` from the option **label** only. If AskUserQuestion is unavailable, fall back to Markdown **verbatim**:
+
+```text
+How well did the harness perform this time?
+Rate 1–5 — feel free to add comments or report issues.
+```
+
+Same turn; both modes. No skip command — dismissed form, silence, or no clear 1–5 = decline (do not re-ask). Do not ask before the PR summary or before `delivered`, do not close without the ask, and do not rephrase. See `templates/agents.md` → **Cycle feedback**, Autopilot completion step 4, P.12, and the autopilot delivered example.
 
 ---
 

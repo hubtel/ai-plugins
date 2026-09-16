@@ -58,6 +58,7 @@ export async function copyTemplate(templateName, targetPath, replacements = {}, 
   }
 
   let contents = await readText(path.join(TEMPLATE_DIR, templateName));
+  contents = contents.replace(/\r\n/g, '\n');
   for (const [key, value] of Object.entries(replacements)) {
     contents = contents.split(`{{${key}}}`).join(value);
   }
@@ -1085,7 +1086,7 @@ export function dedupe(values) {
 
 const DONE_STATUSES = new Set(['done']);
 // Per-repo delivery-gate policy (top-level approvalMode). Absent ⇒ supervised.
-const APPROVAL_MODES = new Set(['supervised', 'autopilot']);
+const APPROVAL_MODES = new Set(['autopilot', 'supervised']);
 const IN_PROGRESS_STATUSES = new Set(['in-progress']);
 // A task sits here after its own verification passes, before the feature commits.
 const EMPTY_EVIDENCE_STATUSES = new Set(['in-progress', 'verified']);
@@ -1490,6 +1491,7 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['Post-push pull request', 'repo_pull_request_write', 'Open a pull request?'], 'Post-push pull request documented'),
       textHas(agents, ['repo_pull_request_label', 'hbtl-harness'], 'Post-push PR label step documented'),
       textHas(agents, ['Documentation Gate', 'hbtl-dac-update', 'hbtl-dac-generate', 'Harness Documentation', 'Documentation gate'], 'Documentation gate documented'),
+      textHas(agents, ['Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback'], 'Usage telemetry documented'),
       textHas(agents, ['hbtl-harness'], 'hbtl-harness label tagging documented'),
       textHas(agents, ['Closing report', 'evidence: commit'], 'Closing report status line documented'),
       textHas(agents, ['Invalid', 'commit'], 'Invalid verbose evidence examples documented')
@@ -1546,13 +1548,31 @@ export function scoreHarness(files, options = {}) {
   const total = Object.values(subsystems).reduce((sum, item) => sum + item.score, 0);
   const overall = Math.round((total / (SUBSYSTEMS.length * 5)) * 100);
   const bottleneck = Object.entries(subsystems).sort((a, b) => a[1].score - b[1].score)[0][0];
+
+  const warnings = [...integrity.warnings];
+  if (options.repoRoot) {
+    const gitignorePath = path.join(options.repoRoot, '.gitignore');
+    if (existsSync(gitignorePath)) {
+      try {
+        const gitignoreText = readFileSync(gitignorePath, 'utf8');
+        for (const entry of ['.harness/telemetry/usage.jsonl', '.harness/telemetry/shipped.offset']) {
+          if (!gitignoreText.split(/\r?\n/).some((line) => line.trim() === entry)) {
+            warnings.push(`.gitignore should ignore ${entry} (harness usage telemetry)`);
+          }
+        }
+      } catch {
+        // ignore read errors
+      }
+    }
+  }
+
   return {
     overall,
     bottleneck,
     subsystems,
     tier1Failed: tier1Errors.length > 0,
     tier1Errors,
-    warnings: integrity.warnings
+    warnings
   };
 }
 
@@ -1803,6 +1823,7 @@ export async function buildAgentsReplacements(target, { agentFile = 'AGENTS.md',
 
 export async function renderAgentsFromTemplate(replacements) {
   let contents = await readText(path.join(TEMPLATE_DIR, 'agents.md'));
+  contents = contents.replace(/\r\n/g, '\n');
   for (const [key, value] of Object.entries(replacements)) {
     contents = contents.split(`{{${key}}}`).join(value);
   }
@@ -1922,7 +1943,7 @@ export async function buildUpgradePlan(target) {
     approvalModeMissing = false;
   }
 
-  const willChange = [agentFile, '.harness/manifest.json'];
+  const willChange = [agentFile, '.harness/manifest.json', '.harness/telemetry/ (scaffold + gitignore)'];
   if (approvalModeMissing) willChange.push('feature_list.json (approvalMode merge)');
 
   return {

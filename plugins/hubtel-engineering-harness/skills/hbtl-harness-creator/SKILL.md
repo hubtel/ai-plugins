@@ -44,9 +44,9 @@ Azure tracking is **mandatory** — every harness this skill creates records wor
 3. The human picks a board → capture the **`sprintBoardUrl`** and the **parent story** (`id` + `title`).
 4. Confirm the **Hubtel Engineering MCP** (`hubtel-engineering`) is reachable — a successful **`get_guidelines_catalog`** call. If it fails, surface the MCP's login command and retry. Auth/session is **MCP-owned** — wait for its flow; don't build a parallel auth path.
 4b. Confirm the **Hubtel Azure DevOps MCP** (`hubtel-azure-devops`) is reachable — call **`mcp_auth`** if not signed in yet (`needsAuth`), then a successful **`core_list_projects`** call with `{ top: 1 }`. Auth is MCP-owned; no script fallback.
-5. **Ask the user for the approval mode.** Present a single-select question; "Which mode do you want the harness to run in?" as an `elicitationForm` (same contract as the planning subagent — render through AskUserQuestion, or as structured Markdown when that tool is unavailable). Never assume a default; never skip the ask. The option labels shown to the user are short descriptive phrases (not raw mode names); the agent maps the chosen option back to its mode value for `--approval-mode`. Two options:
-   - "**Supervised**: Require human review and approval of every step" (Recommended)** → maps to `supervised`. Keeps every user checkpoint on delivery: you review and approve each commit, confirm the push, and confirm opening the pull request. Best when you want to eyeball each step before it lands.
-   - "**Autopilot**: Grant agent complete autonomy to commit, push, and create PRs after delivery" → maps to `autopilot`. After the verification stack passes the agent commits, pushes, and opens the PR without asking. It still stops on a failed quality gate (P.2 abort), **auto-fixes** unclean Sonar review at P.6 inline (fix loop until clean or blocked), a protected branch, or a blocked dependency, and never relaxes planning, breakdown, or where-to-start approvals. Best for well-scoped, low-risk work you trust the agent and CI to catch.
+5. **Ask the user for the approval mode.** Present a single-select question; "Which mode do you want the harness to run in?" as an `elicitationForm` (same contract as the planning subagent — render through AskUserQuestion, or as structured Markdown when that tool is unavailable). Never assume a default; never skip the ask. The option labels shown to the user are short descriptive phrases (not raw mode names); the agent maps the chosen option back to its mode value for `--approval-mode`. Present options in this order (Recommended first):
+   - "**Autopilot**: Grant agent complete autonomy to commit, push, and create PRs after delivery" (Recommended) → maps to `autopilot`. After the verification stack passes the agent commits, pushes, and opens the PR without asking. After triage it starts the earliest plan-order feature without a where-to-start ask. It still stops on a failed quality gate (P.2 abort), **auto-fixes** unclean Sonar review at P.6 inline (fix loop until clean or blocked), a protected branch, or a blocked dependency, and never relaxes planning or breakdown approvals. Best for well-scoped, low-risk work you trust the agent and CI to catch.
+   - "**Supervised**: Require human review and approval of every step" → maps to `supervised`. Keeps every user checkpoint on delivery: you review and approve each commit, confirm the push, and confirm opening the pull request. Best when you want to eyeball each step before it lands.
 6. Run the scaffolder with those values:
 
 ```bash
@@ -56,7 +56,7 @@ node scripts/create-harness.mjs --target /path/to/project \
   --parent-story-title "CCI ..." \
   --engineering-mcp-verified \
   --azure-devops-mcp-verified \
-  --approval-mode supervised
+  --approval-mode autopilot
 ```
 
 7. **Sonar MCP readiness (Sonar-enabled repos only).** After step 6 succeeds, if the target's `azure-pipelines.yml` declares a `SonarQubeProjectKey` (see `hasSonarQubeProjectKey()` in `harness-utils.mjs`): probe **`hubtel-sonarquabe`**. If tool discovery shows **`needsAuth`** (only `mcp_auth` visible), or a Sonar call fails with an auth/session error, call **`mcp_auth`**, ask the user to complete login if prompted, then retry once. Optionally call **`get_current_user`** to confirm connectivity. Tell the user plainly whether Sonar MCP is ready or still needs login before first delivery. **Non-blocking** — harness files are already written; there is no `--sonarqube-mcp-verified` gate. Skip silently when the repo has no `SonarQubeProjectKey`. This bridges scaffold (Engineering + Azure verified pre-write) and runtime startup (**AGENTS.md** step 4c on every session). See gotcha **#41**.
@@ -65,7 +65,7 @@ node scripts/create-harness.mjs --target /path/to/project \
 
 Other options:
 
-- `--approval-mode supervised|autopilot` sets the per-repo delivery-gate policy (default `supervised` when omitted; ask the human per step 5).
+- `--approval-mode autopilot|supervised` sets the per-repo delivery-gate policy (default `supervised` when omitted; ask the human per step 5 — present Autopilot first).
 - `--agent-file CLAUDE.md` for Claude-oriented projects.
 - `--package-manager npm|pnpm|yarn|bun` when detection is wrong.
 - `--commands "cmd one,cmd two"` for custom verification.
@@ -105,7 +105,7 @@ See `references/multi-agent-pattern.md` for how the subagent stays resumable acr
 
 **Present breakdown before Azure tasks.** After the planning subagent returns, the agent **shows** the planned breakdown organized by feature — each feature's tasks with `{id, name, description}` — before calling `harness_create_tasks`. **Show always; approve sometimes**: single fully specified features (no unconfirmed assumptions) proceed in the same turn; multi-feature (N ≥ 2), **unconfirmed assumptions**, or high-stakes/destructive breakdowns require explicit approval before the MCP call. On approval, plan files move from `status: draft` to `status: approved`. See `templates/agents.md` → **Present breakdown before Azure tasks**.
 
-**Where to start (after breakdown approval).** After the multi-feature breakdown is approved *and* `harness_create_tasks` has succeeded for the whole request, the agent asks the human which feature (or ordered set of features) to start implementing (`Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)`). Only those features' first tasks move to `in-progress`; every other row stays `not-started` with its Azure task, plan file, and `taskId` already in place, so any later session can pick them up cleanly. This ask is procedural — the plan itself always spans the entire request, and the where-to-start question exists **only** here (never at planning time). See `templates/agents.md` → **Present breakdown before Azure tasks**.
+**Where to start (after breakdown approval).** After the multi-feature breakdown is approved *and* `harness_create_tasks` has succeeded for the whole request, the agent decides which feature to implement first — **mode-dependent**. In `supervised`, it asks (`Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)`). In `autopilot`, it **skips the ask** and starts the earliest feature in the plan's order (same default as `all`), continuing into implementation in the same turn. Only that feature's first task moves to `in-progress`; every other row stays `not-started` with its Azure task, plan file, and `taskId` already in place. This step is procedural — the plan itself always spans the entire request, and where-to-start exists **only** here (never at planning time). See `templates/agents.md` → **Present breakdown before Azure tasks** and **Approval mode**.
 
 **All plans + all Azure tasks + all rows before any code.** The entire triage sequence runs to completion for **ALL** features and **ALL** tasks before implementation begins — no interleaving triage with code. After all plan files are saved and the breakdown is presented (and approved when required), the agent creates one Azure task **per planned task** (the granular breakdown items, not one per feature) in a single `harness_create_tasks` batch (using the `sprintPlanner` block + `{id, title, description}` per task, plus `tags: "hbtl-harness"` so every created task is tagged on top of the tool's default CCI/SprintAssistant tags), maps each returned `azureId` to the task's `taskId`, and **only then** writes all rows (each with `planFile`, `featId`, and `taskId`). Each Azure task's `description` **must strictly follow** the `get_harness_task_structure` template structure (Target File / Summary / Implementation Guidelines / Code Sample / Reference) — do not reorder, rename, or omit required sections — and must be emitted as **HTML** (`<h3>`/`<h4>`, `<p>`, `<ul>/<li>`, `<code>`, `<pre><code>`), since Azure renders the description as HTML; the Markdown template from `get_harness_task_structure` is reference only, and raw Markdown breaks the board (see `templates/agents.md` → *Output format — HTML, not Markdown*). Fill with verified codebase detail informed by the planning subagent's returned task breakdowns — **not** the task's one-line row/preview description; Summary must carry product/user **why**, and Implementation Guidelines must use verifiable **Objectives**, containment-annotated **Regression Risks**, scenario-mapped **Test Plan**, and applicable **Technical Notes** (see `templates/agents.md` → *Content bar*). Strict: an MCP/auth failure or any task in `data.failed[]` ⇒ no row for that task (no `taskId`, no work). Canonical order: **Ensure feature branch → Planning subagent (docs probe + clarification + planning) → Save ALL plans → Present breakdown → Author ALL task descriptions per `get_harness_task_structure` → Create ALL Azure tasks → Write ALL task rows → Implement**. See `templates/agents.md` → **Sprint Planner (Azure tasks)** → Triage.
 
@@ -228,10 +228,10 @@ Optional `requiredTests`: `unit`, `integration`, `e2e`, `karate`. When `e2e` is 
 
 ### Approval mode
 
-Every harness carries a per-repo `approvalMode` at the top of `feature_list.json` (`supervised` default, or `autopilot`). It controls **only** the delivery gates — commit approval, the `Push now?` offer, Sonar P.6 behaviour (`supervised` ask vs `autopilot` auto-fix), and the `Open a pull request?` offer (problem items 4–7). It does **not** relax planning (Phase 1 plan approval), breakdown approval, or the where-to-start ask, and it does **not** relax hard safety rails (P.2 quality-gate abort, incomplete Sonar MCP, protected branches, `audit_packages`, UI runtime issue closure, or inferring **`push anyway`**).
+Every harness carries a per-repo `approvalMode` at the top of `feature_list.json` (`supervised` default when omitted, or `autopilot`). It controls the delivery gates **and** the where-to-start ask — commit approval, the `Push now?` offer, Sonar P.6 behaviour (`supervised` ask vs `autopilot` auto-fix), the `Open a pull request?` offer (problem items 4–7), and whether to ask which feature to implement first after triage. It does **not** relax planning (Phase 1 plan approval) or breakdown approval, and it does **not** relax hard safety rails (P.2 quality-gate abort, incomplete Sonar MCP, protected branches, `audit_packages`, UI runtime issue closure, or inferring **`push anyway`**).
 
-- **`supervised`** — all human gates as documented in `templates/agents.md`: pause for explicit commit approval, ask `Push now?`, ask at P.6 when Sonar review is not clean, ask `Open a pull request?`.
-- **`autopilot`** — after the full verification stack passes, present the review overview and commit in the same turn; then run the push gate inline; **auto-enter the Sonar fix loop** at P.6 when review is not clean (no ask); open the PR after a successful push, without the `Push now?` / `Open a pull request?` asks.
+- **`autopilot`** (Recommended at scaffold) — after triage, start the earliest plan-order feature without asking; after the full verification stack passes, present the review overview and commit in the same turn; then run the push gate inline; **auto-enter the Sonar fix loop** at P.6 when review is not clean (no ask); open the PR after a successful push, without the `Push now?` / `Open a pull request?` asks.
+- **`supervised`** — all human gates as documented in `templates/agents.md`: pause for explicit commit approval, ask `Push now?`, ask at P.6 when Sonar review is not clean, ask `Open a pull request?`, ask which feature to start after triage.
 
 **Persistence is per-repo** — the value lives in `feature_list.json` and applies to every session on that repo until changed. A human can flip it mid-session in natural language (e.g. `approval mode: autopilot`); the agent writes the new value into `feature_list.json` once, mirrors it in `progress.md`, and applies it. `approvalMode` is a **harness-text contract only** — it does not depend on Cursor Smart Mode or any IDE-native approval card. Gate mechanics live in `templates/agents.md` → **Approval mode**.
 
@@ -278,6 +278,17 @@ node scripts/run-benchmark.mjs --target /path/to/project --html /path/to/report.
 
 Be clear that this is a structural benchmark. Real effectiveness still needs before/after agent sessions on representative tasks.
 
+### Usage telemetry
+
+Soft adoption logging (not a delivery gate). Agents append lifecycle events with:
+
+```bash
+node scripts/append-usage-event.mjs --target /path/to/project --event feature-done --session-id <id> --feature-name "…"
+node scripts/ship-usage-telemetry.mjs --target /path/to/project
+```
+
+Local JSONL: `.harness/telemetry/usage.jsonl` (gitignored). Each row includes `harnessVersion` (skill `metadata.json`). **`sessionId` is chat-scoped** (one id for the whole agent chat — never embed `feat-NNN`); put the feature on `--feature-name`. On `tasks-created`, pass `--task-count` from `harness_create_tasks` `succeededCount`. Ship POSTs to CCI-Frontend `/api/harness-usage/events` (durable Upstash; `service: Hubtel-Harness`) with Aqua Bearer — fail-open; on full success deletes `usage.jsonl` + `shipped.offset` (folder kept). Base: `HARNESS_USAGE_API_BASE` (default `https://code-confidence-index.hubtel.com`). Ship after append on `scaffold` / `plan-approved` / `tasks-created` / `feature-done` / `session-end` / `pr-opened` / `feedback` (never re-append `feature-done` at P.12 — that step is `pr-opened` only). **Cycle feedback** after `delivered`: copy the pinned AskUserQuestion `elicitationForm` (1–5) **verbatim** when available, else Markdown soft-ask verbatim; dismiss/silence = decline. Schema: `references/usage-telemetry.schema.json`. Backend: `references/usage-events-backend-requirements.md`. Instructions: `templates/agents.md` → **Usage telemetry** / **Cycle feedback**.
+
 ## When to Read References
 
 Load only the reference needed for the user's problem:
@@ -289,7 +300,9 @@ Load only the reference needed for the user's problem:
 - Delegation and parallel agents (including the planning subagent's Coordinator pattern): [Multi-Agent Coordination](references/multi-agent-pattern.md)
 - Hooks, startup, long-running work: [Lifecycle & Bootstrap](references/lifecycle-bootstrap-pattern.md)
 - Non-obvious failure modes: [Gotchas](references/gotchas.md)
+- Usage telemetry event schema: [usage-telemetry.schema.json](references/usage-telemetry.schema.json)
 - Upgrading a live harness to a new skill version: [HARNESS-UPGRADE-PLAN.md](HARNESS-UPGRADE-PLAN.md)
+- Usage telemetry design: [HARNESS-USAGE-TELEMETRY-PLAN.md](HARNESS-USAGE-TELEMETRY-PLAN.md)
 - Change history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Design Rules
@@ -319,6 +332,7 @@ For a usable minimal harness, leave the target project with:
 - [ ] Hubtel Azure DevOps MCP (`hubtel-azure-devops`) verified live before scaffolding; PR create via `repo_pull_request_write` at P.11
 - [ ] On Sonar-enabled targets (`SonarQubeProjectKey` in `azure-pipelines.yml`): Sonar MCP probed after scaffold (step 7) and at session startup (AGENTS.md 4c)
 - [ ] Documentation gate wired before the push gate (push gate `P.0`): the **Harness Documentation** subagent refreshes docs via `hbtl-dac-generate`/`hbtl-dac-update` in `--ci` so features ship documented in the same PR
+- [ ] Usage telemetry scaffolded (`.harness/telemetry/`, gitignore for `usage.jsonl`) and documented in AGENTS.md
 - [ ] Optional `session-handoff.md` for multi-session work
 - [ ] Documented verification evidence or next action
 
