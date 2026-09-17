@@ -1,0 +1,141 @@
+---
+# DAC Architecture Template
+# System design and components
+---
+template_type: docs_architecture
+dac_version: 1.0
+
+structure:
+  title: '{{PROJECT_NAME}} Architecture'
+  sections:
+    - system_structure
+    - major_components
+    - dependencies
+    - diagrams
+
+content_template: |
+  # {{PROJECT_NAME}} Architecture
+
+  ## Overall System Structure
+
+  {{SYSTEM_STRUCTURE_DESCRIPTION}}
+
+  ## Major Components
+
+  {{MAJOR_COMPONENTS}}
+
+  ## Dependencies
+
+  ### Internal Dependencies
+
+  {{INTERNAL_DEPENDENCIES}}
+
+  ### External Dependencies
+
+  {{EXTERNAL_DEPENDENCIES}}
+
+  ### Technology Stack
+
+  - **Language/Runtime:** {{LANGUAGE}}
+  - **Framework:** {{FRAMEWORK}}
+  - **Database:** {{DATABASE}}
+  - **Cache:** {{CACHE}}
+  - **Message Queue:** {{MESSAGE_QUEUE}}
+  - **Other:** {{OTHER_TECH}}
+
+  ## Architecture Diagrams
+
+  {{#if EXTERNAL_DIAGRAM_LINK}}
+  View the detailed architecture diagram: [{{EXTERNAL_DIAGRAM_NAME}}]({{EXTERNAL_DIAGRAM_LINK}})
+  {{else}}
+  ### System Architecture
+
+  :::mermaid
+  {{MERMAID_ARCHITECTURE_DIAGRAM}}
+  :::
+
+  ### Component Interactions
+
+  :::mermaid
+  {{MERMAID_COMPONENT_DIAGRAM}}
+  :::
+  {{/if}}
+
+  ## Data Flow
+
+  {{DATA_FLOW_DESCRIPTION}}
+
+  ## Security Considerations
+
+  {{SECURITY_NOTES}}
+
+placeholders:
+  - name: PROJECT_NAME
+    description: Name of the project
+    required: true
+
+  - name: SYSTEM_STRUCTURE_DESCRIPTION
+    description: High-level explanation of how the system is organized
+    required: true
+
+  - name: MAJOR_COMPONENTS
+    description: Description of each major component
+    required: true
+    example: "### API Layer\nHandles incoming HTTP requests...\n\n### Business Logic\nProcesses transactions..."
+
+  - name: INTERNAL_DEPENDENCIES
+    description: Other Hubtel services this depends on
+    required: false
+
+  - name: EXTERNAL_DEPENDENCIES
+    description: Third-party services and libraries
+    required: true
+
+  - name: LANGUAGE
+    description: Programming language
+    required: true
+
+  - name: FRAMEWORK
+    description: Main framework used
+    required: true
+
+  - name: DATABASE
+    description: Database technology
+    required: true
+
+  - name: CACHE
+    description: Caching solution
+    required: false
+
+  - name: MESSAGE_QUEUE
+    description: Message queue if used
+    required: false
+
+  - name: OTHER_TECH
+    description: Other significant technologies
+    required: false
+
+  - name: EXTERNAL_DIAGRAM_LINK
+    description: Link to external architecture diagram (draw.io, Lucidchart, etc.)
+    required: false
+
+  - name: EXTERNAL_DIAGRAM_NAME
+    description: Name/description of external diagram
+    required: false
+
+  - name: MERMAID_ARCHITECTURE_DIAGRAM
+    description: Mermaid diagram code for system architecture
+    required: false
+    example: "graph TB\n    A[Client] --> B[API Gateway]\n    B --> C[Service Layer]"
+
+  - name: MERMAID_COMPONENT_DIAGRAM
+    description: Mermaid diagram for component interactions
+    required: false
+
+  - name: DATA_FLOW_DESCRIPTION
+    description: How data moves through the system
+    required: true
+
+  - name: SECURITY_NOTES
+    description: Important security considerations
+    required: false

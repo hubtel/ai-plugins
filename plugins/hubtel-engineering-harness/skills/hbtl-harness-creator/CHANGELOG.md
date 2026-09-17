@@ -5,6 +5,22 @@ All notable changes to `hbtl-harness-creator` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [2.6.5] - 2026-09-17
+
+### Added
+
+- **`integrationBranch` at scaffold.** Resolve the preferred feature PR target (and DAC `--target-branch`) once when creating a harness: `git fetch --prune`, discover remotes in `{dev, develop, development, staging}` (unordered set), use the sole match or ask when zero/many — never `main`/`master`. Required `--integration-branch` on `create-harness.mjs`; persisted on `feature_list.json`. P.10 and documentation gate read the stored value (re-resolve if stale). **Feature PRs never target** `main`/`master`. Hotfix unchanged. Upgrade warns when missing and merges only when `--integration-branch` is passed. See `INTEGRATION-BRANCH-PLAN.md`, SKILL step 5b, gotcha #48.
+
+### Changed
+
+- **Continue the queue — no "say continue" gate.** Where-to-start only picks the first Active feature; remaining same-request rows are the implementation queue. After each `delivered` (+ cycle feedback), autopilot and supervised `all` atomic-start the next plan-order feature on the same branch/PR — never ask the human to continue. Supervised subset still stops at named features. Wired in Approval mode table + Autopilot completion step 5, Where to start, Feature delivery, Completion Is Mandatory, and gotcha #47.
+
+## [2.6.4] - 2026-09-16
+
+### Changed
+
+- **Atomic `feature-started` before code (+ ship).** First task `in-progress` → Azure Active → append `feature-started` → best-effort ship → only then implement (both modes; spelled out for `autopilot` where there is no where-to-start ask). `feature-started` joins the ship-after-append list. Soft-warn at `feature-done` if start was missed — do not invent a backdated start. Wired in `templates/agents.md` (Approval mode table, Where to start, checkpoint map, DoD) and `SKILL.md`.
+
 ## [2.6.2] - 2026-09-16
 
 ### Added

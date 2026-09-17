@@ -196,7 +196,7 @@ Flatten scalars to strings for facets (same practical constraint as Aqua’s `ad
 | `scripts/lib/datadog-usage.mjs` | Config + `submitUsageLog` / `submitUsageMetric` |
 | `scripts/ship-usage-telemetry.mjs` | Read jsonl → Datadog; optional shipped offset / archive |
 
-AGENTS.md may best-effort run ship after `feature-done` / `session-end` / `pr-opened`; failure never blocks delivery gates.
+AGENTS.md may best-effort run ship after `feature-started` / `feature-done` / `session-end` / `pr-opened`; failure never blocks delivery gates.
 
 ---
 

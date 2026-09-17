@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
+  assertIntegrationBranch,
   buildFeatureListWithSprintPlanner,
   copyTemplate,
   detectPackageManager,
@@ -23,7 +24,7 @@ import { ensureTelemetryScaffold, appendUsageEvent } from './lib/usage-telemetry
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
-  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified --azure-devops-mcp-verified [--parent-story-title TITLE] [--approval-mode autopilot|supervised] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
+  console.log(`Usage: node scripts/create-harness.mjs [--target DIR] --sprint-board-url URL --parent-story-id ID --engineering-mcp-verified --azure-devops-mcp-verified --integration-branch NAME [--parent-story-title TITLE] [--approval-mode autopilot|supervised] [--agent-file AGENTS.md|CLAUDE.md] [--package-manager npm|pnpm|yarn|bun] [--force]
 
 Creates a minimal production harness:
   AGENTS.md or CLAUDE.md
@@ -48,6 +49,11 @@ The Hubtel Azure DevOps MCP (hubtel-azure-devops) is a mandatory dependency.
 If not signed in yet, call mcp_auth first, then a successful core_list_projects
 call with { top: 1 }, then pass:
   --azure-devops-mcp-verified  (required) proof the MCP is connected and reachable
+
+Integration branch is the preferred feature PR target (and DAC --target-branch).
+Resolve at scaffold (git fetch; discover remotes among dev/develop/development/staging;
+use the sole match or ask when zero/many), then pass:
+  --integration-branch  (required) bare name, e.g. development — never main or master
 
 Approval mode controls the delivery gates (commit / push / PR). Ask the human
 which they want, then pass it (defaults to supervised when omitted):
@@ -89,6 +95,14 @@ if (!APPROVAL_MODES.includes(approvalMode)) {
   process.exit(1);
 }
 
+const integrationBranchArg = typeof args.integrationBranch === 'string' ? args.integrationBranch.trim() : '';
+const integrationBranchCheck = assertIntegrationBranch(integrationBranchArg);
+if (!integrationBranchCheck.ok) {
+  console.error(`Error: ${integrationBranchCheck.error}`);
+  process.exit(1);
+}
+const integrationBranch = integrationBranchCheck.name;
+
 const target = path.resolve(args.target || args._[0] || process.cwd());
 const agentFile = args.agentFile || 'AGENTS.md';
 const force = Boolean(args.force);
@@ -125,7 +139,7 @@ results.push(await copyTemplate('agents.md', path.join(target, agentFile), repla
 
 const featureListPath = path.join(target, 'feature_list.json');
 if (force || !await exists(featureListPath)) {
-  await writeText(featureListPath, await buildFeatureListWithSprintPlanner('feature-list.json', sprintPlanner, approvalMode));
+  await writeText(featureListPath, await buildFeatureListWithSprintPlanner('feature-list.json', sprintPlanner, approvalMode, integrationBranch));
   results.push({ path: featureListPath, status: 'written' });
 } else {
   results.push({ path: featureListPath, status: 'skipped', reason: 'exists' });
@@ -205,6 +219,7 @@ try {
 console.log(`Created harness for ${target}`);
 console.log(`Detected stack: ${project.stack}`);
 console.log(`Approval mode: ${approvalMode}`);
+console.log(`Integration branch: ${integrationBranch}`);
 console.log(`Fast gate (node init.mjs):`);
 for (const command of fast) {
   console.log(`  - ${command}`);

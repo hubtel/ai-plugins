@@ -1,0 +1,94 @@
+---
+# DAC Documentation Index Template
+# Main entry point for all project documentation
+---
+template_type: docs_index
+dac_version: 1.0
+
+structure:
+  title: '{{PROJECT_NAME}} Documentation'
+  sections:
+    - overview
+    - navigation
+    - ownership
+
+content_template: |
+  # {{PROJECT_NAME}} Documentation
+
+  Welcome to the {{PROJECT_NAME}} documentation. This documentation follows Hubtel's Docs-As-Code standards and is maintained alongside the codebase.
+
+  ## Overview
+
+  {{PROJECT_OVERVIEW}}
+
+  ## Documentation Structure
+
+  ### 📋 [Overview](overview.md)
+  Business context, system responsibilities, and key integrations.
+
+  ### 🏗️ [Architecture](architecture/index.md)
+  System design, major components, dependencies, and architecture diagrams.
+
+  ### 🔄 [Flows](flows/)
+  Business and technical process flows with sequence diagrams:
+  {{FLOW_LIST}}
+
+  ### ⚙️ [Operations](operations/)
+  Production behavior, failure modes, logging, monitoring, and operational guidance.
+
+  ### 📝 [ADR (Architectural Decision Records)](adr/)
+  Significant technical decisions with context and trade-offs:
+  {{ADR_LIST}}
+
+  ## Ownership
+
+  **Team:** {{TEAM_NAME}}  
+  **Maintainers:** {{MAINTAINERS}}  
+  **Last Updated:** {{LAST_UPDATED}}
+
+  ## Contributing to Documentation
+
+  Documentation updates should accompany code changes. When making changes:
+
+  1. Update affected documentation sections
+  2. Generate/update diagrams if architecture or flows change
+  3. Create ADR entries for significant decisions
+  4. Run `*validate-docs` to ensure DAC compliance
+
+  For more information on Docs-As-Code at Hubtel, see the [DAC Guidelines](https://dev-docs.hubtel.com/repositories-docs/guidelines.html).
+
+placeholders:
+  - name: PROJECT_NAME
+    description: Name of the project
+    required: true
+
+  - name: PROJECT_OVERVIEW
+    description: High-level project summary
+    required: true
+
+  - name: FLOW_LIST
+    description: List of documented flows
+    required: false
+    example: "- [Authentication Flow](flows/authentication-flow.md)\n- [Payment Flow](flows/payment-flow.md)"
+
+  - name: ADR_LIST
+    description: List of ADR files
+    required: false
+    example: "- [0001: Use PostgreSQL](adr/0001-use-postgresql.md)\n- [0002: JWT Authentication](adr/0002-jwt-authentication.md)"
+
+  - name: TEAM_NAME
+    description: Team responsible for the project
+    required: true
+
+  - name: MAINTAINERS
+    description: Individual maintainers
+    required: true
+
+  - name: LAST_UPDATED
+    description: Last documentation update date
+    required: true
+
+  - name: DAC_GUIDELINES_LINK
+    description: Link to DAC guidelines
+    required: false
+    default: 'https://dev-docs.hubtel.com/repositories-docs/guidelines.html'

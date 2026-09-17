@@ -513,7 +513,37 @@ How well did the harness perform this time?
 Rate 1–5 — feel free to add comments or report issues.
 ```
 
-Same turn; both modes. No skip command — dismissed form, silence, or no clear 1–5 = decline (do not re-ask). Do not ask before the PR summary or before `delivered`, do not close without the ask, and do not rephrase. See `templates/agents.md` → **Cycle feedback**, Autopilot completion step 4, P.12, and the autopilot delivered example.
+Same turn; both modes. No skip command — dismissed form, silence, or no clear 1–5 = decline (do not re-ask). Do not ask before the PR summary or before `delivered`, do not close without the ask, and do not rephrase. See `templates/agents.md` → **Cycle feedback**, Autopilot completion step 4, P.12, and the autopilot delivered example. After the soft-ask, if same-request features remain in the queue (autopilot / supervised `all`), **Continue the queue** — do not treat cycle feedback as a stop that requires "say continue" (gotcha #47).
+
+---
+
+## 47. Stopped After First Feature and Asked "Say Continue"
+
+**Symptom**: Multi-feature request (or autopilot / supervised `all`) delivers `feat-001`, opens/updates the PR, then yields with "Still queued… Say continue and I'll implement those next" while `feat-002+` rows stay `not-started`.
+
+**Cause**: Where-to-start / triage step 10 said move **only** the first feature to `in-progress` and called the rest "resumable in a later session." Agents read that as end-of-request after the first `delivered`, inventing a human "continue" gate Autopilot never defined.
+
+**Fix**: Where-to-start only picks the **first Active** feature. Remaining rows are the **implementation queue**. After each `delivered` (+ cycle feedback soft-ask), autopilot and supervised `all` **atomic-start the next plan-order feature** on the same branch/PR — **never** ask `say continue`. Stop only when the queue is empty, a hard rail/`blocked` hits, or the human named a supervised subset / explicit stop. See `templates/agents.md` → **Approval mode** (Autopilot completion step 5), **Where to start**, **Feature delivery**.
+
+---
+
+## 46. `feature-done` Without `feature-started` (esp. Autopilot)
+
+**Symptom**: CCI shows `feature-done` (and often `pr-opened`) for a feature, but no matching `feature-started`. Avg feature time / funnel stages look incomplete.
+
+**Cause**: In `autopilot` there is no where-to-start ask — agents jump from `tasks-created` into code and skip the soft `feature-started` append. `feature-started` also used to lack an immediate ship checkpoint, so a miss stayed invisible until delivery.
+
+**Fix**: Treat start as **atomic before any code** (both modes): first row `in-progress` → Azure Active → append `feature-started` → best-effort ship → then implement. `feature-started` is on the ship-after-append list. At `feature-done`, soft-warn if start was missed — do not invent a backdated start. See `templates/agents.md` → **Approval mode** / **Where to start** / Usage telemetry checkpoint map.
+
+---
+
+## 48. Feature PR Opened Against `master` After Fresh Clone
+
+**Symptom**: On a freshly cloned repo, the agent correctly creates `users/<username>/feature/...` and implements there, but the Azure PR targets `main` / `master` instead of the team's integration branch (`development`, `develop`, etc.).
+
+**Cause**: Clone leaves HEAD on the default branch (often `master`). Branch Discipline correctly forks the feature branch off the **current base**, but older instructions inferred PR target from that base or from a preference-order fallback that still landed on `master`. Create base ≠ PR target.
+
+**Fix**: Resolve **`integrationBranch` at scaffold** (step 5b): `git fetch --prune`, discover remotes in `{dev, develop, development, staging}` (unordered set), use the sole match or ask when zero/many — never `main`/`master`. Persist on `feature_list.json`. P.10 and DAC `--target-branch` read that field (re-resolve if stale). **Feature PRs never target** `main` or `master`. Hotfix → `main`/`master` unchanged. See `templates/agents.md` → **Branch Discipline** / Post-push pull request, `SKILL.md` → Create a harness step 5b, and `INTEGRATION-BRANCH-PLAN.md`.
 
 ---
 

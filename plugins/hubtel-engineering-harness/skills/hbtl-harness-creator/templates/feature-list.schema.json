@@ -10,6 +10,11 @@
       "default": "supervised",
       "description": "Per-repo human-checkpoint policy for delivery gates (commit, push, Sonar P.6, PR) and the post-triage where-to-start ask. 'supervised' (default) keeps every human gate including the P.6 Sonar ask when review is not clean and asks which feature to start; 'autopilot' auto-starts the earliest plan-order feature after triage, auto-commits after verification passes, auto-fixes unclean Sonar at P.6 inline (fix loop until clean or blocked), auto-pushes when clean, and auto-opens the PR after a successful push. Does NOT relax planning or breakdown gates. Absent means 'supervised'. See AGENTS.md **Approval mode**."
     },
+    "integrationBranch": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Preferred Azure PR target (and DAC --target-branch) for feature work. Resolved at scaffold: discover remotes among {dev, develop, development, staging}, use the sole match or ask when zero/many; never main/master. Bare branch name without refs/heads/ or origin/. See AGENTS.md **Branch Discipline** and Post-push pull request."
+    },
     "sprintPlanner": {
       "type": "object",
       "description": "Azure sprint tracking config captured at scaffold. Mandatory: every harness tracks work on Azure.",

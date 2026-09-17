@@ -39,11 +39,13 @@ users/<username>/feature/<short-desc>
 **Gate (run before implementation):**
 
 1. `git rev-parse --abbrev-ref HEAD` — read the current branch.
-2. If it already matches `^users/[^/]+/feature/.+`, proceed on it.
-3. Otherwise **create and check out** a compliant branch off the current base: `git checkout -b users/<username>/feature/<short-desc>`.
+2. If it already matches `^users/[^/]+/feature/.+`, proceed on it (same request).
+3. Otherwise **create and check out** a compliant branch off the current base: `git checkout -b users/<username>/feature/<short-desc>`. Creating off `master` / `main` after a fresh clone is fine.
 4. Never implement, commit, or push on `main`/`master`/`development`. If you're on one — or on any branch that doesn't match the convention — you **must** branch first.
 
 One branch covers the whole request (which may span several task rows). Establish it once, up front; you do **not** re-branch per row.
+
+**PR target is separate from create base.** Do **not** infer "branched from X ⇒ PR to X". Feature PR `targetRefName` and DAC `--target-branch` use `feature_list.json` → **`integrationBranch`** (resolved at scaffold). **Feature PRs never target** `main` or `master`. See **Post-push pull request** (P.10).
 
 ## Approval mode
 
@@ -55,7 +57,7 @@ One branch covers the whole request (which may span several task rows). Establis
 
 | Gate | `autopilot` | `supervised` (default) |
 |------|-------------|------------------------|
-| **Where to start** | **Skip the ask** — start the earliest feature in the plan's order (same default as answering `all` / a single-feature request). Note the chosen `featId` in `progress.md` and continue into implementation in the same turn | Ask `Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)` after triage; start only what the human names |
+| **Where to start** | **Skip the ask** — start the earliest feature in the plan's order (same default as answering `all`). Where-to-start only picks **which feature is Active first** — not the end of the request. **Atomic start (before any code):** first task `in-progress` → Azure Active → append + ship `feature-started` → note `Starting feat-NNN (autopilot — plan order)` → implement. After that feature is `delivered`, **Continue the queue** (below) — do **not** ask the human to continue | Ask `Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)` after triage; atomic-start only what they name. If they answer `all` (or equivalent), **Continue the queue** after each `delivered` the same as autopilot — never invent a "say continue" gate |
 | **Commit** (`Approve this commit?`) | After the full verification stack passes (steps 1–3.7), present the review overview and commit **in the same turn** — no pause. Closing line unchanged: `Feature <featId>: done — evidence: commit <hash>` | Pause; present the review overview and commit **only** after an explicit affirmative in a later message (same-turn ban applies) |
 | **Push** (`Push now?`) | Skip the ask; run the push gate (P.1–P.7) inline. Still emit the **Delivered** body + **Before pushing** sentence so the human sees what ran | Ask; push only on an explicit push affirmative |
 | **Sonar at P.6** | **Auto-fix** — when review is not clean (actionable MCP findings or failed Sonar quality gate), enter the **fix loop** inline without asking. Re-run P.2–P.6 until clean, then push. **`push anyway` is never inferred** in either mode | Pause when review is not clean; ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)` |
@@ -75,12 +77,13 @@ One branch covers the whole request (which may span several task rows). Establis
 
 **Smart Mode note.** `approvalMode` is a **harness-text contract only** — it does not read or depend on Cursor Smart Mode or any IDE-native approval card. In `autopilot`, the plain-text ask lines are simply omitted from your output; do not substitute a runtime approval UI for the mode.
 
-**Autopilot completion sequence (run all four in the same turn).** In `autopilot`, the feature commit is the **start** of delivery, not the end. Once the full verification stack passes (steps 1–3.7), do **all** of the following in one turn — do **not** stop after the commit:
+**Autopilot completion sequence (run all five in order for each feature).** In `autopilot`, the feature commit is the **start** of delivery, not the end. Once the full verification stack passes (steps 1–3.7), do **all** of the following — do **not** stop after the commit:
 
 1. **Commit** — present the review overview and commit in the same turn (the passing verification stack authorizes it; no `Approve this commit?` ask). This lands the `Feature <featId>: done` state, but that is **intermediate** — keep going.
 2. **Push gate inline (P.1–P.7)** — run the push gate straight away, without the `Push now?` ask (see **Pushing (quality gate)**). Every hard rail still binds: P.1 branch check, P.2 quality-gate abort, incomplete Sonar MCP. When Sonar review is not clean, run the **fix loop** inline (P.6 autopilot path) until clean or blocked — do not pause to ask.
 3. **PR inline (P.10–P.12)** — on a successful push, open the PR without the `Open a pull request?` ask (`repo_pull_request_write` + `repo_pull_request_label`, tag `hbtl-harness`), then report title/id/link (see **Post-push pull request** under **Hubtel Azure DevOps MCP**). **Usage telemetry at P.12:** append **`pr-opened` only**, then ship — **do not** re-append `feature-done` (that already shipped at step 1 / Definition of Done).
 4. **Record + close + Cycle feedback** — update `progress.md` (push status, PR status), present the delivery summary (work / commit / push / PR), emit the **final** autopilot closing line (`Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id>` — see **Closing report**), then **in that same message** soft-ask **Cycle feedback** using the **pinned form verbatim** (AskUserQuestion `elicitationForm` when available; else Markdown fallback — see **Cycle feedback**; do not rephrase) — **after** the `delivered` line. Do not yield after PR without the soft-ask unless a hard rail blocked you.
+5. **Continue the queue (same request)** — `delivered` ends **this feature's** delivery sequence, **not** the whole request. If any same-request feature still has rows `not-started` (plan-order queue), **do not** ask `continue?` / `say continue` / wait for a human to unblock the next feature. After the cycle-feedback soft-ask (decline/silence is fine — fail-open), **atomic-start the next feature in plan order** on the **same branch** (extend the open PR on the next push). Stop draining the queue only when: the queue is empty, a hard rail blocks, a feature is `blocked`, or the human **explicitly** said to stop after this feature. Supervised subset (human named specific `feat-NNN`s, not `all`) → do **not** start features they did not name.
 
 In **`supervised`**, the single sanctioned pause inside the push gate is P.6 when Sonar review is not clean (unless prior **`push anyway`**). In **`autopilot`**, unclean Sonar review does **not** pause — run the fix loop inline; the only Sonar-related stop is **incomplete MCP** (auth/timeout/partial bundle) or **`blocked`** when remediation cannot complete.
 
@@ -267,12 +270,15 @@ Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)
 
 - Move **only** the chosen features' first task to `in-progress`. If the human names an ordered list, still only the first task of the first named feature goes `in-progress` — one active task at a time holds (see **Feature delivery**).
 - If the human answers `all` or omits an answer for a single-feature request, start with the earliest feature in the plan's order.
+- **Atomic start before any code** (same as autopilot once a feature is chosen): `in-progress` → Azure Active → append + ship `feature-started` → then implement.
 
-**`autopilot`** — **do not ask.** Start the earliest feature in the plan's order (same default as `all` / single-feature). Move that feature's first task to `in-progress`, note `Starting feat-NNN (autopilot — plan order)` in `progress.md`, append `feature-started`, and continue implementation in the **same** turn.
+**`autopilot`** — **do not ask.** Start the earliest feature in the plan's order (same default as `all`). **Atomic start before any code** (same turn): (1) move that feature's first task to `in-progress`, (2) Azure Active sync, (3) append `feature-started` with `--feature-name` from the plan, (4) best-effort `node scripts/ship-usage-telemetry.mjs --target .`, (5) note `Starting feat-NNN (autopilot — plan order)` in `progress.md`, (6) **only then** continue implementation. Do **not** begin editing code until steps 1–5 ran (telemetry fail-open still never blocks — if ship fails, keep going after the append attempt). After that feature is `delivered`, **Continue the queue** (see **Approval mode** → Autopilot completion step 5) — never invent a "say continue" gate.
 
 **Both modes:**
 
-- Every other row stays `not-started`, with its Azure task already created, plan file already saved, and `taskId` already written. A follow-up session picks up any deferred feature cleanly (no re-triage — see **Sprint Planner (Azure tasks)** → Task details on resume).
+- Where-to-start only decides **which feature is Active first**. Other same-request rows stay `not-started` as the **implementation queue** (one feature open at a time — see **Feature delivery**), not as "parked until the human says continue."
+- **Autopilot** and supervised **`all`**: after each feature `delivered`, drain the queue in plan order on the same branch/PR until empty or blocked — **do not** ask the human to continue.
+- **Supervised subset** (named `feat-NNN`s only): implement only what they named; do not start unnamed features without a new ask.
 - Do **not** offer or infer partial planning at this point — the plans on disk always cover the whole request; where-to-start only decides implementation ordering.
 - Do **not** collapse this into the breakdown-approval question — approval is about the plan and Azure tasks; where-to-start is about implementation ordering, and comes after the MCP batch has succeeded.
 
@@ -301,7 +307,7 @@ If you can't name the perfect test path yet, use a best-effort command and adjus
 
 **Continuation:** same request → keep the existing row (don't duplicate). New request while one is `in-progress` → finish or park the current (`blocked`, noted in `progress.md`) first. Large ask → decompose first (see **Break work down**), then activate **one** row.
 
-**Multiple tasks from one feature:** all tasks sharing a `featId` follow **Feature delivery** — implement and verify one at a time, commit once for the whole feature. **Multiple features from one request:** each feature's tasks share a `featId`; implement one feature at a time (all its tasks through to verified), then the next feature. One commit per feature.
+**Multiple tasks from one feature:** all tasks sharing a `featId` follow **Feature delivery** — implement and verify one at a time, commit once for the whole feature. **Multiple features from one request:** each feature's tasks share a `featId`; implement one feature at a time (all its tasks through to verified → commit → deliver), **then the next** in plan order when the queue applies (autopilot / supervised `all`). Do **not** stop after the first feature and ask the human to continue. One commit per feature.
 
 ### Feature delivery (tasks commit by feature)
 
@@ -346,7 +352,7 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 
 **Commit only after approval (`supervised`).** In `supervised` mode, completing a feature *includes* committing it, but the commit is **gated**: run the completion sequence straight through to the approval ask, present the review overview, and commit only once the human gives the go-ahead (see **Commit approval gate**). Do not commit autonomously. In **`autopilot`** mode the commit is authorized by the passing verification stack — present the overview and commit in the same turn (see **Approval mode** and **Commit approval gate** → *Autopilot*).
 
-**Autopilot extends the turn through delivery.** In `autopilot`, committing and marking rows `done` is **not** the end of the turn — the `Feature <featId>: done` state is intermediate. After the commit, continue straight into P.1–P.7 (push gate) and, on a successful push, P.10–P.12 (PR) — all in the **same** turn (see **Approval mode** → Autopilot completion sequence). The turn ends only when one of these holds: (a) the PR is opened (push + PR succeeded) and you emit the `delivered` closing line, (b) a hard rail blocks (P.2 abort, incomplete Sonar MCP, Sonar fix loop **`blocked`**, protected branch, `audit_packages` block), or (c) the task is `blocked`. Do **not** emit a final closing line or yield after the commit until one of these is reached — stopping at `done` is the wrong stopping point in `autopilot`. Unclean Sonar at P.6 is **not** a stopping point in `autopilot` — fix inline and re-run P.2–P.6.
+**Autopilot extends the turn through delivery (and the queue).** In `autopilot`, committing and marking rows `done` is **not** the end of the turn — the `Feature <featId>: done` state is intermediate. After the commit, continue straight into P.1–P.7 (push gate) and, on a successful push, P.10–P.12 (PR) — all in the **same** turn (see **Approval mode** → Autopilot completion sequence). After `delivered` + cycle feedback, if same-request features remain `not-started`, **Continue the queue** (atomic-start the next plan-order feature) — do **not** yield with "say continue." The turn may end when: (a) the request queue is empty after a `delivered` (and cycle feedback was offered), (b) a hard rail blocks (P.2 abort, incomplete Sonar MCP, Sonar fix loop **`blocked`**, protected branch, `audit_packages` block), (c) a feature is `blocked`, or (d) the human explicitly said to stop after this feature. Do **not** emit a final closing line or yield after the commit until push/PR for the current feature has been attempted — stopping at `done` is the wrong stopping point in `autopilot`. Unclean Sonar at P.6 is **not** a stopping point in `autopilot` — fix inline and re-run P.2–P.6.
 
 ## Working Rules
 
@@ -422,7 +428,7 @@ Resolve `scripts/` from the installed `hbtl-harness-creator` skill root (same co
 - `tasks-created` — after `harness_create_tasks` + rows. Pass `--task-count` = `data.succeededCount` (Azure tasks actually created / rows written with a `taskId`). **Never invent** a count; omit only if the create response is unavailable (soft-warn).
 - Telemetry failure must **never** block `done`, push, or PR.
 - Append each event **once** at its checkpoint. **Never** re-append `feature-done` after push or PR — P.12 is `pr-opened` (+ ship) only, then optional `feedback`.
-- After append on `scaffold`, `plan-approved`, `tasks-created`, `feature-done`, `session-end`, `pr-opened`, or `feedback`, best-effort ship:
+- After append on `scaffold`, `plan-approved`, `tasks-created`, `feature-started`, `feature-done`, `session-end`, `pr-opened`, or `feedback`, best-effort ship:
 
 ```bash
 node scripts/ship-usage-telemetry.mjs --target .
@@ -430,7 +436,7 @@ node scripts/ship-usage-telemetry.mjs --target .
 
 Ship POSTs to CCI-Frontend **`/api/harness-usage/events`** (durable Upstash store, service **`Hubtel-Harness`**) using the same Aqua Bearer as metrics (`aqua login`). Base URL: `HARNESS_USAGE_API_BASE` or default `https://code-confidence-index.hubtel.com`. Missing login / API errors → exit 0 (fail-open). On a **full successful ship**, local `usage.jsonl` and `shipped.offset` are **deleted** (the `.harness/telemetry/` folder remains). Never invoke Aqua as a ship conduit; never put `DD_API_KEY` in the client.
 
-**Checkpoint map:** Scaffold (`create-harness.mjs`) → `scaffold` (+ ship); Startup → `session-start`; plan approval → `plan-approved` (+ ship); breakdown approval → `breakdown-approved`; after `harness_create_tasks` + rows → `tasks-created` with `--task-count` (+ ship); first task `in-progress` for a feature → `feature-started`; feature commit + rows `done` → `feature-done` (+ ship); task/feature `blocked` → `blocked`; PR opened → `pr-opened` (+ ship) → **Cycle feedback**; End of Session → `session-end` (+ ship).
+**Checkpoint map:** Scaffold (`create-harness.mjs`) → `scaffold` (+ ship); Startup → `session-start`; plan approval → `plan-approved` (+ ship); breakdown approval → `breakdown-approved`; after `harness_create_tasks` + rows → `tasks-created` with `--task-count` (+ ship); first task `in-progress` for a feature → **atomic start** `feature-started` (+ ship) **before any code**; feature commit + rows `done` → `feature-done` (+ ship); task/feature `blocked` → `blocked`; PR opened → `pr-opened` (+ ship) → **Cycle feedback**; End of Session → `session-end` (+ ship).
 
 ### Cycle feedback
 
@@ -687,7 +693,7 @@ The **descriptions** differ per layer — different audiences, different depths,
 7. **Sanity check:** confirm `data.succeededCount === data.total` before writing rows.
 8. **Strict gate:** any task in `data.failed[]`, or an MCP/auth error ⇒ **write no row for that task**; park it as `blocked` in `progress.md` if the user is waiting. No `taskId`, no row, no work.
 9. **Only now write ALL task rows**, each carrying its `taskId`, `featId`, and `planFile`. All rows for all features are written before the first row is set to `in-progress`. At commit time, use `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature as the message (see **Commit message format**). **Usage telemetry:** append `tasks-created` with `--task-count <data.succeededCount>` (Azure tasks actually created), then best-effort `node scripts/ship-usage-telemetry.mjs --target .` (see **Usage telemetry**).
-10. **Where to start** — after every row is written, decide the first feature per **Present breakdown before Azure tasks** → *Where to start* (`supervised`: ask; `autopilot`: earliest in plan order, same turn). Move only that feature's first task to `in-progress`; the rest remain `not-started` (fully triaged, resumable in a later session). **Usage telemetry:** on that first `in-progress`, append `feature-started` with `--feature-name` from the plan.
+10. **Where to start** — after every row is written, decide the **first Active** feature per **Present breakdown before Azure tasks** → *Where to start* (`supervised`: ask; `autopilot`: earliest in plan order, same turn). Move only that feature's first task to `in-progress`; other same-request rows stay `not-started` as the **queue** (one feature open at a time — see **Feature delivery**). **Atomic start (both modes, before any code):** `in-progress` → Azure Active → append `feature-started` with `--feature-name` from the plan → best-effort `node scripts/ship-usage-telemetry.mjs --target .` → then implement. Do not open editors / write product code until `feature-started` has been attempted. **After that feature is `delivered`:** for autopilot / supervised `all`, **Continue the queue** (next plan-order feature, same branch/PR) — **never** ask `say continue` / wait for the human to unblock the next feature. Supervised subset → only the features they named.
 
 This is a single swappable step ("Create Azure tasks for this breakdown"); the create mechanism can change without touching scaffold, mapping, or the data model.
 
@@ -1015,7 +1021,7 @@ On **yes** (or inline in `autopilot`), use **`repo_pull_request_write`** and **`
 | `project` | Parse from `git remote get-url origin` (Azure DevOps project name between org and `_git`) |
 | `repositoryId` | Repository name from the same remote (e.g. `My-Repo`) |
 | `sourceRefName` | `refs/heads/<branch>` — branch from `git rev-parse --abbrev-ref HEAD` (unless the human named a different source) |
-| `targetRefName` | `refs/heads/<target>` — infer from branch type, then verify with `git branch -r`: **hotfix** (`hotfix/*`) → `refs/heads/main` or `refs/heads/master`; **feature** branches (including `users/<username>/feature/*`) → integration branch — prefer the first match among `origin/develop`, `origin/development`, `origin/staging`, `origin/stage`. **Never guess** if none match — AskUserQuestion before calling the tool. **Note:** you must never **push** to `development`/`develop`, but the PR **target** is often that branch — that is normal. |
+| `targetRefName` | `refs/heads/<target>` — **hotfix** (`hotfix/*`) → `refs/heads/main` or `refs/heads/master`. **Feature** branches (including `users/<username>/feature/*`): use `feature_list.json` → **`integrationBranch`**. Verify `origin/<integrationBranch>` still exists (`git fetch --prune` + `git branch -r`). If the stored value is missing or gone from remotes, re-resolve: discover every remote whose bare name is in `{dev, develop, development, staging}` (unordered set — not a preference order); **1** → use and write `integrationBranch`; **2+** → AskUserQuestion among those names only, then write; **0** → ask the human for the integration branch name and write — **Feature PRs never target** `main` or `master` (do not offer them). You must never **push** to the integration branch, but the PR **target** is that branch — that is normal. |
 | `title` | `git log -1 --pretty=%s`, then AskUserQuestion with exactly one option: `Use last commit message: "<subject>"` (AskUserQuestion adds **Other…** for a custom title). Skip only when the human already supplied an explicit title. |
 | `workItems` | Parse `Closed: #…` from commits on the feature branch (same ids as the harness commit format). If none, use numeric `taskId`s from the delivered feature row(s). If still none, AskUserQuestion for comma-separated ids. Pass as `workItems: "<id1> <id2>"` (space-separated, **no `#` prefix). Commit trailers still use `Closed: #…` — this is Azure API transport only. |
 | `isDraft` | `false` unless the human explicitly asks for a draft PR |
@@ -1057,7 +1063,7 @@ At Hubtel, every project is documented and its documentation stays fresh with th
 **Which skill — by docs presence.** Detect whether the project is already documented:
 
 - **No docs** (`docs/index.md` absent) → invoke **`hbtl-dac-generate`** with **`--ci`** (non-interactive: skips the external-resource prompts and generates the full DAC structure from the codebase).
-- **Docs exist** (`docs/index.md` present) → invoke **`hbtl-dac-update`** with **`--ci`** (Auto mode, git-diff driven). Pass **`--target-branch <integrationBranch>`** using the same integration branch the PR step resolves (`origin/develop` → `development` → `staging` → …; see **Post-push pull request**) so the diff spans the whole feature branch, not just the last commit.
+- **Docs exist** (`docs/index.md` present) → invoke **`hbtl-dac-update`** with **`--ci`** (Auto mode, git-diff driven). Pass **`--target-branch <integrationBranch>`** using the same value as P.10 — `feature_list.json` → **`integrationBranch`** (re-resolve per Post-push pull request if missing/stale) so the diff spans the whole feature branch, not just the last commit.
 
 **The Harness Documentation subagent.** Delegate the run to a dedicated subagent so the DAC skill's context stays out of the main thread:
 
@@ -1106,7 +1112,7 @@ Run steps 1–10 as one unit, in order, **with a single sanctioned pause at step
 7. **Evidence** — set `evidence` to exactly `commit <hash>` using that rev-parse output (see **Evidence format**). Write the **same** hash on **every** row sharing the `featId`.
 8. **Validate** — run `validate-harness.mjs --target .` when available; don't set `done` if tier-1 fails (includes UI runtime artifact checks on UI rows at `verified`/`done`)
 9. **Status** — set `status` to `done` (every feature row together — all rows sharing the `featId`)
-10. **Sync and report** — update `progress.md` to match (same status + hash), then send the **post-done message** (see **Post-done message**). The response **must** end with exactly **one** closing report line — feature-scoped. **Usage telemetry:** append `feature-done` with `--feature-name` from the plan, then best-effort `node scripts/ship-usage-telemetry.mjs --target .` (see **Usage telemetry**). In `autopilot`, continue into the push/PR sequence after this — do **not** append `feature-done` again at P.12.
+10. **Sync and report** — update `progress.md` to match (same status + hash), then send the **post-done message** (see **Post-done message**). The response **must** end with exactly **one** closing report line — feature-scoped. **Usage telemetry:** append `feature-done` with `--feature-name` from the plan, then best-effort `node scripts/ship-usage-telemetry.mjs --target .` (see **Usage telemetry**). **Soft guard:** if this chat never appended `feature-started` for the same `--feature-name` (missed atomic start), soft-warn in the turn notes / `progress.md` — do **not** invent a backdated `feature-started` ts; still ship `feature-done`. In `autopilot`, continue into the push/PR sequence after this — do **not** append `feature-done` again at P.12.
 
 While `in-progress` or `verified`: leave `evidence` empty; test output belongs in `progress.md` only.
 

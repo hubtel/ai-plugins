@@ -1,0 +1,139 @@
+---
+# DAC ADR (Architecture Decision Record) Template
+# Documents significant architectural decisions
+---
+template_type: docs_adr
+dac_version: 1.0
+
+structure:
+  title: 'ADR {{ADR_NUMBER}}: {{DECISION_TITLE}}'
+  sections:
+    - status
+    - context
+    - decision
+    - alternatives
+    - consequences
+
+content_template: |
+  # {{ADR_NUMBER}}. {{DECISION_TITLE}}
+
+  **Date:** {{DECISION_DATE}}
+
+  **Status:** {{STATUS}}
+
+  ## Context
+
+  {{CONTEXT_DESCRIPTION}}
+
+  ### Problem Statement
+
+  {{PROBLEM_STATEMENT}}
+
+  ### Requirements
+
+  {{REQUIREMENTS}}
+
+  ## Decision
+
+  {{DECISION_MADE}}
+
+  ### Rationale
+
+  {{RATIONALE}}
+
+  ## Alternatives Considered
+
+  {{ALTERNATIVES}}
+
+  ## Consequences
+
+  ### Positive
+
+  {{POSITIVE_CONSEQUENCES}}
+
+  ### Negative
+
+  {{NEGATIVE_CONSEQUENCES}}
+
+  ### Risks
+
+  {{RISKS}}
+
+  ## Implementation Notes
+
+  {{IMPLEMENTATION_NOTES}}
+
+  ## References
+
+  {{#if MEETING_NOTES_LINK}}
+  - Meeting Notes: [{{MEETING_NOTES_LINK}}]({{MEETING_NOTES_LINK}})
+  {{/if}}
+  {{#if EXTERNAL_DOCS}}
+  {{EXTERNAL_DOCS}}
+  {{/if}}
+
+placeholders:
+  - name: ADR_NUMBER
+    description: Sequential ADR number (e.g., "0001", "0002")
+    required: true
+
+  - name: DECISION_TITLE
+    description: Short descriptive title (e.g., "Use PostgreSQL for Primary Database")
+    required: true
+
+  - name: DECISION_DATE
+    description: Date decision was made (YYYY-MM-DD)
+    required: true
+
+  - name: STATUS
+    description: 'Proposed / Accepted / Deprecated / Superseded'
+    required: true
+
+  - name: CONTEXT_DESCRIPTION
+    description: Background and circumstances leading to this decision
+    required: true
+
+  - name: PROBLEM_STATEMENT
+    description: What problem needed to be solved
+    required: true
+
+  - name: REQUIREMENTS
+    description: What requirements the solution needed to meet
+    required: true
+
+  - name: DECISION_MADE
+    description: What was decided
+    required: true
+
+  - name: RATIONALE
+    description: Why this decision was made
+    required: true
+
+  - name: ALTERNATIVES
+    description: Other options that were considered
+    required: true
+    example: "### Alternative 1: MongoDB\n- Pros:...\n- Cons:...\n\n### Alternative 2: MySQL\n- Pros:...\n- Cons:..."
+
+  - name: POSITIVE_CONSEQUENCES
+    description: Benefits of this decision
+    required: true
+
+  - name: NEGATIVE_CONSEQUENCES
+    description: Drawbacks or trade-offs
+    required: true
+
+  - name: RISKS
+    description: Potential risks introduced by this decision
+    required: false
+
+  - name: IMPLEMENTATION_NOTES
+    description: How this decision affects implementation
+    required: false
+
+  - name: MEETING_NOTES_LINK
+    description: Link to meeting notes or sprint retrospective
+    required: false
+
+  - name: EXTERNAL_DOCS
+    description: Links to related external documentation
+    required: false

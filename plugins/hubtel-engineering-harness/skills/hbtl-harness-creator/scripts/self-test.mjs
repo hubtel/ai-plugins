@@ -17,6 +17,11 @@ import {
   hasHarnessManagedRegion,
   injectHarnessManagedRegion,
   mergeApprovalModeIfMissing,
+  mergeIntegrationBranchIfMissing,
+  assertIntegrationBranch,
+  listIntegrationBranchCandidates,
+  normalizeBranchName,
+  FORBIDDEN_INTEGRATION_BRANCHES,
   readSkillMetadata,
   renderAgentsFromTemplate,
   resolveTouchedServices,
@@ -42,7 +47,8 @@ const SPRINT_ARGS = [
   '--parent-story-id', '12345',
   '--parent-story-title', 'Self-test parent',
   '--engineering-mcp-verified',
-  '--azure-devops-mcp-verified'
+  '--azure-devops-mcp-verified',
+  '--integration-branch', 'development'
 ];
 
 // Mandatory sprintPlanner block for inline feature_list.json fixtures. Without it,
@@ -124,6 +130,85 @@ try {
   // approvalMode defaults to supervised when --approval-mode is omitted.
   if (scaffoldedFeatures.approvalMode !== 'supervised') {
     throw new Error(`default scaffold should set approvalMode:"supervised" (got ${JSON.stringify(scaffoldedFeatures.approvalMode)})`);
+  }
+
+  // integrationBranch is required and persisted from --integration-branch.
+  if (scaffoldedFeatures.integrationBranch !== 'development') {
+    throw new Error(`scaffold should set integrationBranch:"development" (got ${JSON.stringify(scaffoldedFeatures.integrationBranch)})`);
+  }
+
+  // Missing --integration-branch must fail closed.
+  {
+    const noBranchRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-no-ibranch-'));
+    try {
+      const argsWithoutBranch = SPRINT_ARGS.filter((_, i, arr) => {
+        if (arr[i] === '--integration-branch') return false;
+        if (i > 0 && arr[i - 1] === '--integration-branch') return false;
+        return true;
+      });
+      const missing = runNode(createScript, ['--target', noBranchRoot, ...argsWithoutBranch]);
+      if (missing.status === 0) {
+        throw new Error('create-harness.mjs should fail (exit 1) when --integration-branch is missing');
+      }
+      if (!/integration-branch/i.test(`${missing.stdout}${missing.stderr}`)) {
+        throw new Error('missing --integration-branch should mention integration-branch in the error');
+      }
+    } finally {
+      await rm(noBranchRoot, { recursive: true, force: true });
+    }
+  }
+
+  // --integration-branch main|master must fail closed.
+  for (const bad of ['main', 'master']) {
+    const badRoot = await mkdtemp(path.join(os.tmpdir(), `harness-self-test-ibranch-${bad}-`));
+    try {
+      const badArgs = SPRINT_ARGS.map((v, i, arr) => (i > 0 && arr[i - 1] === '--integration-branch' ? bad : v));
+      const rejected = runNode(createScript, ['--target', badRoot, ...badArgs]);
+      if (rejected.status === 0) {
+        throw new Error(`create-harness.mjs should reject --integration-branch ${bad}`);
+      }
+    } finally {
+      await rm(badRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Helper: normalize + assert + forbidden set.
+  if (normalizeBranchName('origin/development') !== 'development') {
+    throw new Error('normalizeBranchName should strip origin/');
+  }
+  if (assertIntegrationBranch('development').ok !== true) {
+    throw new Error('assertIntegrationBranch(development) should succeed');
+  }
+  if (assertIntegrationBranch('main').ok !== false || assertIntegrationBranch('master').ok !== false) {
+    throw new Error('assertIntegrationBranch must reject main/master');
+  }
+  if (![...FORBIDDEN_INTEGRATION_BRANCHES].includes('main')) {
+    throw new Error('FORBIDDEN_INTEGRATION_BRANCHES must include main');
+  }
+  // listIntegrationBranchCandidates is safe on non-git dirs.
+  if (listIntegrationBranchCandidates(tempRoot).length !== 0 && !listIntegrationBranchCandidates(tempRoot).every((n) => typeof n === 'string')) {
+    throw new Error('listIntegrationBranchCandidates should return string names only');
+  }
+
+  // validateFeatureList: missing integrationBranch soft-warns; main is tier-1.
+  {
+    const missingBranch = validateFeatureList({
+      approvalMode: 'supervised',
+      sprintPlanner: SPRINT_BLOCK,
+      tasks: [{ id: 'task-001', featId: 'feat-001', name: 'n', description: 'd', verification: 'echo ok', status: 'not-started', evidence: '', dependencies: [], requiredTests: ['unit'] }]
+    });
+    if (!missingBranch.warnings.some((w) => /integrationBranch missing/i.test(w))) {
+      throw new Error('validateFeatureList should soft-warn when integrationBranch is missing');
+    }
+    const badBranch = validateFeatureList({
+      approvalMode: 'supervised',
+      integrationBranch: 'master',
+      sprintPlanner: SPRINT_BLOCK,
+      tasks: [{ id: 'task-001', featId: 'feat-001', name: 'n', description: 'd', verification: 'echo ok', status: 'not-started', evidence: '', dependencies: [], requiredTests: ['unit'] }]
+    });
+    if (badBranch.ok || !badBranch.errors.some((e) => /integrationBranch must not be "master"/i.test(e))) {
+      throw new Error('validateFeatureList should tier-1 fail when integrationBranch is master');
+    }
   }
 
   // --approval-mode autopilot is persisted and stays schema-valid.
@@ -213,7 +298,8 @@ try {
     '--parent-story-id', '99999',
     '--parent-story-title', 'Updated parent',
     '--engineering-mcp-verified',
-    '--azure-devops-mcp-verified'
+    '--azure-devops-mcp-verified',
+    '--integration-branch', 'develop'
   ]);
   if (forced.status !== 0) {
     console.error(forced.stdout);
@@ -224,6 +310,9 @@ try {
   if (forcedFeatures.sprintPlanner.parentStory.id !== '99999'
     || forcedFeatures.sprintPlanner.sprintBoardUrl !== 'https://dev.azure.com/hubtel/example/_sprints/taskboard/updated') {
     throw new Error('create-harness.mjs --force did not rewrite the sprintPlanner block with new args');
+  }
+  if (forcedFeatures.integrationBranch !== 'develop') {
+    throw new Error('create-harness.mjs --force should rewrite integrationBranch from --integration-branch');
   }
 
   // Restore the canonical scaffold for the remaining assertions.
@@ -363,6 +452,12 @@ try {
   }
   if (!checkPasses('Feature-branch discipline')) {
     throw new Error('fresh scaffold is missing the Feature-branch discipline instruction check');
+  }
+  if (!checkPasses('Integration branch resolution documented')) {
+    throw new Error('fresh scaffold is missing the Integration branch resolution instruction check');
+  }
+  if (!checkPasses('Feature PR never targets main/master documented')) {
+    throw new Error('fresh scaffold is missing the Feature PR never targets main/master instruction check');
   }
   if (!checkPasses('Azure in-progress status sync')) {
     throw new Error('fresh scaffold is missing the Azure in-progress status sync instruction check');
@@ -1240,7 +1335,7 @@ try {
     }
   }
   const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
-  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold']) {
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue']) {
     if (!agentsTemplate.includes(marker)) {
       throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
     }
@@ -2110,6 +2205,7 @@ status: draft
       dependencies: []
     });
     delete featureList.approvalMode;
+    delete featureList.integrationBranch;
     await writeFile(featureListPath, `${JSON.stringify(featureList, null, 2)}\n`);
 
     // Plan mode (--json) writes nothing and reports readiness + skill version.
@@ -2123,6 +2219,9 @@ status: draft
     const planJson = JSON.parse(planRun.stdout);
     if (!planJson.readyToApply || planJson.skillVersion !== metadata.version) {
       throw new Error(`plan JSON should report readyToApply:true and skillVersion ${metadata.version} (got ${JSON.stringify({ readyToApply: planJson.readyToApply, skillVersion: planJson.skillVersion })})`);
+    }
+    if (planJson.integrationBranchMissing !== true) {
+      throw new Error('plan JSON should report integrationBranchMissing:true when the key was removed');
     }
     if (planJson.upgradeMode !== 'managed-splice' || planJson.hasManagedMarkers !== true) {
       throw new Error(`plan JSON should report managed-splice when markers exist (got ${JSON.stringify({ upgradeMode: planJson.upgradeMode, hasManagedMarkers: planJson.hasManagedMarkers })})`);
@@ -2167,9 +2266,16 @@ status: draft
     if (!approval.changed) {
       throw new Error('mergeApprovalModeIfMissing should merge when approvalMode is absent');
     }
+    const integrationMerge = await mergeIntegrationBranchIfMissing(featureListPath, 'staging');
+    if (!integrationMerge.changed || integrationMerge.name !== 'staging') {
+      throw new Error('mergeIntegrationBranchIfMissing should merge when integrationBranch is absent');
+    }
     const mergedFeatures = JSON.parse(await readFile(featureListPath, 'utf8'));
     if (mergedFeatures.approvalMode !== 'supervised') {
       throw new Error('approvalMode should be merged as "supervised" when missing');
+    }
+    if (mergedFeatures.integrationBranch !== 'staging') {
+      throw new Error('integrationBranch should be merged from the supplied value when missing');
     }
     if (!mergedFeatures.tasks.some((t) => t.id === 'task-900' && t.taskId === '654321')) {
       throw new Error('upgrade must preserve existing tasks and their taskIds');
@@ -2183,6 +2289,10 @@ status: draft
     const secondMerge = await mergeApprovalModeIfMissing(featureListPath);
     if (secondMerge.changed) {
       throw new Error('mergeApprovalModeIfMissing must not overwrite an existing approvalMode');
+    }
+    const secondBranchMerge = await mergeIntegrationBranchIfMissing(featureListPath, 'develop');
+    if (secondBranchMerge.changed) {
+      throw new Error('mergeIntegrationBranchIfMissing must not overwrite an existing integrationBranch');
     }
 
     const manifestWrite = await writeHarnessManifest(upgradeRoot, { agentFile: 'AGENTS.md', version: metadata.version });

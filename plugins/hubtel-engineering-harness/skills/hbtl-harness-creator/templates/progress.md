@@ -5,6 +5,7 @@
 **Last Updated:** YYYY-MM-DD HH:MM
 **Session ID:** [optional]
 **Approval mode:** [supervised | autopilot] — from feature_list.json approvalMode (see AGENTS.md **Approval mode**)
+**Integration branch:** [dev | develop | development | staging | …] — from feature_list.json integrationBranch (feature PR + DAC target; never main/master)
 **Active Task:** [task-XXX - Task Name]
 **Build/Push status:** [pushed to origin | not pushed — **Before pushing:** <this project's push-gate checks in plain language, from Verification Commands> will run — <already run on this branch | not run on this branch yet>]
 **Documentation status:** [not run yet | up-to-date (no changes) | refreshed (commit <hash>) | generated (commit <hash>) | blocked (<reason>)] — push gate P.0, via the Harness Documentation subagent (see AGENTS.md **Documentation Gate**)

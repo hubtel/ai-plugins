@@ -6,7 +6,8 @@
 // <!-- harness:managed:start --> … <!-- harness:managed:end --> while
 // preserving PROJECT_PURPOSE and any user content outside those markers, plus
 // accumulated state (tasks, taskIds, sprintPlanner, progress, plans, init.mjs).
-// Runs install-mcps.mjs, merges a missing approvalMode, and stamps
+// Runs install-mcps.mjs, merges a missing approvalMode, merges integrationBranch
+// when missing and --integration-branch is passed, and stamps
 // .harness/manifest.json with the skill version. See HARNESS-UPGRADE-PLAN.md.
 //
 // Plan mode (default, no --apply): validates the harness and prints a gap
@@ -24,6 +25,7 @@ import {
   formatScoreReport,
   loadHarnessFiles,
   mergeApprovalModeIfMissing,
+  mergeIntegrationBranchIfMissing,
   parseArgs,
   readSkillMetadata,
   scoreHarness,
@@ -36,7 +38,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
-  console.log(`Usage: node scripts/upgrade-harness.mjs [--target DIR] [--apply] [--json]
+  console.log(`Usage: node scripts/upgrade-harness.mjs [--target DIR] [--apply] [--integration-branch NAME] [--json]
 
 Upgrade an existing harness to the current skill version.
 
@@ -46,7 +48,8 @@ with the engineer before applying.
 
 With --apply: run the full upgrade — install-mcps.mjs, refresh the
 harness:managed instruction block (preserving PROJECT_PURPOSE and any content
-outside the markers), merge approvalMode if missing, and write
+outside the markers), merge approvalMode if missing, merge integrationBranch
+when missing and --integration-branch is passed, and write
 .harness/manifest.json.
 
 Preserved: feature_list.json tasks/taskIds/sprintPlanner, progress.md,
@@ -55,10 +58,13 @@ outside harness:managed markers. There is no --force and no --skip-mcps; the
 upgrade is all-or-nothing.
 
 Options:
-  --target DIR   Project directory to upgrade. Default: current directory.
-  --apply        Perform the upgrade (writes files). Default: plan only.
-  --json         Emit machine-readable JSON instead of human-readable text.
-  -h, --help     Show this help and exit.`);
+  --target DIR                Project directory to upgrade. Default: current directory.
+  --apply                     Perform the upgrade (writes files). Default: plan only.
+  --integration-branch NAME   When feature_list.json lacks integrationBranch, merge this
+                              bare name (e.g. development). Never main/master. Required
+                              to fill a missing value — upgrade does not invent a default.
+  --json                      Emit machine-readable JSON instead of human-readable text.
+  -h, --help                  Show this help and exit.`);
   process.exit(0);
 }
 
@@ -99,6 +105,7 @@ function planPayload() {
     },
     managedEdits: plan.managedEdits,
     willChange: plan.willChange,
+    integrationBranchMissing: plan.integrationBranchMissing,
     readyToApply: plan.readyToApply
   };
 }
@@ -141,6 +148,13 @@ function printPlanText() {
     if (plan.managedEdits.hasManagedEdits) {
       lines.push('  Put durable repo-only rules outside the managed markers so they survive upgrades.');
     }
+    lines.push('');
+  }
+
+  if (plan.integrationBranchMissing) {
+    lines.push('WARNING: integrationBranch missing on feature_list.json');
+    lines.push('  Resolve (git fetch; discover remotes among dev/develop/development/staging; ask if zero/many),');
+    lines.push('  then re-run with --apply --integration-branch <name>. Never use main/master.');
     lines.push('');
   }
 
@@ -189,6 +203,36 @@ actions.push({ step: 'agent-file', path: plan.agentFile, mode: plan.upgradeMode 
 const approval = await mergeApprovalModeIfMissing(plan.featureListPath);
 actions.push({ step: 'approval-mode', merged: approval.changed });
 
+const integrationBranchArg = typeof args.integrationBranch === 'string' ? args.integrationBranch.trim() : '';
+let integrationMerge = { changed: false, previous: null, skipped: true };
+if (plan.integrationBranchMissing) {
+  if (integrationBranchArg) {
+    integrationMerge = await mergeIntegrationBranchIfMissing(plan.featureListPath, integrationBranchArg);
+    if (integrationMerge.error) {
+      const message = `Upgrade aborted: ${integrationMerge.error}`;
+      if (asJson) {
+        console.log(JSON.stringify({ target, applied: false, message }, null, 2));
+      } else {
+        console.error(message);
+      }
+      process.exit(1);
+    }
+  } else {
+    integrationMerge = {
+      changed: false,
+      previous: null,
+      skipped: true,
+      warning: 'integrationBranch still missing — resolve and re-run with --apply --integration-branch <name>'
+    };
+  }
+}
+actions.push({
+  step: 'integration-branch',
+  merged: Boolean(integrationMerge.changed),
+  skipped: Boolean(integrationMerge.skipped),
+  warning: integrationMerge.warning || null
+});
+
 const telemetry = await ensureTelemetryScaffold(target);
 actions.push({
   step: 'telemetry-scaffold',
@@ -215,6 +259,8 @@ if (asJson) {
     upgradeMode: plan.upgradeMode,
     installMcpsExit: installExit,
     approvalModeMerged: approval.changed,
+    integrationBranchMerged: Boolean(integrationMerge.changed),
+    integrationBranchWarning: integrationMerge.warning || null,
     manifestPath: path.relative(target, manifest.path),
     actions,
     postValidation: {
@@ -230,6 +276,13 @@ if (asJson) {
   console.log(`Skill version stamped: ${metadata.version}`);
   console.log(`Agent file: ${plan.agentFile} (${plan.upgradeMode})`);
   console.log(`approvalMode merged: ${approval.changed ? 'yes (supervised)' : 'no (already set)'}`);
+  if (integrationMerge.changed) {
+    console.log(`integrationBranch merged: yes (${integrationMerge.name})`);
+  } else if (integrationMerge.warning) {
+    console.log(`integrationBranch merged: no — ${integrationMerge.warning}`);
+  } else {
+    console.log('integrationBranch merged: no (already set or not needed)');
+  }
   console.log(`Manifest: ${path.relative(target, manifest.path)}`);
   if (installExit === 2) {
     console.log('Note: aqua CLI missing — MCP servers were not registered. Install Aqua and re-run install-mcps.mjs.');

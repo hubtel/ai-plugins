@@ -1,0 +1,85 @@
+---
+# DAC Flows Template
+# Business and technical process flow documentation
+---
+template_type: docs_flows
+dac_version: 1.0
+
+structure:
+  title: '{{FLOW_NAME}}'
+  sections:
+    - description
+    - actors
+    - steps
+    - diagrams
+    - edge_cases
+
+content_template: |
+  # {{FLOW_NAME}}
+
+  ## Description
+
+  {{FLOW_DESCRIPTION}}
+
+  ## Actors
+
+  {{ACTORS_LIST}}
+
+  ## Flow Steps
+
+  {{FLOW_STEPS}}
+
+  ## Flow Diagram
+
+  {{#if EXTERNAL_DIAGRAM_LINK}}
+  View the detailed flow diagram: [{{EXTERNAL_DIAGRAM_NAME}}]({{EXTERNAL_DIAGRAM_LINK}})
+  {{else}}
+  :::mermaid
+  {{MERMAID_SEQUENCE_DIAGRAM}}
+  :::
+  {{/if}}
+
+  ## Edge Cases and Error Handling
+
+  {{EDGE_CASES}}
+
+  ## Related Documentation
+
+  - Architecture: [../architecture/index.md](../architecture/index.md)
+  - Operations: [../operations/index.md](../operations/index.md)
+
+placeholders:
+  - name: FLOW_NAME
+    description: Name of the flow (e.g., "Authentication Flow", "Payment Processing")
+    required: true
+
+  - name: FLOW_DESCRIPTION
+    description: What this flow accomplishes
+    required: true
+
+  - name: ACTORS_LIST
+    description: Who/what is involved in this flow
+    required: true
+    example: "- **User**: Initiates the request\n- **API Gateway**: Routes requests\n- **Auth Service**: Validates credentials"
+
+  - name: FLOW_STEPS
+    description: Step-by-step narrative of the flow
+    required: true
+    example: "1. User submits credentials\n2. API Gateway receives request\n3. Auth Service validates\n4. Token generated and returned"
+
+  - name: EXTERNAL_DIAGRAM_LINK
+    description: Link to external flow diagram
+    required: false
+
+  - name: EXTERNAL_DIAGRAM_NAME
+    description: Name of external diagram
+    required: false
+
+  - name: MERMAID_SEQUENCE_DIAGRAM
+    description: Mermaid sequence diagram code
+    required: false
+    example: "sequenceDiagram\n    User->>API: Login Request\n    API->>Auth: Validate\n    Auth-->>API: Token\n    API-->>User: Success"
+
+  - name: EDGE_CASES
+    description: Error scenarios and how they're handled
+    required: true

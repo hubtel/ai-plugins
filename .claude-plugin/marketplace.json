@@ -38,7 +38,7 @@
       "displayName": "Hubtel Engineering Harness",
       "source": "./plugins/hubtel-engineering-harness",
       "description": "Equips coding agents to run Hubtel's full engineering workflow on a repo — from feature breakdown and Azure tasks through implementation, verification, documentation, and PR lifecycle — so features ship the Hubtel way end to end.",
-      "version": "2.6.2",
+      "version": "2.6.5",
       "author": {
         "name": "Hubtel Enablement Team",
         "email": "engineering@hubtel.com"
@@ -53,7 +53,11 @@
       ],
       "skills": [
         "./skills/software-development",
-        "./skills/hbtl-harness-creator"
+        "./skills/hbtl-harness-creator",
+        "./skills/hbtl-dac-generate",
+        "./skills/hbtl-dac-update",
+        "./skills/hbtl-dac-validate",
+        "./skills/hbtl-dac-analyze"
       ],
       "mcpServers": {
         "hubtel-engineering": {

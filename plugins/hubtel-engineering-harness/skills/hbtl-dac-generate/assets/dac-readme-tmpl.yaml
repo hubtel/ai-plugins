@@ -1,0 +1,122 @@
+---
+# DAC README Template
+# Used by generate-dac-docs and update-dac-docs tasks
+---
+template_type: readme
+dac_version: 1.0
+
+structure:
+  title: '{{PROJECT_NAME}}'
+  sections:
+    - what_is_this
+    - how_to_run_locally
+    - how_to_test
+    - documentation_link
+
+content_template: |
+  # {{PROJECT_NAME}}
+
+  ## What is this?
+
+  {{PROJECT_DESCRIPTION}}
+
+  **Type:** {{PROJECT_TYPE}}  
+  **Tech Stack:** {{TECH_STACK}}
+
+  ## How to run locally
+
+  ### Prerequisites
+
+  {{PREREQUISITES}}
+
+  ### Setup Steps
+
+  1. Clone the repository
+     ```bash
+     git clone {{REPO_URL}}
+     cd {{PROJECT_DIR}}
+     ```
+
+  2. Install dependencies
+     ```bash
+     {{INSTALL_COMMAND}}
+     ```
+
+  3. Configure environment
+     ```bash
+     {{ENV_SETUP_COMMAND}}
+     ```
+
+  4. Run the application
+     ```bash
+     {{RUN_COMMAND}}
+     ```
+
+  The application will be available at {{APP_URL}}.
+
+  ## How to test
+
+  Run tests using:
+
+  ```bash
+  {{TEST_COMMAND}}
+  ```
+
+  {{ADDITIONAL_TEST_INFO}}
+
+  ## Documentation
+
+  For comprehensive documentation, see [docs/index.md](docs/index.md).
+
+placeholders:
+  - name: PROJECT_NAME
+    description: Name of the project
+    required: true
+
+  - name: PROJECT_DESCRIPTION
+    description: Brief description of what the project does
+    required: true
+
+  - name: PROJECT_TYPE
+    description: frontend/backend/fullstack/microservice/library
+    required: true
+
+  - name: TECH_STACK
+    description: Main technologies (e.g., "Node.js, Express, PostgreSQL")
+    required: true
+
+  - name: PREREQUISITES
+    description: Required software/tools (e.g., "Node.js 18+, PostgreSQL 14+")
+    required: true
+
+  - name: REPO_URL
+    description: Git repository URL
+    required: false
+
+  - name: PROJECT_DIR
+    description: Project directory name
+    required: true
+
+  - name: INSTALL_COMMAND
+    description: Command to install dependencies (e.g., "npm install")
+    required: true
+
+  - name: ENV_SETUP_COMMAND
+    description: Environment setup command (e.g., "cp .env.example .env")
+    required: true
+
+  - name: RUN_COMMAND
+    description: Command to run the application
+    required: true
+
+  - name: APP_URL
+    description: Local application URL
+    required: true
+
+  - name: TEST_COMMAND
+    description: Command to run  tests
+    required: true
+
+  - name: ADDITIONAL_TEST_INFO
+    description: Additional testing information
+    required: false

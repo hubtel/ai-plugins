@@ -69,13 +69,81 @@ export async function copyTemplate(templateName, targetPath, replacements = {}, 
   return { path: targetPath, status: 'written' };
 }
 
-export async function buildFeatureListWithSprintPlanner(templateName, sprintPlanner, approvalMode = 'supervised') {
+/** Remote branch names treated as Hubtel integration targets (unordered discovery set). */
+export const INTEGRATION_BRANCH_NAMES = new Set(['dev', 'develop', 'development', 'staging']);
+
+/** Must never be stored or used as feature_list.integrationBranch / feature PR target. */
+export const FORBIDDEN_INTEGRATION_BRANCHES = new Set(['main', 'master']);
+
+/**
+ * Normalize a branch ref to a bare name (strip remotes / refs/heads/).
+ * @param {string} ref
+ * @returns {string}
+ */
+export function normalizeBranchName(ref) {
+  let name = String(ref || '').trim();
+  if (!name) return '';
+  name = name.replace(/^refs\/heads\//, '');
+  name = name.replace(/^remotes\//, '');
+  name = name.replace(/^(origin|upstream)\//, '');
+  return name;
+}
+
+/**
+ * List integration-convention remotes present in the repo (discovery set intersection).
+ * Does not fetch; caller should `git fetch --prune` first when resolving for scaffold.
+ * @param {string} repoRoot
+ * @returns {string[]} sorted unique bare branch names
+ */
+export function listIntegrationBranchCandidates(repoRoot) {
+  if (!repoRoot || !existsSync(path.join(repoRoot, '.git'))) return [];
+  const result = spawnSync('git', ['branch', '-r', '--format=%(refname:short)'], {
+    cwd: repoRoot,
+    encoding: 'utf8'
+  });
+  if (result.status !== 0) return [];
+  const found = new Set();
+  for (const line of String(result.stdout || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.includes('->')) continue;
+    const name = normalizeBranchName(trimmed);
+    if (INTEGRATION_BRANCH_NAMES.has(name)) found.add(name);
+  }
+  return [...found].sort();
+}
+
+/**
+ * Validate a proposed integrationBranch value for scaffold/upgrade.
+ * @param {string} value
+ * @returns {{ ok: true, name: string } | { ok: false, error: string }}
+ */
+export function assertIntegrationBranch(value) {
+  const name = normalizeBranchName(value);
+  if (!name) {
+    return { ok: false, error: '--integration-branch is required (bare name, e.g. development)' };
+  }
+  if (FORBIDDEN_INTEGRATION_BRANCHES.has(name)) {
+    return { ok: false, error: `integrationBranch must not be "${name}" (feature PRs never target main/master)` };
+  }
+  return { ok: true, name };
+}
+
+export async function buildFeatureListWithSprintPlanner(
+  templateName,
+  sprintPlanner,
+  approvalMode = 'supervised',
+  integrationBranch
+) {
   const parsed = JSON.parse(await readText(path.join(TEMPLATE_DIR, templateName)));
-  // Drop any template-provided approvalMode so the caller's choice wins and
-  // approvalMode stays the first key in the emitted file.
+  // Drop any template-provided keys so the caller's choices win and key order is stable.
   const rest = { ...parsed };
   delete rest.approvalMode;
-  const withBlock = { approvalMode, sprintPlanner, ...rest };
+  delete rest.integrationBranch;
+  const asserted = assertIntegrationBranch(integrationBranch);
+  if (!asserted.ok) {
+    throw new Error(asserted.error);
+  }
+  const withBlock = { approvalMode, integrationBranch: asserted.name, sprintPlanner, ...rest };
   return `${JSON.stringify(withBlock, null, 2)}\n`;
 }
 
@@ -1147,6 +1215,19 @@ export function validateFeatureList(parsed, options = {}) {
     warnings.push(`approvalMode "${parsed.approvalMode}" is not a known value (expected ${[...APPROVAL_MODES].join(' or ')}); treating as supervised`);
   }
 
+  // integrationBranch: preferred feature PR target. Soft-warn when missing (upgrade path).
+  // Never allow main/master — feature PRs must not target protected defaults.
+  if (parsed.integrationBranch === undefined || parsed.integrationBranch === null || !String(parsed.integrationBranch).trim()) {
+    warnings.push('integrationBranch missing — resolve at scaffold/upgrade (discovery set: dev, develop, development, staging) and set on feature_list.json; feature PRs must not target main/master');
+  } else {
+    const branchName = normalizeBranchName(String(parsed.integrationBranch));
+    if (FORBIDDEN_INTEGRATION_BRANCHES.has(branchName)) {
+      errors.push(`integrationBranch must not be "${branchName}" (feature PRs never target main/master)`);
+    } else if (branchName !== String(parsed.integrationBranch).trim()) {
+      warnings.push(`integrationBranch should be a bare name (got "${parsed.integrationBranch}"; prefer "${branchName}")`);
+    }
+  }
+
   // Azure tracking is mandatory: every harness must carry a well-formed sprintPlanner block.
   const sprintPlanner = parsed.sprintPlanner;
   if (sprintPlanner == null || typeof sprintPlanner !== 'object' || Array.isArray(sprintPlanner)) {
@@ -1444,6 +1525,8 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['feature_list.json', 'progress.md'], 'State artifacts routed from instructions'),
       textHas(agents, ['Task row before code', 'Feature row before code', 'feature_list.json'], 'Mandatory task row before code documented'),
       textHas(agents, ['Branch Discipline', 'users/<username>/feature', 'Feature branch before code'], 'Feature-branch discipline documented'),
+      textHas(agents, ['integrationBranch', 'dev', 'develop', 'development', 'staging'], 'Integration branch resolution documented'),
+      textHas(agents, ['Feature PRs never target'], 'Feature PR never targets main/master documented'),
       textHas(agents, ['Task status sync', 'update_task_status', 'in-progress → Active'], 'Azure in-progress status sync documented'),
       textHas(agents, ['Hubtel Engineering MCP', '@hubtel/engineering-mcp', 'hubtel-engineering'], 'Hubtel Engineering MCP dependency documented'),
       textHas(agents, ['get_guidelines_catalog', 'get_guideline'], 'Guidelines verification gate documented'),
@@ -1895,6 +1978,34 @@ export async function mergeApprovalModeIfMissing(featureListPath) {
   return { changed: true, previous: null };
 }
 
+/**
+ * Merge integrationBranch only when missing AND a validated value is supplied.
+ * Does not invent a default (unlike approvalMode → supervised).
+ * @param {string} featureListPath
+ * @param {string} integrationBranch
+ */
+export async function mergeIntegrationBranchIfMissing(featureListPath, integrationBranch) {
+  const parsed = JSON.parse(await readText(featureListPath));
+  if (Object.prototype.hasOwnProperty.call(parsed, 'integrationBranch')
+    && parsed.integrationBranch != null
+    && String(parsed.integrationBranch).trim()) {
+    return { changed: false, previous: parsed.integrationBranch };
+  }
+  const asserted = assertIntegrationBranch(integrationBranch);
+  if (!asserted.ok) {
+    return { changed: false, previous: null, error: asserted.error };
+  }
+  const { approvalMode, sprintPlanner, ...rest } = parsed;
+  const merged = {
+    ...(approvalMode !== undefined ? { approvalMode } : {}),
+    integrationBranch: asserted.name,
+    ...(sprintPlanner !== undefined ? { sprintPlanner } : {}),
+    ...rest
+  };
+  await writeText(featureListPath, `${JSON.stringify(merged, null, 2)}\n`);
+  return { changed: true, previous: null, name: asserted.name };
+}
+
 export async function writeHarnessManifest(target, { agentFile, version }) {
   const manifestPath = path.join(target, '.harness', 'manifest.json');
   const manifest = {
@@ -1936,15 +2047,23 @@ export async function buildUpgradePlan(target) {
   const currentManifest = await exists(manifestPath) ? await readJson(manifestPath) : null;
 
   let approvalModeMissing = false;
+  let integrationBranchMissing = false;
   try {
     const featureList = await readJson(activeFeatureListPath);
     approvalModeMissing = !Object.prototype.hasOwnProperty.call(featureList, 'approvalMode');
+    integrationBranchMissing = !Object.prototype.hasOwnProperty.call(featureList, 'integrationBranch')
+      || featureList.integrationBranch == null
+      || !String(featureList.integrationBranch).trim();
   } catch {
     approvalModeMissing = false;
+    integrationBranchMissing = false;
   }
 
   const willChange = [agentFile, '.harness/manifest.json', '.harness/telemetry/ (scaffold + gitignore)'];
   if (approvalModeMissing) willChange.push('feature_list.json (approvalMode merge)');
+  if (integrationBranchMissing) {
+    willChange.push('feature_list.json (integrationBranch — pass --integration-branch on --apply to merge)');
+  }
 
   return {
     isHarness: true,
@@ -1964,6 +2083,7 @@ export async function buildUpgradePlan(target) {
       summary: managedEdits.summary
     },
     approvalModeMissing,
+    integrationBranchMissing,
     willChange,
     renderedContent: composed.content,
     featureListPath: activeFeatureListPath,
