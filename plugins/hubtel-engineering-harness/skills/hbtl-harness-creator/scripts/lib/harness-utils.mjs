@@ -1574,7 +1574,7 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['Post-push pull request', 'repo_pull_request_write', 'Open a pull request?'], 'Post-push pull request documented'),
       textHas(agents, ['repo_pull_request_label', 'hbtl-harness'], 'Post-push PR label step documented'),
       textHas(agents, ['Documentation Gate', 'hbtl-dac-update', 'hbtl-dac-generate', 'Harness Documentation', 'Documentation gate'], 'Documentation gate documented'),
-      textHas(agents, ['Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback'], 'Usage telemetry documented'),
+      textHas(agents, ['Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'session.json', 'force-new-session'], 'Usage telemetry documented'),
       textHas(agents, ['hbtl-harness'], 'hbtl-harness label tagging documented'),
       textHas(agents, ['Closing report', 'evidence: commit'], 'Closing report status line documented'),
       textHas(agents, ['Invalid', 'commit'], 'Invalid verbose evidence examples documented')
@@ -1638,7 +1638,11 @@ export function scoreHarness(files, options = {}) {
     if (existsSync(gitignorePath)) {
       try {
         const gitignoreText = readFileSync(gitignorePath, 'utf8');
-        for (const entry of ['.harness/telemetry/usage.jsonl', '.harness/telemetry/shipped.offset']) {
+        for (const entry of [
+          '.harness/telemetry/usage.jsonl',
+          '.harness/telemetry/shipped.offset',
+          '.harness/telemetry/session.json'
+        ]) {
           if (!gitignoreText.split(/\r?\n/).some((line) => line.trim() === entry)) {
             warnings.push(`.gitignore should ignore ${entry} (harness usage telemetry)`);
           }
@@ -1808,7 +1812,7 @@ export async function copyFileSafe(source, target, { force = false } = {}) {
 
 // --- Harness upgrade -------------------------------------------------------
 // Per-repo upgrade refreshes the skill-owned instruction block while preserving
-// user content outside it. See HARNESS-UPGRADE-PLAN.md.
+// user content outside it.
 //
 // Marker contract (inverted from the early "user pocket" sketch):
 //   <!-- harness:managed:start --> … <!-- harness:managed:end -->

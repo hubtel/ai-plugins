@@ -21,7 +21,7 @@ Before writing code:
 8. If the message is implementation work, ensure you're on a compliant **feature branch** before editing code (see **Branch Discipline**)
 9. If the message is implementation work, add/activate a task row **before** editing code (see Request Triage)
 10. Review recent commits: `git log --oneline -5`
-11. **Usage telemetry — `session-start`** — pick one stable `sessionId` for **this entire chat** (e.g. `2026-09-15T11-00-00Z` from session start) and reuse it on **every** usage event until `session-end`. **Never** put `feat-NNN`, a feature title, or task ids in `sessionId` — one chat often covers multiple features; put the feature on `--feature-name` only. Soft obligation — never block startup on telemetry failure
+11. **Usage telemetry — `session-start`** — pick one stable `sessionId` for **this entire chat** (e.g. `2026-09-15T11-00-00Z` from session start), append `session-start` (writes `.harness/telemetry/session.json` lock), and reuse that id on **every** later usage event until `session-end`. **Never** put `feat-NNN`, a feature title, or task ids in `sessionId`. **Never** rotate the id mid-chat (append CLI overrides mismatches unless `--force-new-session`). Soft obligation — never block startup on telemetry failure
 
 If the baseline is failing, repair that first before adding new scope.
 
@@ -420,21 +420,24 @@ Resolve `scripts/` from the installed `hbtl-harness-creator` skill root (same co
 
 **Rules:**
 
-- `sessionId` — **chat-scoped, not feature-scoped.** One id for the whole agent chat; reuse on every append (`session-start` → `feature-started` → `feature-done` → `pr-opened` → `feedback` → `session-end`). Good: `2026-09-15T11-00-00Z`. Bad: `2026-09-15T11:00-feat-002`, `feat-001`, or any id that embeds a feature/task name. Multi-feature chats stay one session in the CCI sessions table; features are distinguished via `featureName`.
-- `featureName` — human-readable name from the plan's `name`/`title` (or breakdown title); `null` on session-level events. Prefer this over `featId` (do not put `featId` / `taskIds` / commit / PR ids in the usage row — and **never** smuggle them into `sessionId`).
+- `sessionId` — **chat-scoped, not feature-scoped.** One id for the whole agent chat; reuse on every append (`session-start` → `feature-started` → `feature-done` → `pr-opened` → `feedback` → `session-end`). Good: `2026-09-15T11-00-00Z`. Bad: `2026-09-15T11:00-feat-002`, `feat-001`, or any id that embeds a feature/task name. Multi-feature chats stay one session; features are distinguished via `featureName`.
+- **Session lock** — at `session-start`, the append CLI writes `.harness/telemetry/session.json` and **reuses that id** on later appends while a feature is in flight (a different `--session-id` is overridden). Survives ship clears; cleared on `session-end`. A new id rotates the lock only on `session-start` with no open feature, after 4h idle (abandoned chat), or with `--force-new-session`. **Never** invent a second session id mid-feature.
+- `featureName` — human-readable name from the plan's `name`/`title` (or breakdown title); `null` on session-level events. Prefer this over `featId` (do not put `featId` / `taskIds` / commit / PR ids in the usage row — and **never** smuggle them into `sessionId`). Use the **same** plan title string on `feature-started` and `feature-done`.
+- **`feature-started` once** — append at atomic start only. A second `feature-started` for the same session + featureName while it is still open (no `feature-done` yet) is **skipped** (soft-warn). After `feature-done`, a new cycle (rework) may start it again. Never re-fire start near `feature-done` / push / PR.
+- `duration-minutes` — optional on `feature-done`. When omitted, the append CLI **auto-fills** from the open `feature-started` `ts` for that session+feature. Prefer letting the CLI compute it; do not invent a guess.
 - `harnessVersion` — skill version from `hbtl-harness-creator` `metadata.json`; the append CLI stamps it automatically (do not invent).
 - `model` — only when `modelSource` is `runtime` or `stated`; otherwise `"unknown"`. **Never invent.**
 - `feedback` — after a successful PR cycle only (see **Cycle feedback**). Requires `--rating` 1–5; optional `--reason` for free-text comment. **Never invent a rating.**
 - `tasks-created` — after `harness_create_tasks` + rows. Pass `--task-count` = `data.succeededCount` (Azure tasks actually created / rows written with a `taskId`). **Never invent** a count; omit only if the create response is unavailable (soft-warn).
 - Telemetry failure must **never** block `done`, push, or PR.
-- Append each event **once** at its checkpoint. **Never** re-append `feature-done` after push or PR — P.12 is `pr-opened` (+ ship) only, then optional `feedback`.
+- Append each event **once** at its checkpoint — then **ship immediately** (do not batch catch-up starts at the end of a feature). **Never** re-append `feature-done` after push or PR — P.12 is `pr-opened` (+ ship) only, then optional `feedback`.
 - After append on `scaffold`, `plan-approved`, `tasks-created`, `feature-started`, `feature-done`, `session-end`, `pr-opened`, or `feedback`, best-effort ship:
 
 ```bash
 node scripts/ship-usage-telemetry.mjs --target .
 ```
 
-Ship POSTs to CCI-Frontend **`/api/harness-usage/events`** (durable Upstash store, service **`Hubtel-Harness`**) using the same Aqua Bearer as metrics (`aqua login`). Base URL: `HARNESS_USAGE_API_BASE` or default `https://code-confidence-index.hubtel.com`. Missing login / API errors → exit 0 (fail-open). On a **full successful ship**, local `usage.jsonl` and `shipped.offset` are **deleted** (the `.harness/telemetry/` folder remains). Never invoke Aqua as a ship conduit; never put `DD_API_KEY` in the client.
+Ship uses the same Aqua login as metrics (`aqua login`). Missing login / ship errors → exit 0 (fail-open); unshipped events stay in `usage.jsonl` for the next ship. On a **full successful ship**, local `usage.jsonl` and `shipped.offset` are **deleted** (the `.harness/telemetry/` folder remains).
 
 **Checkpoint map:** Scaffold (`create-harness.mjs`) → `scaffold` (+ ship); Startup → `session-start`; plan approval → `plan-approved` (+ ship); breakdown approval → `breakdown-approved`; after `harness_create_tasks` + rows → `tasks-created` with `--task-count` (+ ship); first task `in-progress` for a feature → **atomic start** `feature-started` (+ ship) **before any code**; feature commit + rows `done` → `feature-done` (+ ship); task/feature `blocked` → `blocked`; PR opened → `pr-opened` (+ ship) → **Cycle feedback**; End of Session → `session-end` (+ ship).
 
@@ -1112,7 +1115,7 @@ Run steps 1–10 as one unit, in order, **with a single sanctioned pause at step
 7. **Evidence** — set `evidence` to exactly `commit <hash>` using that rev-parse output (see **Evidence format**). Write the **same** hash on **every** row sharing the `featId`.
 8. **Validate** — run `validate-harness.mjs --target .` when available; don't set `done` if tier-1 fails (includes UI runtime artifact checks on UI rows at `verified`/`done`)
 9. **Status** — set `status` to `done` (every feature row together — all rows sharing the `featId`)
-10. **Sync and report** — update `progress.md` to match (same status + hash), then send the **post-done message** (see **Post-done message**). The response **must** end with exactly **one** closing report line — feature-scoped. **Usage telemetry:** append `feature-done` with `--feature-name` from the plan, then best-effort `node scripts/ship-usage-telemetry.mjs --target .` (see **Usage telemetry**). **Soft guard:** if this chat never appended `feature-started` for the same `--feature-name` (missed atomic start), soft-warn in the turn notes / `progress.md` — do **not** invent a backdated `feature-started` ts; still ship `feature-done`. In `autopilot`, continue into the push/PR sequence after this — do **not** append `feature-done` again at P.12.
+10. **Sync and report** — update `progress.md` to match (same status + hash), then send the **post-done message** (see **Post-done message**). The response **must** end with exactly **one** closing report line — feature-scoped. **Usage telemetry:** append `feature-done` with the **same** `--feature-name` used at atomic start (CLI auto-fills `--duration-minutes` from the first `feature-started` when omitted), then best-effort `node scripts/ship-usage-telemetry.mjs --target .` (see **Usage telemetry**). **Do not** re-append `feature-started` here. **Soft guard:** if this chat never appended `feature-started` for the same `--feature-name` (missed atomic start), soft-warn in the turn notes / `progress.md` — do **not** invent a backdated `feature-started` ts; still ship `feature-done`. In `autopilot`, continue into the push/PR sequence after this — do **not** append `feature-done` again at P.12.
 
 While `in-progress` or `verified`: leave `evidence` empty; test output belongs in `progress.md` only.
 

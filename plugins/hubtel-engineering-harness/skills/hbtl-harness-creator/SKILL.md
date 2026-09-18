@@ -180,7 +180,7 @@ Every harness depends on the **Hubtel Azure DevOps MCP** (`hubtel-azure-devops`)
 - **On-demand PR/CI queries** — when the user asks about PR/CI state: `repo_pull_request`, reviewers, threads, `pipelines_build` / timeline / logs. **Not** lifecycle-gated (never gate startup, commit, push, or `done`).
 - **Auth** — `mcp_auth` when not signed in; retry once on auth errors; no script substitute.
 
-See `templates/agents.md` → **Hubtel Azure DevOps MCP** and `AZURE-DEVOPS-MCP-INTEGRATION.md`.
+See `templates/agents.md` → **Hubtel Azure DevOps MCP**.
 
 ### Post-push pull request (`repo_pull_request_write`)
 
@@ -250,7 +250,7 @@ Report the five subsystem scores, the lowest-scoring area, and the first 2-3 cha
 
 ### Upgrade an existing harness
 
-Use this when a live repo already has a harness and you want it on the current skill version — new instructions and MCP wiring — **without** losing tasks, Azure `taskId`s, `sprintPlanner`, plans, or session progress. This is **not** `create-harness --force` (which resets `feature_list.json` and `progress.md`). See `HARNESS-UPGRADE-PLAN.md` for the full spec.
+Use this when a live repo already has a harness and you want it on the current skill version — new instructions and MCP wiring — **without** losing tasks, Azure `taskId`s, `sprintPlanner`, plans, or session progress. This is **not** `create-harness --force` (which resets `feature_list.json` and `progress.md`).
 
 **Prerequisite:** the global `hbtl-harness-creator` skill is already at the target version (sync it first). Then, per repo:
 
@@ -290,7 +290,7 @@ node scripts/append-usage-event.mjs --target /path/to/project --event feature-do
 node scripts/ship-usage-telemetry.mjs --target /path/to/project
 ```
 
-Local JSONL: `.harness/telemetry/usage.jsonl` (gitignored). Each row includes `harnessVersion` (skill `metadata.json`). **`sessionId` is chat-scoped** (one id for the whole agent chat — never embed `feat-NNN`); put the feature on `--feature-name`. On `tasks-created`, pass `--task-count` from `harness_create_tasks` `succeededCount`. **Atomic start:** on first task `in-progress`, append + ship `feature-started` **before any code** (both modes; critical in `autopilot` where there is no where-to-start ask). Ship POSTs to CCI-Frontend `/api/harness-usage/events` (durable Upstash; `service: Hubtel-Harness`) with Aqua Bearer — fail-open; on full success deletes `usage.jsonl` + `shipped.offset` (folder kept). Base: `HARNESS_USAGE_API_BASE` (default `https://code-confidence-index.hubtel.com`). Ship after append on `scaffold` / `plan-approved` / `tasks-created` / `feature-started` / `feature-done` / `session-end` / `pr-opened` / `feedback` (never re-append `feature-done` at P.12 — that step is `pr-opened` only). **Cycle feedback** after `delivered`: copy the pinned AskUserQuestion `elicitationForm` (1–5) **verbatim** when available, else Markdown soft-ask verbatim; dismiss/silence = decline. Schema: `references/usage-telemetry.schema.json`. Backend: `references/usage-events-backend-requirements.md`. Instructions: `templates/agents.md` → **Usage telemetry** / **Cycle feedback**.
+Local JSONL: `.harness/telemetry/usage.jsonl` (gitignored). Each row includes `harnessVersion` (skill `metadata.json`). **`sessionId` is chat-scoped** (one id for the whole agent chat — never embed `feat-NNN`); put the feature on `--feature-name`. **`session.json`** locks the chat id at `session-start` (survives ship; cleared on `session-end`); a different id is overridden while a feature is open, and rotates on `session-start` with nothing in flight, after 4h idle, or with `--force-new-session`. **`feature-started` is idempotent** per session+featureName while open (duplicates skipped; `feature-done` closes it so rework can restart). On `feature-done`, duration auto-fills from the open start `ts` when `--duration-minutes` is omitted. On `tasks-created`, pass `--task-count` from `harness_create_tasks` `succeededCount`. **Atomic start:** on first task `in-progress`, append + ship `feature-started` **before any code** (both modes; critical in `autopilot` where there is no where-to-start ask). Ship uses the Aqua login — fail-open; on full success deletes `usage.jsonl` + `shipped.offset` (folder + `session.json` kept). Ship after append on `scaffold` / `plan-approved` / `tasks-created` / `feature-started` / `feature-done` / `session-end` / `pr-opened` / `feedback` (never re-append `feature-done` at P.12 — that step is `pr-opened` only). **Cycle feedback** after `delivered`: copy the pinned AskUserQuestion `elicitationForm` (1–5) **verbatim** when available, else Markdown soft-ask verbatim; dismiss/silence = decline. Schema: `references/usage-telemetry.schema.json`. Instructions: `templates/agents.md` → **Usage telemetry** / **Cycle feedback**. Gotcha #49.
 
 ## When to Read References
 
@@ -304,8 +304,6 @@ Load only the reference needed for the user's problem:
 - Hooks, startup, long-running work: [Lifecycle & Bootstrap](references/lifecycle-bootstrap-pattern.md)
 - Non-obvious failure modes: [Gotchas](references/gotchas.md)
 - Usage telemetry event schema: [usage-telemetry.schema.json](references/usage-telemetry.schema.json)
-- Upgrading a live harness to a new skill version: [HARNESS-UPGRADE-PLAN.md](HARNESS-UPGRADE-PLAN.md)
-- Usage telemetry design: [HARNESS-USAGE-TELEMETRY-PLAN.md](HARNESS-USAGE-TELEMETRY-PLAN.md)
 - Change history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Design Rules

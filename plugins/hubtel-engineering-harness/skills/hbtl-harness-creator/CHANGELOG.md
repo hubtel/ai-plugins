@@ -5,6 +5,16 @@ All notable changes to `hbtl-harness-creator` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [2.6.6] - 2026-09-18
+
+### Fixed
+
+- **Usage event firing that collapsed CCI feature times.** Append path now locks chat `sessionId` in `.harness/telemetry/session.json` (survives ship; cleared on `session-end`; overrides a mismatched id while a feature is open; rotates on `session-start` with nothing in flight, after 4h idle, or with `--force-new-session` so separate chats are never merged), skips duplicate `feature-started` for the same session+featureName while open (`feature-done` closes it so rework can restart), and auto-fills `durationMinutes` on `feature-done` from the open start `ts` when omitted. AGENTS/SKILL tell agents to ship immediately per checkpoint and never re-fire start near done. Gotcha #49.
+
+### Removed
+
+- **`scripts/lib/datadog-usage.mjs`** — unused since ship moved to the durable usage API; dropped from `metadata.json`. Telemetry instructions no longer name the ship destination or the obsolete Aqua-conduit / `DD_API_KEY` rules.
+
 ## [2.6.5] - 2026-09-17
 
 ### Added

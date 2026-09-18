@@ -8,7 +8,7 @@
 // accumulated state (tasks, taskIds, sprintPlanner, progress, plans, init.mjs).
 // Runs install-mcps.mjs, merges a missing approvalMode, merges integrationBranch
 // when missing and --integration-branch is passed, and stamps
-// .harness/manifest.json with the skill version. See HARNESS-UPGRADE-PLAN.md.
+// .harness/manifest.json with the skill version.
 //
 // Plan mode (default, no --apply): validates the harness and prints a gap
 // report — no writes. Apply mode (--apply): performs the full, all-or-nothing

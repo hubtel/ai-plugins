@@ -476,7 +476,7 @@ registry.register('shell', {
 
 **Cause**: `create-harness --force` is a **destructive re-scaffold**: it overwrites `AGENTS.md`, `progress.md`, `init.mjs`, and **resets `feature_list.json` to the placeholder**. It exists for greenfield or a deliberate reset — not for updating a repo that already has accumulated state. Refreshing skill instructions is a different operation.
 
-**Fix**: Use **`upgrade-harness.mjs`** instead. Run it with no `--apply` first to see the plan, confirm with the engineer via an `elicitationForm`, then `--apply`. Upgrade **preserves** `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, `.harness/plans/`, and any `AGENTS.md` content **outside** `<!-- harness:managed:start/end -->`; it refreshes only the skill-owned managed block, merges `approvalMode` if missing, installs MCPs, and stamps `.harness/manifest.json`. Reserve `--force` for an intentional wipe. See SKILL.md → **Upgrade an existing harness** and `HARNESS-UPGRADE-PLAN.md`.
+**Fix**: Use **`upgrade-harness.mjs`** instead. Run it with no `--apply` first to see the plan, confirm with the engineer via an `elicitationForm`, then `--apply`. Upgrade **preserves** `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, `.harness/plans/`, and any `AGENTS.md` content **outside** `<!-- harness:managed:start/end -->`; it refreshes only the skill-owned managed block, merges `approvalMode` if missing, installs MCPs, and stamps `.harness/manifest.json`. Reserve `--force` for an intentional wipe. See SKILL.md → **Upgrade an existing harness**.
 
 ---
 
@@ -543,7 +543,17 @@ Same turn; both modes. No skip command — dismissed form, silence, or no clear 
 
 **Cause**: Clone leaves HEAD on the default branch (often `master`). Branch Discipline correctly forks the feature branch off the **current base**, but older instructions inferred PR target from that base or from a preference-order fallback that still landed on `master`. Create base ≠ PR target.
 
-**Fix**: Resolve **`integrationBranch` at scaffold** (step 5b): `git fetch --prune`, discover remotes in `{dev, develop, development, staging}` (unordered set), use the sole match or ask when zero/many — never `main`/`master`. Persist on `feature_list.json`. P.10 and DAC `--target-branch` read that field (re-resolve if stale). **Feature PRs never target** `main` or `master`. Hotfix → `main`/`master` unchanged. See `templates/agents.md` → **Branch Discipline** / Post-push pull request, `SKILL.md` → Create a harness step 5b, and `INTEGRATION-BRANCH-PLAN.md`.
+**Fix**: Resolve **`integrationBranch` at scaffold** (step 5b): `git fetch --prune`, discover remotes in `{dev, develop, development, staging}` (unordered set), use the sole match or ask when zero/many — never `main`/`master`. Persist on `feature_list.json`. P.10 and DAC `--target-branch` read that field (re-resolve if stale). **Feature PRs never target** `main` or `master`. Hotfix → `main`/`master` unchanged. See `templates/agents.md` → **Branch Discipline** / Post-push pull request, and `SKILL.md` → Create a harness step 5b.
+
+---
+
+## 49. Usage Feature Time Collapses (Duplicate Start / Rotated `sessionId`)
+
+**Symptom**: CCI avg feature time shows &lt;1–2 minutes for work that took much longer. Live examples: duplicate `feature-started` minutes before `feature-done` (same session), or a new `sessionId` mid-chat so the early start never pairs with done.
+
+**Cause**: Agents re-fired `feature-started` near delivery, invented a second chat `sessionId`, and/or delayed append so `ts` was near done. CCI pairs last start→done per session+featureName; `durationMinutes` was usually null.
+
+**Fix**: Persist chat id in `.harness/telemetry/session.json` at `session-start`; the append CLI overrides a mismatched id while a feature is open. It rotates on `session-start` with nothing in flight, after 4h idle (agents rarely send `session-end`), or with `--force-new-session` — so separate chats are never merged. Skip duplicate `feature-started` for the same session+featureName while open; `feature-done` closes it so rework can restart. Auto-fill `--duration-minutes` on `feature-done` from the open start `ts`. Ship immediately at each checkpoint — never catch-up a late start. See `templates/agents.md` → **Usage telemetry**.
 
 ---
 

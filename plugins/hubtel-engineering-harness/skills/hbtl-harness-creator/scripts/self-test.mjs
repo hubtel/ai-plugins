@@ -1335,7 +1335,7 @@ try {
     }
   }
   const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
-  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'Hubtel-Harness', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue']) {
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue', 'session.json', 'force-new-session']) {
     if (!agentsTemplate.includes(marker)) {
       throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
     }
@@ -1392,7 +1392,7 @@ try {
     // ENOENT → shipped and cleared; acceptable.
   }
   const scaffoldGitignore = await readFile(path.join(tempRoot, '.gitignore'), 'utf8');
-  for (const entry of ['.harness/telemetry/usage.jsonl', '.harness/telemetry/shipped.offset']) {
+  for (const entry of ['.harness/telemetry/usage.jsonl', '.harness/telemetry/shipped.offset', '.harness/telemetry/session.json']) {
     if (!scaffoldGitignore.split(/\r?\n/).some((line) => line.trim() === entry)) {
       throw new Error(`create-harness.mjs must add ${entry} to .gitignore`);
     }
@@ -1419,10 +1419,64 @@ try {
         encoding: 'utf8'
       });
     }
+
+    const sessionStart = runNode(appendScript, [
+      '--target', usageRoot,
+      '--event', 'session-start',
+      '--session-id', 'test-session-1',
+      '--client', 'cursor'
+    ]);
+    if (sessionStart.status !== 0) {
+      throw new Error(`append-usage-event session-start failed: ${sessionStart.stderr || sessionStart.stdout}`);
+    }
+    const sessionPath = path.join(usageRoot, '.harness', 'telemetry', 'session.json');
+    const sessionLock = JSON.parse(await readFile(sessionPath, 'utf8'));
+    if (sessionLock.sessionId !== 'test-session-1') {
+      throw new Error(`session.json should lock test-session-1 — got ${JSON.stringify(sessionLock)}`);
+    }
+
+    const featureStart = runNode(appendScript, [
+      '--target', usageRoot,
+      '--event', 'feature-started',
+      '--session-id', 'test-session-1',
+      '--client', 'cursor',
+      '--feature-name', 'OTP verification on checkout'
+    ]);
+    if (featureStart.status !== 0) {
+      throw new Error(`append-usage-event feature-started failed: ${featureStart.stderr || featureStart.stdout}`);
+    }
+    const dupStart = runNode(appendScript, [
+      '--target', usageRoot,
+      '--event', 'feature-started',
+      '--session-id', 'test-session-1',
+      '--client', 'cursor',
+      '--feature-name', 'OTP verification on checkout'
+    ]);
+    if (dupStart.status !== 0) {
+      throw new Error(`duplicate feature-started should exit 0 (skip) — got ${dupStart.status}: ${dupStart.stderr || dupStart.stdout}`);
+    }
+    if (!/Skipped feature-started/i.test(dupStart.stdout || '')) {
+      throw new Error(`duplicate feature-started should print Skipped — got: ${dupStart.stdout}`);
+    }
+
+    const wrongSession = runNode(appendScript, [
+      '--target', usageRoot,
+      '--event', 'tasks-created',
+      '--session-id', 'totally-different-session',
+      '--client', 'cursor',
+      '--task-count', '7'
+    ]);
+    if (wrongSession.status !== 0) {
+      throw new Error(`append with mismatched sessionId failed: ${wrongSession.stderr || wrongSession.stdout}`);
+    }
+
+    // Small delay so auto durationMinutes is > 0
+    await new Promise((r) => setTimeout(r, 50));
+
     const append = runNode(appendScript, [
       '--target', usageRoot,
       '--event', 'feature-done',
-      '--session-id', 'test-session-1',
+      '--session-id', 'should-be-overridden',
       '--client', 'cursor',
       '--feature-name', 'OTP verification on checkout',
       '--turns', '3'
@@ -1432,9 +1486,20 @@ try {
     }
     const jsonlPath = path.join(usageRoot, '.harness', 'telemetry', 'usage.jsonl');
     const jsonl = await readFile(jsonlPath, 'utf8');
-    const row = JSON.parse(jsonl.trim().split('\n')[0]);
+    const lines = jsonl.trim().split('\n').map((l) => JSON.parse(l));
+    const startedRows = lines.filter((r) => r.event === 'feature-started');
+    if (startedRows.length !== 1) {
+      throw new Error(`expected exactly one feature-started row, got ${startedRows.length}`);
+    }
+    const row = lines.filter((r) => r.event === 'feature-done').at(-1);
     if (row.event !== 'feature-done' || row.featureName !== 'OTP verification on checkout') {
       throw new Error(`append-usage-event wrote unexpected row: ${JSON.stringify(row)}`);
+    }
+    if (row.sessionId !== 'test-session-1') {
+      throw new Error(`feature-done should use locked sessionId test-session-1 — got ${row.sessionId}`);
+    }
+    if (typeof row.durationMinutes !== 'number' || row.durationMinutes < 0) {
+      throw new Error(`feature-done should auto-fill durationMinutes — got ${JSON.stringify(row.durationMinutes)}`);
     }
     if (row.model !== 'unknown' || row.modelSource !== 'unknown') {
       throw new Error('append-usage-event should default model/modelSource to unknown');
@@ -1446,20 +1511,67 @@ try {
       throw new Error('append-usage-event should set repoName');
     }
 
-    const appendTasks = runNode(appendScript, [
-      '--target', usageRoot,
-      '--event', 'tasks-created',
-      '--session-id', 'test-session-1',
-      '--client', 'cursor',
-      '--task-count', '7'
-    ]);
-    if (appendTasks.status !== 0) {
-      throw new Error(`append-usage-event tasks-created failed: ${appendTasks.stderr || appendTasks.stdout}`);
+    const taskRow = lines.filter((r) => r.event === 'tasks-created').at(-1);
+    if (taskRow.event !== 'tasks-created' || taskRow.taskCount !== 7 || taskRow.sessionId !== 'test-session-1') {
+      throw new Error(`append-usage-event tasks-created missing taskCount/session lock: ${JSON.stringify(taskRow)}`);
     }
-    const jsonlAfterTasks = await readFile(jsonlPath, 'utf8');
-    const taskRow = JSON.parse(jsonlAfterTasks.trim().split('\n').at(-1));
-    if (taskRow.event !== 'tasks-created' || taskRow.taskCount !== 7) {
-      throw new Error(`append-usage-event tasks-created missing taskCount: ${JSON.stringify(taskRow)}`);
+
+    // Session lock lifecycle: rework in the same chat, a new chat, a mid-feature
+    // session-start (override), and an abandoned (stale) lock (rotate).
+    {
+      const lockRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-usage-lock-'));
+      const lockSessionPath = path.join(lockRoot, '.harness', 'telemetry', 'session.json');
+      const feat = 'Logo upload';
+      const ap = (event, sessionId, extra = []) => {
+        const res = runNode(appendScript, ['--target', lockRoot, '--event', event, '--session-id', sessionId, ...extra]);
+        if (res.status !== 0) {
+          throw new Error(`append-usage-event ${event} (${sessionId}) failed: ${res.stderr || res.stdout}`);
+        }
+        return res;
+      };
+      const lockRows = async () =>
+        (await readFile(path.join(lockRoot, '.harness', 'telemetry', 'usage.jsonl'), 'utf8'))
+          .trim().split('\n').map((l) => JSON.parse(l));
+
+      ap('session-start', 'chat-1');
+      ap('feature-started', 'chat-1', ['--feature-name', feat]);
+      ap('feature-done', 'chat-1', ['--feature-name', feat]);
+      const rework = ap('feature-started', 'chat-1', ['--feature-name', feat]);
+      if (/Skipped/i.test(rework.stdout || '')) {
+        throw new Error('feature-started after feature-done (rework) must not be skipped');
+      }
+      ap('feature-done', 'chat-1', ['--feature-name', feat]);
+
+      // New chat, no session-end, nothing in flight → rotates.
+      ap('session-start', 'chat-2');
+      ap('feature-started', 'chat-2', ['--feature-name', feat]);
+      let rows = await lockRows();
+      const chat2Start = rows.filter((r) => r.event === 'feature-started').at(-1);
+      if (chat2Start.sessionId !== 'chat-2') {
+        throw new Error(`session-start with no open feature should rotate to chat-2 — got ${chat2Start.sessionId}`);
+      }
+
+      // Mid-feature session-start with a new id → overridden (incident B).
+      ap('session-start', 'chat-3');
+      ap('feature-done', 'chat-3', ['--feature-name', feat]);
+      rows = await lockRows();
+      const midDone = rows.filter((r) => r.event === 'feature-done').at(-1);
+      if (midDone.sessionId !== 'chat-2' || typeof midDone.durationMinutes !== 'number') {
+        throw new Error(`mid-feature session-start should keep chat-2 and pair duration — got ${JSON.stringify(midDone)}`);
+      }
+
+      // Abandoned lock with an open feature → a new id rotates once idle.
+      ap('feature-started', 'chat-2', ['--feature-name', 'Other feature']);
+      const lock = JSON.parse(await readFile(lockSessionPath, 'utf8'));
+      lock.lastEventAt = new Date(Date.now() - 5 * 60 * 60_000).toISOString();
+      await writeFile(lockSessionPath, JSON.stringify(lock));
+      ap('feature-started', 'chat-4', ['--feature-name', 'Other feature']);
+      rows = await lockRows();
+      const staleStart = rows.filter((r) => r.event === 'feature-started').at(-1);
+      if (staleStart.sessionId !== 'chat-4') {
+        throw new Error(`stale session lock should rotate to chat-4 — got ${staleStart.sessionId}`);
+      }
+      await rm(lockRoot, { recursive: true, force: true });
     }
 
     // Force a dead API host so ship fail-opens without depending on local CCI.
@@ -1478,7 +1590,7 @@ try {
       throw new Error('ship-usage-telemetry must not clear usage.jsonl when the usage API submit fails or is skipped');
     }
 
-    // clearShippedUsageLocal removes buffer files but keeps the telemetry dir.
+    // clearShippedUsageLocal removes buffer files but keeps the telemetry dir + session.json.
     const { clearShippedUsageLocal, usageTelemetryDir } = await import('./lib/usage-telemetry.mjs');
     await clearShippedUsageLocal(usageRoot);
     let clearedGone = false;
@@ -1489,6 +1601,17 @@ try {
     }
     if (!clearedGone) {
       throw new Error('clearShippedUsageLocal should remove usage.jsonl');
+    }
+    try {
+      const lockAfterClear = JSON.parse(await readFile(sessionPath, 'utf8'));
+      if (lockAfterClear.sessionId !== 'test-session-1') {
+        throw new Error('clearShippedUsageLocal must keep session.json');
+      }
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw new Error('clearShippedUsageLocal must keep session.json');
+      }
+      throw error;
     }
     try {
       await readFile(path.join(usageTelemetryDir(usageRoot), '.gitkeep'), 'utf8');

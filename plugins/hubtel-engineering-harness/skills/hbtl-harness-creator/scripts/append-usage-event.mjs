@@ -30,13 +30,14 @@ Options:
   --role ROLE            main | harness-planner | harness-documentation (default: main)
   --turns N
   --clarification-rounds N
-  --duration-minutes N
+  --duration-minutes N   Optional on feature-done; auto-filled from first feature-started when omitted
   --task-count N         tasks-created: Azure tasks actually created (>= 1)
   --manual-takeover      Flag when human took over
   --reason TAG           Short tag (blocked) or optional feedback comment
   --rating N             Required for feedback: integer 1–5
+  --force-new-session    Rotate chat session lock (default: reuse .harness/telemetry/session.json)
 
-Exit codes: 0 success; 1 invalid args / write failure.`);
+Exit codes: 0 success (including skipped duplicates); 1 invalid args / write failure.`);
   process.exit(0);
 }
 
@@ -64,8 +65,15 @@ try {
     taskCount: args.taskCount,
     manualTakeover: Boolean(args.manualTakeover),
     reason: args.reason,
-    rating: args.rating
+    rating: args.rating,
+    forceNewSession: Boolean(args.forceNewSession)
   });
+  if (written?.skipped) {
+    console.log(
+      `Skipped ${event} (${written.reason}) — session ${written.sessionId || sessionId}`
+    );
+    process.exit(0);
+  }
   const rel = path.relative(target, usageJsonlPath(target)) || usageJsonlPath(target);
   console.log(`Appended ${written.event} → ${rel}`);
   process.exit(0);

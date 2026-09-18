@@ -1,6 +1,6 @@
 {
   "name": "hbtl-harness-creator",
-  "version": "2.6.5",
+  "version": "2.6.6",
   "description": "Harness engineering for AI coding agents — five subsystems, memory persistence, session continuity, verification workflows, scope control, lifecycle management.",
   "license": "MIT",
   "author": "Learn Harness Engineering",
@@ -62,7 +62,6 @@
       "scripts/lib/metrics-utils.mjs",
       "scripts/lib/azure-devops.mjs",
       "scripts/lib/usage-telemetry.mjs",
-      "scripts/lib/datadog-usage.mjs",
       "scripts/lib/cci-usage-api.mjs"
     ],
     "assets": [],

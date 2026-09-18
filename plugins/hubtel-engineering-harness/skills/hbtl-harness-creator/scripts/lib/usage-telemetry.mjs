@@ -10,9 +10,17 @@ export const USAGE_SCHEMA_VERSION = 1;
 export const USAGE_TELEMETRY_DIR = path.join('.harness', 'telemetry');
 export const USAGE_JSONL_FILE = 'usage.jsonl';
 export const USAGE_SHIPPED_OFFSET_FILE = 'shipped.offset';
+/** Chat-scoped session lock — survives ship clears; cleared on session-end. */
+export const USAGE_SESSION_FILE = 'session.json';
+/**
+ * A lock with no appends for this long is treated as an abandoned chat (agents
+ * rarely emit session-end), so a new sessionId rotates instead of being overridden.
+ */
+export const USAGE_SESSION_IDLE_MINUTES = 240;
 export const USAGE_GITIGNORE_ENTRIES = [
   '.harness/telemetry/usage.jsonl',
-  '.harness/telemetry/shipped.offset'
+  '.harness/telemetry/shipped.offset',
+  '.harness/telemetry/session.json'
 ];
 
 export const USAGE_EVENTS = Object.freeze([
@@ -90,6 +98,74 @@ export function usageJsonlPath(repoRoot) {
 
 export function usageShippedOffsetPath(repoRoot) {
   return path.join(usageTelemetryDir(repoRoot), USAGE_SHIPPED_OFFSET_FILE);
+}
+
+export function usageSessionPath(repoRoot) {
+  return path.join(usageTelemetryDir(repoRoot), USAGE_SESSION_FILE);
+}
+
+export function normalizeFeatureKey(featureName) {
+  if (featureName === undefined || featureName === null) return '';
+  return String(featureName).trim().toLowerCase();
+}
+
+/**
+ * `featuresStarted` holds only open features (started, not yet done).
+ * @returns {Promise<{ sessionId: string, startedAt: string, lastEventAt: string, featuresStarted: Record<string, { ts: string, featureName: string }> } | null>}
+ */
+export async function readUsageSession(repoRoot) {
+  const filePath = usageSessionPath(repoRoot);
+  if (!(await exists(filePath))) return null;
+  try {
+    const raw = JSON.parse(await readFile(filePath, 'utf8'));
+    if (!raw || typeof raw.sessionId !== 'string' || !raw.sessionId.trim()) return null;
+    const startedAt =
+      typeof raw.startedAt === 'string' && raw.startedAt.trim()
+        ? raw.startedAt.trim()
+        : new Date().toISOString();
+    return {
+      sessionId: String(raw.sessionId).trim(),
+      startedAt,
+      // Pre-2.6.6 locks have no lastEventAt; fall back to startedAt.
+      lastEventAt:
+        typeof raw.lastEventAt === 'string' && raw.lastEventAt.trim()
+          ? raw.lastEventAt.trim()
+          : startedAt,
+      featuresStarted:
+        raw.featuresStarted && typeof raw.featuresStarted === 'object'
+          ? raw.featuresStarted
+          : {}
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** True when the lock has been idle past USAGE_SESSION_IDLE_MINUTES (or has an unreadable ts). */
+export function isUsageSessionStale(session, nowMs = Date.now()) {
+  const lastMs = Date.parse(session?.lastEventAt || session?.startedAt || '');
+  if (Number.isNaN(lastMs)) return true;
+  return nowMs - lastMs > USAGE_SESSION_IDLE_MINUTES * 60_000;
+}
+
+export async function writeUsageSession(repoRoot, session) {
+  await mkdir(usageTelemetryDir(repoRoot), { recursive: true });
+  const payload = {
+    sessionId: session.sessionId,
+    startedAt: session.startedAt || new Date().toISOString(),
+    lastEventAt: session.lastEventAt || session.startedAt || new Date().toISOString(),
+    featuresStarted: session.featuresStarted || {}
+  };
+  await writeText(usageSessionPath(repoRoot), `${JSON.stringify(payload, null, 2)}\n`);
+  return payload;
+}
+
+export async function clearUsageSession(repoRoot) {
+  try {
+    await unlink(usageSessionPath(repoRoot));
+  } catch (error) {
+    if (error && error.code !== 'ENOENT') throw error;
+  }
 }
 
 export function resolveRepoIdentity(repoRoot) {
@@ -240,15 +316,139 @@ export function buildUsageEvent(partial, defaults) {
   };
 }
 
+/**
+ * Append one usage event. Enforces chat session lock + idempotent feature-started.
+ * @returns {Promise<object>} Written event, or `{ skipped: true, reason, ... }` when a duplicate is suppressed.
+ */
 export async function appendUsageEvent(repoRoot, partial) {
   const identity = resolveRepoIdentity(repoRoot);
   const approvalMode = await readApprovalMode(repoRoot);
-  const event = buildUsageEvent(partial, { ...identity, approvalMode });
+  const forceNewSession = partial.forceNewSession === true;
+  const eventName = String(partial.event || '').trim();
+  let locked = forceNewSession ? null : await readUsageSession(repoRoot);
+  let resolvedSessionId = normalizeOptionalString(partial.sessionId);
+
+  if (locked?.sessionId && resolvedSessionId && resolvedSessionId !== locked.sessionId) {
+    // A different id is a new chat when the lock is abandoned (idle past the
+    // window — agents rarely emit session-end), or when session-start arrives
+    // with no feature in flight. Otherwise it is a mid-work rotation: override.
+    const stale = isUsageSessionStale(locked);
+    const hasOpenFeature = Object.keys(locked.featuresStarted || {}).length > 0;
+    if (stale || (eventName === 'session-start' && !hasOpenFeature)) {
+      locked = null;
+    } else {
+      console.warn(
+        `usage-telemetry: overriding sessionId "${resolvedSessionId}" → locked "${locked.sessionId}" (pass --force-new-session to rotate)`
+      );
+      resolvedSessionId = locked.sessionId;
+    }
+  } else if (locked?.sessionId && !resolvedSessionId) {
+    resolvedSessionId = locked.sessionId;
+  }
+
+  if (!resolvedSessionId) {
+    const err = new Error('sessionId is required');
+    err.code = 'BAD_USAGE_EVENT';
+    throw err;
+  }
+
+  const featureName = normalizeOptionalString(partial.featureName);
+  const featureKey = normalizeFeatureKey(featureName);
+
+  // Open start for this session+feature (lock first; JSONL covers a missing lock).
+  const openStart =
+    featureKey && (eventName === 'feature-started' || eventName === 'feature-done')
+      ? locked?.featuresStarted?.[featureKey] ||
+        (await findOpenFeatureStartInJsonl(repoRoot, resolvedSessionId, featureKey))
+      : null;
+
+  // Idempotent feature-started while the feature is open (same chat session + featureName).
+  if (eventName === 'feature-started' && featureKey) {
+    const prior = openStart;
+    if (prior) {
+      console.warn(
+        `usage-telemetry: feature-started already recorded for "${featureName || featureKey}" in session ${resolvedSessionId} — skipping duplicate`
+      );
+      return {
+        skipped: true,
+        reason: 'duplicate-feature-started',
+        sessionId: resolvedSessionId,
+        featureName: featureName || prior.featureName || null,
+        priorTs: prior.ts || null
+      };
+    }
+  }
+
+  // Auto durationMinutes on feature-done from first start ts when omitted.
+  let durationMinutes = partial.durationMinutes;
+  if (
+    eventName === 'feature-done' &&
+    (durationMinutes === undefined ||
+      durationMinutes === null ||
+      durationMinutes === '') &&
+    featureKey
+  ) {
+    const startMeta = openStart;
+    if (startMeta?.ts) {
+      const startMs = Date.parse(startMeta.ts);
+      const doneMs = partial.ts ? Date.parse(partial.ts) : Date.now();
+      if (!Number.isNaN(startMs) && !Number.isNaN(doneMs) && doneMs >= startMs) {
+        durationMinutes = Number(((doneMs - startMs) / 60_000).toFixed(4));
+      }
+    } else {
+      console.warn(
+        `usage-telemetry: feature-done without a prior feature-started for "${featureName || featureKey}" — durationMinutes left null`
+      );
+    }
+  }
+
+  const event = buildUsageEvent(
+    { ...partial, sessionId: resolvedSessionId, durationMinutes },
+    { ...identity, approvalMode }
+  );
   const dir = usageTelemetryDir(repoRoot);
   await mkdir(dir, { recursive: true });
   const line = `${JSON.stringify(event)}\n`;
   await appendFile(usageJsonlPath(repoRoot), line, 'utf8');
+
+  if (event.event === 'session-end') {
+    await clearUsageSession(repoRoot);
+    return event;
+  }
+
+  // Maintain session lock (survives ship clears). `locked` is null here when
+  // there was none, it was rotated, or --force-new-session was passed.
+  const sameSession = locked?.sessionId === event.sessionId;
+  const featuresStarted = sameSession ? { ...(locked.featuresStarted || {}) } : {};
+  if (event.event === 'feature-started' && featureKey) {
+    featuresStarted[featureKey] = { ts: event.ts, featureName: event.featureName || featureName };
+  } else if (event.event === 'feature-done' && featureKey) {
+    // Close the feature so a later cycle (rework / resume) can start it again.
+    delete featuresStarted[featureKey];
+  }
+  await writeUsageSession(repoRoot, {
+    sessionId: event.sessionId,
+    startedAt: sameSession && event.event !== 'session-start' ? locked.startedAt : event.ts,
+    lastEventAt: event.ts,
+    featuresStarted
+  });
+
   return event;
+}
+
+/** First feature-started for session+feature with no feature-done after it, else null. */
+async function findOpenFeatureStartInJsonl(repoRoot, sessionId, featureKey) {
+  const rows = await readUsageJsonl(repoRoot);
+  let open = null;
+  for (const row of rows) {
+    if (row?.sessionId !== sessionId || normalizeFeatureKey(row.featureName) !== featureKey) continue;
+    if (row.event === 'feature-started' && !open) {
+      open = { ts: row.ts, featureName: row.featureName };
+    } else if (row.event === 'feature-done') {
+      open = null;
+    }
+  }
+  return open;
 }
 
 export async function readUsageJsonl(repoRoot) {
@@ -345,6 +545,7 @@ Append-only lifecycle events for harness adoption (see \`hbtl-harness-creator\` 
 
 - \`usage.jsonl\` — local event buffer (gitignored); removed after a successful full ship
 - \`shipped.offset\` — ship cursor (gitignored); removed after a successful full ship
+- \`session.json\` — chat-scoped session lock (gitignored); survives ship; cleared on \`session-end\`
 
 Do not commit prompts or secrets. Ship with \`node scripts/ship-usage-telemetry.mjs --target .\` (Aqua login + CCI \`/api/harness-usage/events\`). On full success the buffer files are deleted; the folder remains for the next session.
 `);
