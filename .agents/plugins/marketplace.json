@@ -31,6 +31,20 @@
       "category": "Core Engineering",
       "description": "Equips coding agents to run Hubtel's full engineering workflow on a repo — from feature breakdown and Azure tasks through implementation, verification, documentation, and PR lifecycle — so features ship the Hubtel way end to end.",
       "version": "2.6.5"
+    },
+    {
+      "name": "hubtel-loop-engineering",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hubtel-loop-engineering"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering",
+      "description": "Operate Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP.",
+      "version": "1.0.0"
     }
   ]
 }

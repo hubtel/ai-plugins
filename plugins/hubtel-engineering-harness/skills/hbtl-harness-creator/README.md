@@ -37,7 +37,7 @@ node scripts/upgrade-harness.mjs --target /path/to/project --apply
 node scripts/summarize-ui-runtime.mjs --target /path/to/project feat-002
 ```
 
-`upgrade-harness.mjs` upgrades an existing harness to the current skill version without wiping task state. Without `--apply` it prints a plan (validation gaps, what will change, and any edits **inside** the `harness:managed` markers that would be replaced) and writes nothing; with `--apply` it runs `install-mcps.mjs`, refreshes the skill-owned block between `<!-- harness:managed:start -->` and `<!-- harness:managed:end -->` (preserving `PROJECT_PURPOSE` and any user content **outside** those markers), merges `approvalMode` if absent, and stamps `.harness/manifest.json`. It preserves `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `init.mjs`, and `.harness/plans/`. There is no `--force` and no `--skip-mcps`. See SKILL.md → **Upgrade an existing harness**.
+`upgrade-harness.mjs` upgrades an existing harness to the current skill version without wiping task state. Without `--apply` it prints a plan (validation gaps, what will change, and any edits **inside** the `harness:managed` markers that would be replaced) and writes nothing; with `--apply` it runs `install-mcps.mjs`, refreshes the skill-owned block between `<!-- harness:managed:start -->` and `<!-- harness:managed:end -->` (preserving `PROJECT_PURPOSE` and any user content **outside** those markers), merges `approvalMode` if absent, and stamps `.harness/manifest.json`. The skill treats an explicit upgrade request as consent — plan, summarize briefly, then `--apply` in the same turn (no go/no-go ask; pause only to resolve a missing `integrationBranch`). It preserves `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `init.mjs`, and `.harness/plans/`. There is no `--force` and no `--skip-mcps`. See SKILL.md → **Upgrade an existing harness**.
 
 `summarize-ui-runtime.mjs` reads `.harness/ui-runtime/<featId>.json` (the v3 UI runtime artifact) and prints the latest run's derived status, open issues, criteria results, and screenshot paths. It exits `0` when the artifact is closed (no open issues) or skipped, `1` when issues are open or the file is invalid, and `2` when the file is missing — so an agent can see what step 3.7 still has open without hand-parsing JSON.
 
@@ -79,6 +79,8 @@ Tier-1 structural checks (exit code 1) include: duplicate feature IDs, missing v
 - [x] Batch delivery (N ≥ 2 features from one breakdown share a `batchId`; implemented/verified one slice at a time via the new `verified` status, committed once as a batch with `Closed: #<taskId1> #<taskId2> …`)
 - [x] Azure status sync (`update_task_status` moves a row's task to Active when it goes `in-progress`)
 - [x] Task-context recovery on resume (`get_task_details` fetches the full Azure spec — batched `taskId`s, read-only — for rows a fresh session didn't author, so lean one-line rows stay resumable)
+- [x] Post-PR CI monitor (P.13 — opt-in soft-ask once the queue is empty; watches the newest PR build per pipeline for HEAD, offers a fix + push on code-related failures)
+- [x] On-demand Reviewer subagent (engineer-invoked; acceptance criteria + Hubtel guidelines vs the delivered feature; read-only, capped, never a gate)
 - [x] HTML assessment report
 - [x] Structural benchmark report
 - [x] Self-test (`npm run harness:self-test` from Hubtel-Agent-Repo)

@@ -476,7 +476,7 @@ registry.register('shell', {
 
 **Cause**: `create-harness --force` is a **destructive re-scaffold**: it overwrites `AGENTS.md`, `progress.md`, `init.mjs`, and **resets `feature_list.json` to the placeholder**. It exists for greenfield or a deliberate reset — not for updating a repo that already has accumulated state. Refreshing skill instructions is a different operation.
 
-**Fix**: Use **`upgrade-harness.mjs`** instead. Run it with no `--apply` first to see the plan, confirm with the engineer via an `elicitationForm`, then `--apply`. Upgrade **preserves** `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, `.harness/plans/`, and any `AGENTS.md` content **outside** `<!-- harness:managed:start/end -->`; it refreshes only the skill-owned managed block, merges `approvalMode` if missing, installs MCPs, and stamps `.harness/manifest.json`. Reserve `--force` for an intentional wipe. See SKILL.md → **Upgrade an existing harness**.
+**Fix**: Use **`upgrade-harness.mjs`** instead. Run plan mode (no `--apply`) once to report what will change, then `--apply` in the same turn — an explicit upgrade request **is** consent (no go/no-go `elicitationForm`). Pause only when `integrationBranch` is missing and must be resolved. Upgrade **preserves** `feature_list.json` tasks/`taskId`s/`sprintPlanner`, `progress.md`, `session-handoff.md`, `init.mjs`/`init.sh`, `.harness/plans/`, and any `AGENTS.md` content **outside** `<!-- harness:managed:start/end -->`; it refreshes only the skill-owned managed block, merges `approvalMode` if missing, installs MCPs, and stamps `.harness/manifest.json`. Reserve `--force` for an intentional wipe. See SKILL.md → **Upgrade an existing harness**.
 
 ---
 
@@ -554,6 +554,28 @@ Same turn; both modes. No skip command — dismissed form, silence, or no clear 
 **Cause**: Agents re-fired `feature-started` near delivery, invented a second chat `sessionId`, and/or delayed append so `ts` was near done. CCI pairs last start→done per session+featureName; `durationMinutes` was usually null.
 
 **Fix**: Persist chat id in `.harness/telemetry/session.json` at `session-start`; the append CLI overrides a mismatched id while a feature is open. It rotates on `session-start` with nothing in flight, after 4h idle (agents rarely send `session-end`), or with `--force-new-session` — so separate chats are never merged. Skip duplicate `feature-started` for the same session+featureName while open; `feature-done` closes it so rework can restart. Auto-fill `--duration-minutes` on `feature-done` from the open start `ts`. Ship immediately at each checkpoint — never catch-up a late start. See `templates/agents.md` → **Usage telemetry**.
+
+---
+
+## 50. Mis-handled Post-PR CI Monitoring (P.13)
+
+**Symptom**: Any of: the monitor ask appears mid-queue and stalls a multi-feature run; supervised subset never gets the ask because unrelated `not-started` rows "fill" the queue; autopilot polls CI without asking; the agent reports "no build" or a stale green/red because it listed `refs/heads/<branch>` or judged the previous push's build; the CI fix loop re-asks `Approve this commit?` / `Push now?`; an infra/flaky failure gets a speculative "fix" commit; CI state is written into `progress.md`; raw logs are dumped into chat.
+
+**Cause**: P.13 is a post-delivery soft-ask layered on Cycle feedback and Continue the queue — easy to misplace. Azure PR validation builds run on the **merge ref**, and a fresh push takes time to queue, so "latest build on the branch" is often the wrong build.
+
+**Fix**: Ask only when the implementation queue is empty (subset = named features only), as a **separate** question after Cycle feedback; silence = decline. Poll `pipelines_build` on `refs/pull/<id>/merge`, newest build per pipeline, and require it to match HEAD (`triggerInfo` `pr.sourceSha`, else queued after HEAD's commit time). Fix ask only for code-related failures; yes = fix + commit + push with no extra asks, full P.0–P.8 gate, one fix loop per delivery. Write nothing about CI to `progress.md`. See `templates/agents.md` → **Post-PR CI monitor (P.13)**.
+
+---
+
+## 52. The Reviewer Became a Gate, or Became Noise
+
+**Symptom**: Two shapes, both fatal to the tool. **(a) Gate creep** — the agent spawned the Reviewer before a commit, at `done`, or "to be safe" on every delivery, so a soft advisory started stalling the lifecycle. **(b) Noise** — the Reviewer came back with 18 rows restating style points 3.5 already reconciled and smells Sonar already reported, plus ungrounded guesses ("criterion 3 may not be handled") with no file, no line, and no scenario. Engineers stopped reading it, which is the same as not having it.
+
+**Cause**: The plumbing (inputs, MCP calls, schema) was specified while the **output contract** was not. "Reconcile the touched code against the guidelines" is a literal instruction to produce a pile of observations, and nothing said which rows were worth a human's attention or when silence was the correct answer. Nothing scoped the Reviewer against the four gates that already crossed the same code.
+
+**A third shape — the unfalsifiable pass.** Tuned against noise, the Reviewer started returning `pass` with no rows and nothing to check: the engineer had to take the verdict on trust, and a misread criterion was invisible. **Findings are capped; evidence is not.** Every passing criterion gets a confirmation line naming where it is satisfied (`file:line`), exempt from the caps, and the verdict carries a one-line `evidenceCaveat` when it rests on narrow ground (no plan AC, no runtime evidence anywhere, Azure unavailable). Noise is what an engineer reads and acts on nowhere; a trail they can falsify in seconds is the opposite.
+
+**Fix**: The Reviewer is **on request only** — never spawned by the agent, never part of a gate (a bare "review this" is not an acceptance-review ask; clarify first). Every row must pass the four-part bar: changes a decision, grounded at `path:line` **by reading the file**, carries a concrete failure scenario, maps to a named criterion or guideline ref — anything else is **dropped, not downgraded**. Never re-report what step 3.5, Sonar P.4–P.6, 3.6 or 3.7 owns; the guidelines lane fires only on touched lines with a violation still in the code, and **zero rows is the expected result** on a feature that passed 3.5. Cap at **≤5 rows per lane**, no `info` severity, no generic advice, uncertainty becomes **one question** and reads as `gaps` — never `fail`. See `templates/agents.md` → **On-demand Reviewer**.
 
 ---
 

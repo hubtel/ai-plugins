@@ -14,6 +14,19 @@ _Phase 2 sub-plan produced by the planning subagent after Phase 1's overall plan
 
 One-paragraph summary: what the feature delivers, why it matters, who uses it.
 
+## Acceptance criteria
+
+**Required.** Feature-level "done when" checklist — **observable outcomes** a human could check by using the feature. Complements the per-task acceptance woven into each Azure task description (task-level there, feature-level here); never a copy of that HTML.
+
+- Submitting the form with an empty phone field is rejected with an inline error; nothing is saved.
+- A saved contact appears in the list without a page reload.
+- Opening the list with no contacts shows the empty state, not a spinner.
+
+<!-- Not acceptance criteria — these restate the implementation, not the outcome:
+     ✗ "Add a `validatePhone` helper in `utils/validation.ts`"
+     ✗ "Wire the POST handler to the service layer"
+     Those belong in Files to touch / Task summary. -->
+
 ## Flow diagram
 
 ```mermaid

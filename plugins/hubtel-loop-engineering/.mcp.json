@@ -1,0 +1,9 @@
+{
+  "loop-engineering": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@hubtel/loop-engineering-mcp@latest"
+    ]
+  }
+}

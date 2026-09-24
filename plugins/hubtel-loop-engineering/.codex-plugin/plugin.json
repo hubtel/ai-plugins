@@ -1,0 +1,24 @@
+{
+  "name": "hubtel-loop-engineering",
+  "version": "1.0.0",
+  "description": "Operate Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP.",
+  "author": {
+    "name": "Hubtel Enablement Team",
+    "email": "engineering@hubtel.com"
+  },
+  "keywords": [
+    "hubtel",
+    "loop",
+    "engineering-cases",
+    "capability",
+    "operations"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Hubtel Loop Engineering",
+    "category": "Engineering",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
+  }
+}

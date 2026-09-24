@@ -1,6 +1,6 @@
 {
   "name": "hbtl-harness-creator",
-  "version": "2.6.6",
+  "version": "2.6.8",
   "description": "Harness engineering for AI coding agents — five subsystems, memory persistence, session continuity, verification workflows, scope control, lifecycle management.",
   "license": "MIT",
   "author": "Learn Harness Engineering",

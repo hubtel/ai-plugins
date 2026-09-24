@@ -1329,13 +1329,13 @@ try {
 
   // SKILL + agents.md doc anchors — surface Karate, two-phase planning, selective builds.
   const skillText = await readFile(path.join(skillRoot, 'SKILL.md'), 'utf8');
-  for (const marker of ['Karate', 'Selective builds', 'Phase 1', 'Phase 2', 'Documentation gate', 'hbtl-dac-update', 'hbtl-dac-generate']) {
+  for (const marker of ['Karate', 'Selective builds', 'Phase 1', 'Phase 2', 'Documentation gate', 'hbtl-dac-update', 'hbtl-dac-generate', 'Post-PR CI monitor', 'On-demand Reviewer']) {
     if (!skillText.includes(marker)) {
       throw new Error(`SKILL.md is missing the "${marker}" section/reference`);
     }
   }
   const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
-  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue', 'session.json', 'force-new-session']) {
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue', 'session.json', 'force-new-session', 'Post-PR CI monitor (P.13)', 'Monitor this PR for build failures', 'Fix these CI failures', 'refs/pull/', 'CI fix pushed', 'On-demand Reviewer', 'Hubtel Harness Reviewer', 'Owned elsewhere — do not report', 'failureScenario', 'Never spawn this subagent on your own', 'Acceptance criteria (required on every', 'exercise the app yourself', 'LIMITS — what this review could not check']) {
     if (!agentsTemplate.includes(marker)) {
       throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
     }
@@ -1399,6 +1399,21 @@ try {
   }
   if (!checkPasses('Usage telemetry documented')) {
     throw new Error('scoreHarness should pass "Usage telemetry documented" after scaffold');
+  }
+  const planTemplate = await readFile(path.join(skillRoot, 'templates', 'plan.md'), 'utf8');
+  if (!/^##\s+Acceptance criteria\s*$/m.test(planTemplate)) {
+    throw new Error('templates/plan.md must carry the required "## Acceptance criteria" section');
+  }
+  for (const qaCheck of [
+    'Phase 2 plan acceptance criteria required',
+    'On-demand Reviewer documented',
+    'Reviewer non-duplication exclusions documented',
+    'Reviewer finding rubric (grounded findings) documented',
+    'Reviewer independent behaviour verification documented'
+  ]) {
+    if (!checkPasses(qaCheck)) {
+      throw new Error(`scoreHarness should pass "${qaCheck}" after scaffold`);
+    }
   }
 
   // append-usage-event + ship-usage-telemetry (fail-open without Aqua / when API down).
@@ -2363,6 +2378,9 @@ status: draft
     const planText = runNode(upgradeScript, ['--target', upgradeRoot]);
     if (planText.status !== 0 || !/Harness upgrade plan for/.test(planText.stdout)) {
       throw new Error('upgrade-harness.mjs default plan mode should print a human-readable report');
+    }
+    if (!/upgrade request is consent/.test(planText.stdout)) {
+      throw new Error('upgrade plan footer should state upgrade request is consent (no go/no-go ask)');
     }
 
     // Deterministic apply-effect coverage via the same helpers the script

@@ -12,10 +12,12 @@
 //
 // Plan mode (default, no --apply): validates the harness and prints a gap
 // report — no writes. Apply mode (--apply): performs the full, all-or-nothing
-// upgrade. There is no --force and no --skip-mcps; consent is the engineer's
-// explicit yes before you run with --apply.
+// upgrade. There is no --force and no --skip-mcps. The skill treats an
+// explicit upgrade request as consent — plan, summarize, then --apply
+// without a second go/no-go ask.
 //
 import path from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -35,6 +37,30 @@ import {
 import { ensureTelemetryScaffold } from './lib/usage-telemetry.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+// Phase 2 plans must carry a feature-level `## Acceptance criteria` section.
+// Plans written before that requirement are reported, never repaired or failed:
+// the section is the planning subagent's to author, and a backfilled stub would
+// read as criteria without being any.
+function plansMissingAcceptanceCriteria(targetRoot) {
+  const plansDir = path.join(targetRoot, '.harness', 'plans');
+  let entries;
+  try {
+    entries = readdirSync(plansDir);
+  } catch {
+    return []; // no plans directory yet — nothing to warn about
+  }
+  return entries
+    .filter((name) => /^feat-.+\.md$/i.test(name))
+    .filter((name) => {
+      try {
+        return !/^##\s+Acceptance criteria\s*$/im.test(readFileSync(path.join(plansDir, name), 'utf8'));
+      } catch {
+        return false; // unreadable file is not a missing-section finding
+      }
+    })
+    .sort();
+}
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
@@ -43,8 +69,8 @@ if (args.help) {
 Upgrade an existing harness to the current skill version.
 
 Without --apply (default): plan only. Validates the harness and prints what an
-upgrade would change. No files are written. Use this to decide, then confirm
-with the engineer before applying.
+upgrade would change. No files are written. Summarize the plan, then apply —
+an explicit upgrade request is consent (no second go/no-go ask).
 
 With --apply: run the full upgrade — install-mcps.mjs, refresh the
 harness:managed instruction block (preserving PROJECT_PURPOSE and any content
@@ -158,11 +184,20 @@ function printPlanText() {
     lines.push('');
   }
 
-  lines.push('Next step: confirm with the engineer, then re-run with --apply.');
+  const staleAcPlans = plansMissingAcceptanceCriteria(target);
+  if (staleAcPlans.length > 0) {
+    lines.push(`NOTE: ${staleAcPlans.length} existing plan(s) predate the required "## Acceptance criteria" section`);
+    for (const name of staleAcPlans) lines.push(`  - .harness/plans/${name}`);
+    lines.push('  Not backfilled by the upgrade — new plans get the section from the planning subagent.');
+    lines.push('');
+  }
+
+  lines.push('Next step: re-run with --apply (upgrade request is consent; no go/no-go ask).');
   console.log(lines.join('\n'));
 }
 
 if (!apply) {
+  plan.plansMissingAcceptanceCriteria = plansMissingAcceptanceCriteria(target);
   if (asJson) {
     console.log(JSON.stringify(planPayload(), null, 2));
   } else {
@@ -262,6 +297,7 @@ if (asJson) {
     integrationBranchMerged: Boolean(integrationMerge.changed),
     integrationBranchWarning: integrationMerge.warning || null,
     manifestPath: path.relative(target, manifest.path),
+    plansMissingAcceptanceCriteria: plansMissingAcceptanceCriteria(target),
     actions,
     postValidation: {
       overall: postValidation.overall,
@@ -286,6 +322,13 @@ if (asJson) {
   console.log(`Manifest: ${path.relative(target, manifest.path)}`);
   if (installExit === 2) {
     console.log('Note: aqua CLI missing — MCP servers were not registered. Install Aqua and re-run install-mcps.mjs.');
+  }
+  const staleAcPlans = plansMissingAcceptanceCriteria(target);
+  if (staleAcPlans.length > 0) {
+    console.log('');
+    console.log(`Note: ${staleAcPlans.length} existing plan(s) predate the required "## Acceptance criteria" section:`);
+    for (const name of staleAcPlans) console.log(`  - .harness/plans/${name}`);
+    console.log('  Not a failure and not backfilled — new plans get the section from the planning subagent.');
   }
   console.log('');
   console.log(formatScoreReport(postValidation, target));
