@@ -119,7 +119,7 @@
         "./skills/loop-engineering"
       ],
       "mcpServers": {
-        "loop-engineering": {
+        "hubtel-loop-engineering": {
           "command": "npx",
           "args": [
             "-y",
