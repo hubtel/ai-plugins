@@ -13,11 +13,50 @@ Engineer Worker = orchestration / assignment endpoint — not the coding harness
 
 Do **not** invoke the legacy Engineer Worker coding harness, Human Guidance, or Electron chat for Cursor-native Pipeline Remediation.
 
-## Lifecycle
+## Settled actions (no refresh UX)
+
+Mutations settle in Control Plane before the MCP tool returns:
+
+| `outcome` | Agent behaviour |
+|-----------|-----------------|
+| `Succeeded` | Consume `currentStage`, `availableActions`, and capability state from the submit response. **Do not** call `get_case_workspace` as a normal follow-up. Continue from the settled stage. |
+| `Failed` | Surface `settlementReason` / `message`. Do not re-submit the same intent without engineer direction. |
+| `PendingSettlement` | Exceptional only. Call observational `get_transition_status` with the same `submissionId` / `idempotencyKey` — **never** re-signal. Do **not** narrate "Temporal is processing" or invent a refresh loop. |
+
+Keep all human confirmation gates (PlanReview, Gate A, Gate B). Settlement does not replace engineer approval.
+
+## Lifecycle (engineer-facing)
+
+Speak in **actions**, not incidental machine stage waits:
+
+```text
+Accept assignment
+→ Investigate / plan (InvestigationPlanning)
+→ CompleteInvestigationPlanning
+→ Review plan (PlanReview) — human
+→ ApprovePlan / RequestPlanRevision / RejectPlan / MarkNoRemediation
+→ Authorize execution (AwaitingExecutionApproval / Gate A) — human
+→ ApproveExecution / CancelRemediation
+→ Implement (Execution) + ApproveImplementation (Gate B) — human
+→ commit/push in Cursor
+→ CompleteExecution
+→ Done
+```
+
+### Machine stages to hide from chat
+
+| Machine stage | Cursor treatment |
+|---------------|------------------|
+| **EvidenceCollection** | Automatic after Accept. **Hide** — do not narrate "waiting for evidence collection" or treat it as engineer work. After Accept settles, continue when InvestigationPlanning (or assignment-settled actions) appears. |
+| Assignment offer | Keep — human Accept/Reject |
+
+**PlanReview ≠ Gate A.** ApprovePlan freezes the plan only; ApproveExecution separately authorizes repository work. Do not collapse or skip either gate.
+
+## Full machine lifecycle (reference)
 
 ```text
 Assignment offer [Case AwaitingAcceptance; Accept/Reject on EvidenceCollection contract]
-→ EvidenceCollection [automatic after Accept]
+→ EvidenceCollection [automatic after Accept — hide from Cursor chat]
 → InvestigationPlanning [Cursor]
 → CompleteInvestigationPlanning
 → PlanReview [human]
@@ -35,23 +74,23 @@ Assignment acceptance is **not** a CapabilityExecution stage (unlike Production 
 
 While `assignment.assignmentStatus` is `AwaitingAcceptance`, the workspace **overlays** `AcceptAssignment` / `RejectAssignment` on the EvidenceCollection contract (same `expectedStage`). Submit those via MCP like any other governed action — do not wait for evidence, and do not invent a CE AcceptAssignment stage.
 
-Teams (`Work on Loop CASE-XXXX`) is discovery only. After Accept, evidence collection runs automatically, then CE advances to `InvestigationPlanning`.
+Teams (`Work on Loop CASE-XXXX`) is discovery only. After Accept settles successfully, evidence collection may still run on the machine — **do not** tell the engineer to wait on EvidenceCollection; wait for settled progression into InvestigationPlanning (or PendingSettlement follow-up).
 
 ## Stages
 
 | Stage | Owner | Notes |
 |-------|--------|------|
 | Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection`; actions overlay Accept/Reject |
-| EvidenceCollection | Automatic | After Accept — no Cursor actions |
+| EvidenceCollection | Automatic | After Accept — **hide** from chat; no Cursor actions |
 | InvestigationPlanning | Cursor | Produce EngineeringBrief |
-| PlanReview | Human via Cursor | Approve / revise / reject / no remediation |
-| AwaitingExecutionApproval | Human via Cursor | Gate A — authorize work on approved snapshot |
+| PlanReview | Human via Cursor | Approve / revise / reject / no remediation — **distinct from Gate A** |
+| AwaitingExecutionApproval | Human via Cursor | Gate A — authorize work on approved snapshot — **≠ PlanReview** |
 | Execution | Cursor + human Gate B | Implement, freeze, push, CompleteExecution |
 | Complete | Terminal | Delivery or truthful non-delivery |
 
 ## Workspace — read `pipelineRemediation`
 
-Always prefer workspace fields over chat history:
+Always prefer workspace fields (from first-touch or settled context) over chat history:
 
 | Field | Use |
 |-------|-----|
@@ -131,6 +170,8 @@ After `get_case_workspace`, when `capability.capabilityType` is Pipeline Remedia
 ```
 
 If `assignment.assignmentStatus` is `AwaitingAcceptance`, `availableActions` must include `AcceptAssignment` / `RejectAssignment` — present those and stop. Do **not** tell the engineer to wait for evidence while assignment is still awaiting acceptance.
+
+After Accept **settled**, do **not** narrate EvidenceCollection as a stage the engineer must wait through.
 
 ## Terminals
 

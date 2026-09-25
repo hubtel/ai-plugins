@@ -16,7 +16,7 @@ When the engineer pastes a Case ID or says "Work on Loop CASE-…":
 1. Call **`get_case_workspace` only** on the first turn.
 2. Reply with the **First-touch summary** (template below). **End the turn.**
 3. Do **not** call `submit_stage_output`, `request_capability_transition`, or `get_transition_status` on that first turn — even if the case looks simple, simulated, or fully diagnosable from evidence.
-4. After the engineer explicitly confirms **one** action, submit **only that action**, then `get_case_workspace` again before anything else.
+4. After the engineer explicitly confirms **one** action, submit **only that action**, then continue from the **settled** response (`outcome` / `currentStage`). Do **not** refresh via `get_case_workspace` as normal UX. Use observational `get_transition_status` only if `outcome` is `PendingSettlement`.
 5. Never submit `AcceptAssignment` and `CompleteInvestigation` / `CompleteDiagnosis` / `CompleteRecommendation` / `CompleteRemediationPlan` in the same session turn or without separate confirmations per stage.
 6. **`close_engineering_case`** is also gated — never call it on first-touch or without explicit confirmation (reason + outcomeType). Use when no stage action can close the Case (ops / manual disposition).
 
@@ -34,8 +34,8 @@ Applies to Investigation, Diagnosis, Recommendation, Human Decision, Remediation
 6. **Explain consequential transitions** — tell the engineer what the next Loop action will do.
 7. **Get required human confirmation** — explicit go-ahead before every submit (see **Human confirmation** and **Structured option prompts**).
 8. **Submit only an available semantic action** — from `currentStageContract.availableActions`.
-9. **Refresh workspace** — `get_case_workspace` after every accepted action; never assume the target stage.
-10. **Continue from the returned stage** — trust refreshed `capability.currentStage` and `capability.expectedStage`.
+9. **Consume settled context** — Control Plane returns `outcome` (`Succeeded` / `Failed` / `PendingSettlement`) with authoritative `currentStage` / `availableActions`. **Do not** call `get_case_workspace` as a normal follow-up after success.
+10. **Continue from settled stage** — trust settled `currentStage` / `expectedStage` when present; use observational `get_transition_status` only for `PendingSettlement`.
 
 ## Operating rules
 
@@ -58,7 +58,7 @@ Applies to Investigation, Diagnosis, Recommendation, Human Decision, Remediation
 16. If new evidence invalidates prior work, use a permitted backward transition.
 17. Never invent Case state.
 18. Never perform destructive actions outside governed Loop actions.
-19. Refresh Case state after every accepted transition.
+19. After settled success, continue from settled context — do **not** use refresh as normal UX; use observational `get_transition_status` only for `PendingSettlement`.
 20. For execution stages, read `executionContext` — never reconstruct execution state from chat history or latest plan by timestamp.
 21. Git commit/push is Cursor agent work — never invoke Loop MCP for Git operations.
 
@@ -136,11 +136,11 @@ When the workflow is **parked at a stage-retry gate** (status `AwaitingGuidance`
 - **`Retry`** — re-enter the park's primary stage (e.g. HarnessExecution → external execution attempt).
 - **`Replan`** — jump to an earlier allowed target (Planning, Diagnosis, etc.) per park policy.
 - Requires **explicit engineer confirmation** before calling (same bar as capability submits).
-- After acceptance, **`get_case_workspace`** and continue from the returned stage contract.
+- After acceptance, continue from the **settled** response (`outcome` / `currentStage` / `availableActions`). Use `get_transition_status` only for `PendingSettlement`.
 
 Mirror the summary in prose (first-touch template, gate explanations below). When AskQuestion is available, the **selection UI is the primary input**; when it is not, the prose ask is the gate.
 
-Single-path updates with no real fork (e.g. "refreshing workspace after accepted action") stay plain text — no AskQuestion.
+Single-path updates with no real fork (e.g. "settled success — continuing at next stage") stay plain text — no AskQuestion.
 
 When proposing **CompleteRemediationPlan**, present the full plan summary and ask explicitly:
 
@@ -156,7 +156,7 @@ When proposing **ApproveExecution** (Gate A), explain:
 
 When proposing **ApproveImplementation** (Gate B), explain:
 
-> This approves the implementation you reviewed. It does **not** change the capability stage — refresh workspace and verify `implementationApproved = true` before commit/push.
+> This approves the implementation you reviewed. It does **not** change the capability stage — from the settled response verify `implementationApproved = true` (or capabilityState / available next actions) before commit/push.
 
 When proposing **CompleteExecution**, present the final execution summary and ask explicitly before submitting.
 
@@ -172,11 +172,12 @@ flowchart TD
   F -->|yes| G[Explain and confirm]
   F -->|no| H[submit_stage_output]
   G --> H
-  H --> I{accepted?}
-  I -->|no| J[Read rejection code + availableActions]
-  J --> B
-  I -->|yes| K[get_case_workspace]
-  K --> C
+  H --> I{accepted + outcome?}
+  I -->|no / Failed| J[Read rejection or settlementReason]
+  J --> C
+  I -->|PendingSettlement| P[get_transition_status observational]
+  P --> I
+  I -->|Succeeded| C
 ```
 
 ### 1. Discover
@@ -265,7 +266,7 @@ Prefer `submit_stage_output`. The MCP resolves `expectedStage` from `capability.
 }
 ```
 
-Do **not** submit a human disposition from Recommendation. After accept, refresh and expect `AwaitingHumanDecision`.
+Do **not** submit a human disposition from Recommendation. After accept settles, expect `AwaitingHumanDecision`.
 
 **RemediationPlanning** (`CompleteRemediationPlan` — requires full plan output):
 
@@ -350,26 +351,28 @@ The MCP resolves the acting engineer from `assignment.engineerEmail` on the case
 
 | Response | Meaning | Agent behavior |
 | -------- | ------- | -------------- |
-| `accepted: true` | Loop persisted and signaled Temporal | Call `get_case_workspace` and continue at new stage |
+| `accepted: true`, `outcome: Succeeded` | Settled — authoritative stage applied | Continue from settled `currentStage` / `availableActions`. **No refresh.** |
+| `accepted: true`, `outcome: Failed` | Signal delivered but settlement observed failure | Surface `settlementReason`; do not auto-retry |
+| `accepted: true`, `outcome: PendingSettlement` | Bounded settle timed out | Observational `get_transition_status` with `submissionId` / `idempotencyKey` — **never re-submit** |
 | `accepted: false`, `code: TransitionNotAllowed` | Action not valid now | Re-read `availableActions`; do not retry the same action |
-| `accepted: false`, `code: StageMismatch` | Stale expected stage | **Refresh workspace** — "The Case moved while we were working." Align to refreshed `expectedStage` |
+| `accepted: false`, `code: StageMismatch` | Stale expected stage | Realign from workspace/`expectedStage` — "The Case moved while we were working." Do not guess a retry stage |
 | `accepted: false`, `code: MissingRequiredOutputs` | Plan or stage output incomplete | List missing fields; remain in planning and complete the output |
 | `accepted: false`, `code: MissingRequiredReason` | Reason required | Collect reason from engineer and retry |
-| `accepted: false`, `code: CapabilityVersionMismatch` | Version drift | Refresh workspace; use current `capabilityVersion` |
-| `accepted: false`, `code: PlanMismatch` | CompleteExecution plan binding failed | Refresh; rebuild `planReference` from `executionContext.approvedPlan` |
+| `accepted: false`, `code: CapabilityVersionMismatch` | Version drift | Re-read capability version from workspace/settled state |
+| `accepted: false`, `code: PlanMismatch` | CompleteExecution plan binding failed | Rebuild `planReference` from `executionContext.approvedPlan` |
 | `accepted: false`, `code: MissingRequiredOutputs` (mentions `PushResult.Pushed` / `pushResult.pushed`) | CompleteExecution before a successful push | Push the branch in Cursor, then resubmit with `pushed: true` and SHAs |
 | `accepted: false`, `code: ImplementationApprovalMissing` | Gate B not recorded | Do not CompleteExecution — obtain ApproveImplementation first |
-| `accepted: false`, `code: ExecutionApprovalMissing` | Gate A not recorded | Refresh; verify `executionApproved` |
-| `accepted: false`, `code: SignalDeliveryFailed` | Temporal signal failed | Refresh workspace; do not auto-retry — report to engineer |
-| `conflict: true` | Duplicate idempotency key | Use `get_transition_status` with the same key or generate a new key for a new intent |
+| `accepted: false`, `code: ExecutionApprovalMissing` | Gate A not recorded | Verify `executionApproved` from settled/workspace context |
+| `accepted: false`, `code: SignalDeliveryFailed` | Temporal signal failed | Do not auto-retry — report to engineer |
+| `conflict: true` | Duplicate idempotency key | Observational `get_transition_status` with the same key, or a new key for a new intent |
 
-On duplicate submission where the server returns idempotent existing state, treat as success — do not automatically resubmit.
+On duplicate submission where the server returns idempotent settled state, treat as success — do not automatically resubmit.
 
-Never assume a transition succeeded without `accepted: true`. Never guess the next stage — refresh workspace.
+Never assume a transition succeeded without `accepted: true` and a non-pending `outcome` (or a later observational Succeeded). Never guess the next stage.
 
 ### 5. After transition
 
-Always `get_case_workspace` after acceptance. Summarize for the engineer: new `currentStage`, `expectedStage`, objective, and what happens next.
+After `outcome: Succeeded`, summarize for the engineer from the **settled** response: new `currentStage`, objective/actions, and what happens next. **Do not** call `get_case_workspace` as a normal follow-up.
 
 After **CompleteRemediationPlan**, expect `currentStage = PlanReview` and `expectedStage = PlanReview`.
 
@@ -439,7 +442,7 @@ Verify coherence before acting:
 approval.planId/revision = approvedPlan.planId/revision = attempt.planId/revision (when attempt present)
 ```
 
-If inconsistent — stop, refresh workspace, report mismatch; do not guess.
+If inconsistent — stop, re-read settled/workspace context, report mismatch; do not guess.
 
 Honor `currentStageContract.availableActions[*].requiresHumanConfirmation` — the contract is authoritative.
 
@@ -452,9 +455,9 @@ When `capability.currentStage = AwaitingExecutionApproval`:
 3. Explain available actions from `currentStageContract.availableActions`.
 4. For **ApproveExecution**, state clearly: *This authorizes implementation of the approved remediation plan. It does not approve the resulting code.*
 5. Require explicit engineer confirmation naming the action — do **not** auto-submit.
-6. After accepted Gate A action → **`get_case_workspace`** immediately.
+6. After accepted Gate A action → continue from **settled** response immediately.
 
-Expected after **ApproveExecution**: `currentStage = Execution`, `executionApproved = true`, `phase = Implementation` — but **refresh wins**.
+Expected after **ApproveExecution**: `currentStage` at or past Execution (may briefly show ReadyForExecution — collapse candidate), `executionApproved = true`, `phase = Implementation` when present — **settled response wins**.
 
 ### Execution — pre Gate B (`implementationApproved = false`)
 
@@ -480,7 +483,7 @@ After explicit Gate B confirmation:
 }
 ```
 
-Then **immediately** `get_case_workspace`.
+Then continue from the **settled** response (same stage expected).
 
 Expected durable state (stage unchanged):
 
@@ -490,7 +493,7 @@ implementationApproved = true
 phase = ImplementationApproved
 ```
 
-Do **not** interpret unchanged `currentStage` as failure — verify `implementationApproved`, `phase`, and `implementationReview`.
+Do **not** interpret unchanged `currentStage` as failure — verify `implementationApproved`, `phase`, and `implementationReview` from settled/workspace context.
 
 ### Execution — post Gate B (`implementationApproved = true`)
 
@@ -543,13 +546,13 @@ Construct output from actual Git/validation evidence (camelCase JSON):
 
 `CompleteExecution` has `requiresHumanConfirmation = true` — present final summary and obtain explicit confirmation. Do not auto-chain Gate B → commit → push → CompleteExecution without the necessary human confirmations at each gate.
 
-After accepted **CompleteExecution** → refresh workspace. Expect **`RemediationDelivered`** / Case **Closed** (close-at-push). Do **not** expect `link-pull-request`, `PartiallyDelivered` → PR linkage, `AwaitingPullRequestOutcome`, `AwaitingDeploymentConfirmation`, or `AwaitingProductionVerification` for new Cursor-native PI. Those specialty gates are **legacy drain only** for in-flight parks; recover incomplete delivery with **stage-retry**, not link-PR or specialty delivery-retry.
+After accepted **CompleteExecution** → continue from settled context. Expect **`RemediationDelivered`** / Case **Closed** (close-at-push). Do **not** expect `link-pull-request`, `PartiallyDelivered` → PR linkage, `AwaitingPullRequestOutcome`, `AwaitingDeploymentConfirmation`, or `AwaitingProductionVerification` for new Cursor-native PI. Those specialty gates are **legacy drain only** for in-flight parks; recover incomplete delivery with **stage-retry**, not link-PR or specialty delivery-retry.
 
 ### RequestRevision / RejectImplementation / CancelRemediation from Execution
 
 When available in `currentStageContract.availableActions`:
 
-- **RequestRevision** — plan materially wrong; requires `reason` and explicit confirmation; after accept → refresh; expect `RemediationPlanning`; stop execution work.
+- **RequestRevision** — plan materially wrong; requires `reason` and explicit confirmation; after accept settles → expect `RemediationPlanning`; stop execution work.
 - **RejectImplementation** / **CancelRemediation** — consequential; require reason + confirmation; do not continue delivery after Case leaves Execution.
 
 ## No Human Guidance fallback

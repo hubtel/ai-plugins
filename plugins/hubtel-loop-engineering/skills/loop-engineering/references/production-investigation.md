@@ -2,7 +2,26 @@
 
 Capability type: `ProductionInvestigation` · version: `1.0`
 
-Durable stage names (from Loop/Temporal) differ from agent-friendly objectives in the workspace contract. Always trust `currentStageContract` from `get_case_workspace`.
+Durable stage names (from Loop/Temporal) differ from agent-friendly objectives in the workspace contract. Always trust `currentStageContract` from `get_case_workspace` (first-touch) or from the **settled** submit response thereafter.
+
+## Settled actions (no refresh UX)
+
+| `outcome` | Agent behaviour |
+|-----------|-----------------|
+| `Succeeded` | Consume settled `currentStage` / `availableActions` / capability state. **Do not** call `get_case_workspace` as a normal follow-up. |
+| `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
+| `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
+
+Preserve disposition (`AwaitingHumanDecision`) and dual approvals (PlanReview ≠ Gate A; Gate B in Execution). Settlement does not replace human confirmation.
+
+### Hide incidental machine stages from chat
+
+| Machine stage | Cursor treatment |
+|---------------|------------------|
+| Pre-Cursor platform stages (evidence collection → enrichment) | **Hide** — not engineer interaction |
+| `RepositoryWorkspacePreparation` / `RepositoryInvestigation` | **Hide** — soft “starting investigation” |
+| `ReadyForExecution` | **Collapse candidate** (not collapsed this batch) — if observed, treat as transitional toward Execution; do not narrate as a separate engineer gate |
+| PlanReview / AwaitingExecutionApproval / Execution | **Keep** — distinct durable boundaries |
 
 ## InvestigationBrief
 
@@ -190,7 +209,7 @@ Submit with `expectedStage = PlanReview` (resolved automatically from workspace)
 | `RequestRevision` | `RemediationPlanning` | Requires `reason` |
 | `Reject` / `Cancel` / `Defer` | — | Requires `reason` |
 
-After **ApproveExecution** → refresh; expect `currentStage = Execution`, `executionApproved = true`, `phase = Implementation`.
+After **ApproveExecution** settles → expect `currentStage` at or past Execution (may briefly show `ReadyForExecution` — collapse candidate; do not invent a separate gate). `executionApproved = true`, `phase = Implementation` when those fields are present on settled/workspace context.
 
 ## Execution
 
@@ -212,7 +231,7 @@ After **ApproveExecution** → refresh; expect `currentStage = Execution`, `exec
 { "caseId": "CASE-…", "action": "ApproveImplementation" }
 ```
 
-Stage stays `Execution`; refresh and verify `implementationApproved = true`, `phase = ImplementationApproved`.
+Stage stays `Execution`; from settled context verify `implementationApproved = true`, `phase = ImplementationApproved`.
 
 **Post Gate B**: commit/push in Cursor; then **CompleteExecution** with full output:
 
@@ -249,18 +268,19 @@ After successful **CompleteExecution**, workspace retains `executionContext` wit
 | Code | Typical cause |
 | ---- | ------------- |
 | `TransitionNotAllowed` | Wrong action, missing outputs, or action not in contract |
-| `StageMismatch` | `expectedStage` does not match workflow stage — refresh workspace |
+| `StageMismatch` | `expectedStage` does not match workflow stage — realign from settled/workspace `expectedStage` |
 | `MissingRequiredOutputs` | Plan or stage output incomplete — list missing fields; for CompleteExecution also covers `pushed: false` (push first, then retry) |
 | `MissingRequiredReason` | Action requires `reason` |
-| `CapabilityVersionMismatch` | Version string stale after refresh |
+| `CapabilityVersionMismatch` | Version string stale — re-read settled/workspace capability version |
 | `PlanMismatch` | CompleteExecution planReference does not match bound plan |
 | `ImplementationApprovalMissing` | CompleteExecution before Gate B |
 | `ExecutionApprovalMissing` | Execution action before Gate A |
-| `SignalDeliveryFailed` | Temporal signal failed — refresh; do not auto-retry |
+| `SignalDeliveryFailed` | Temporal signal failed — do not auto-retry; report and wait for engineer direction |
+| `PendingSettlement` | Bounded settle timed out — use observational `get_transition_status` only |
 | `CaseNotFound` | Invalid Case ID |
 | `ExecutionNotFound` | Wrong or inactive execution |
 
-On rejection, refresh workspace and align the next submission to `availableActions` and `requiredOutputArtifactTypes`.
+On rejection, realign from settled/workspace `availableActions` and `requiredOutputArtifactTypes` — do not invent a refresh loop.
 
 ## Prototype proof sequences
 

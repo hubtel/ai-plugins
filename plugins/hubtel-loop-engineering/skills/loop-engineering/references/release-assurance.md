@@ -11,6 +11,25 @@ Healthy → automatic Complete (no Cursor / Engineer review agent / Human Guidan
 Unhealthy | Inconclusive → Cursor ReleaseReview → HumanDecision
 ```
 
+## Settled actions (no refresh UX)
+
+| `outcome` | Agent behaviour |
+|-----------|-----------------|
+| `Succeeded` | Consume settled stage/actions from the submit response. **Do not** call `get_case_workspace` as a normal follow-up. |
+| `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
+| `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
+
+Preserve ReleaseReview and HumanDecision confirmation gates.
+
+### Hide automatic chatter from chat
+
+| Machine stage | Cursor treatment |
+|---------------|------------------|
+| `CollectingHostEvidence` | **Hide** — Host Agent waves; not Cursor work |
+| `AssessingReleaseHealth` | **Hide** — deterministic branch; optional later fold |
+| Pre-escalation deployment stages | **Hide** |
+| `ReleaseReview` / `HumanDecision` | **Keep** — escalated engineer path |
+
 ## Stages
 
 | Stage | Owner | Notes |
@@ -152,3 +171,5 @@ Rollback confirmation Guidance threads are not created for the Cursor-native pat
 4. On a **rollback verification** Case, `AcceptReleaseRisk` (and manual `close_engineering_case` with `ReleaseRiskAccepted` / healthy outcomes) auto-completes the **linked originating** Case when A↔B linkage exists.
 5. When a Case has no stage contract to close it, use MCP **`close_engineering_case`** only after explicit engineer confirmation (reason + outcomeType). Never on first-touch.
 6. Loop sends CCI Teams notifications on **RA engineer auto-accept** and when Rollback reaches **`AwaitingRollbackConfirmation`** (not on every ReleaseReview/HumanDecision stage).
+7. After settled mutations, continue from settled context — **no refresh** as normal UX. Use observational `get_transition_status` only for `PendingSettlement`.
+8. Do **not** narrate `CollectingHostEvidence` or `AssessingReleaseHealth` as engineer-facing waits when the Case is already at ReleaseReview / HumanDecision.
