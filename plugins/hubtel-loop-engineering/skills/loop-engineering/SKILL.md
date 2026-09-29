@@ -1,6 +1,6 @@
 ---
 name: loop-capability-operation
-description: Operates Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP. Use when the user mentions Loop, a Case ID (CASE-XXXXXXXX or GUID), Production Investigation, Release Assurance, Pipeline Remediation, PipelineFailure, CompleteInvestigationPlanning, MarkNoRemediation, CancelRemediation, InvestigationPlanning, ReleaseReview, CompleteReleaseReview, RequestRollback, AcceptReleaseRisk, RequestEvidenceRecollection, CreateProductionInvestigation, capability stage, AcceptAssignment, RejectAssignment, CompleteInvestigation, CompleteDiagnosis, CompleteRecommendation, ReturnToInvestigation, AcceptNoAction, PlanCodeRemediation, CompleteRemediationPlan, ApprovePlan, RequestPlanRevision, ApproveExecution, ApproveImplementation, CompleteExecution, RequestRevision, Recommendation, RemediationPlanning, PlanReview, Execution, AwaitingExecutionApproval, human decision, AwaitingHumanDecision, assignment acceptance, or asks to work on an engineering case. NEVER auto-submit capability actions — always stop after get_case_workspace and wait for explicit engineer confirmation.
+description: Operates Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP. Use when the user mentions Loop, a Case ID (CASE-XXXXXXXX or GUID), Production Investigation, Release Assurance, Pipeline Remediation, PipelineFailure, CompleteInvestigationPlanning, MarkNoRemediation, CancelRemediation, InvestigationPlanning, ApprovePlanning, AwaitingPlanningAuthorization, ReleaseReview, CompleteReleaseReview, RequestRollback, AcceptReleaseRisk, RequestEvidenceRecollection, CreateProductionInvestigation, capability stage, AcceptAssignment, RejectAssignment, CompleteInvestigation, CompleteDiagnosis, CompleteRecommendation, ReturnToInvestigation, AcceptNoAction, PlanCodeRemediation, CompleteRemediationPlan, ApprovePlan, RequestPlanRevision, ApproveExecution, ApproveImplementation, CompleteExecution, RequestRevision, Recommendation, RemediationPlanning, PlanReview, Execution, AwaitingExecutionApproval, human decision, AwaitingHumanDecision, assignment acceptance, RequestHumanInput, ProvideHumanInput, AwaitingHumanInput, RequestMoreEvidence, interactionDirective, or asks to work on an engineering case. Drive continuation from interactionDirective — Autonomous may chain RHC=false actions; RequiresHumanConfirmation is the stop signal (except approved Execute→ApprovePlan+ApproveExecution).
 ---
 
 # Loop Capability Operation
@@ -9,71 +9,112 @@ Loop owns Case state, stage contracts, and allowed transitions. The agent invest
 
 **Prerequisite:** `loop-engineering` MCP must be connected. Build and register per `docs/architecture/cursor-native-capability-prototype.md` §27 (`tools/loop-engineering-mcp`).
 
+## Interaction directive (authoritative continuation)
+
+Workspace and settled submit responses include **`interactionDirective`** — a **projection** from capability contracts (not a second persisted interaction state machine):
+
+| Field | Meaning |
+|-------|---------|
+| `phase` | Engineer-facing phase (Assignment, Investigation, AwaitingHumanInput, AwaitingPlanningAuthorization, Planning, PlanReview, AwaitingExecutionAuthorization, Execution, Decision, Review, Platform, Terminal) |
+| `continuation` | `Autonomous` \| `RequiresHumanConfirmation` \| `AwaitingPlatform` \| `None` |
+| `requiresHarness` | Planning/Execution must ensure/resume the Engineering Harness in the target repo |
+| `permittedActions` | All actions valid now |
+| `autonomousActions` | RHC=false actions Cursor may submit without a new human confirm |
+| `humanConfirmationActions` | Actions that require explicit engineer intent |
+| `stopReason` | Why Cursor must stop when `continuation` is `RequiresHumanConfirmation` |
+| `humanInputRequest` | When phase is `AwaitingHumanInput`: outstanding question (`question`, `requestedAtUtc`, `requestedFromStage`) from durable `RequestHumanInput` — present this exact question after restart; null when not awaiting input |
+
+**Rules:**
+
+1. **First-touch** — When the engineer pastes a Case ID / "Work on Loop CASE-…": call **`get_case_workspace` first**, then **trust `interactionDirective`** (see **First-touch continuation** below). Pasting a Case ID is not consent to cross `RequiresHumanConfirmation` / RHC=true actions.
+2. **`RequiresHumanConfirmation`** — Authoritative stop. Present options (`humanConfirmationActions` / `availableActions`), wait for explicit engineer intent. Do **not** submit. Honor `stopReason`.
+3. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation`, `AwaitingPlatform`, or terminal `None`. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
+4. **Execute intent exception** — One explicit engineer intent such as **"Execute this plan"** may drive **two sequential durable actions** when both are valid: `ApprovePlan` → settle → `ApproveExecution` → settle → Execution. Do **not** merge backend semantics. Fail closed if either action is invalid or settlement fails. Never infer the second authorization from an unrelated earlier utterance.
+5. **Gate B** — After successful implementation/validation, when `ApproveImplementation` is in `autonomousActions` (RHC=false), Cursor may autonomously submit it (durable freeze checkpoint), then commit/push, then `CompleteExecution`. Stop on failed validation, material plan deviation, destructive/unexpected repo ops, or other safety conditions — never silently cross the boundary.
+6. **Loop wins over Harness** — Loop authorization always overrides Harness `approvalMode` / autopilot. Do not let harness autopilot bypass Loop gates.
+7. **PendingSettlement** — Observational only via `get_transition_status`. Never re-signal; never invent a refresh loop. After **AcceptAssignment**, settlement stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation so investigation continues without another human action.
+8. **`AwaitingPlatform`** — Platform work is still progressing (empty Cursor actions). Do **not** invent actions; do **not** ask the engineer to refresh or type "continue". Observe via PendingSettlement / `get_transition_status` when applicable.
+9. **`None`** — Terminal / no further progression expected. Present status; do not invent actions.
+
+### First-touch continuation (authoritative)
+
+On first touch always:
+
+1. Call **`get_case_workspace`**.
+2. Trust the returned **`interactionDirective`**.
+3. If **`continuation` = `RequiresHumanConfirmation`**: present decision/context (first-touch summary + options); **STOP**; do not submit without human intent.
+4. If **`continuation` = `Autonomous`**: Cursor **MAY** continue the authorized autonomous phase **in the same turn** — perform permitted work, submit RHC=false / `autonomousActions`, follow settled autonomous continuation; **stop** only at the next genuine human boundary, error, or block. Do **not** invent a "continue" / "submit review" human message.
+5. If **`continuation` = `AwaitingPlatform`**: use observational/settlement behavior; do **not** ask the engineer to refresh or continue.
+6. If terminal (`None` / Terminal phase): present result/status; do not act.
+
+First-touch protects against **unauthorized** mutation (RHC=true). It must **not** invent a human gate when Loop already projected **Autonomous**.
+
 ## Hard gate (violations invalidate the prototype)
 
-When the engineer pastes a Case ID or says "Work on Loop CASE-…":
-
-1. Call **`get_case_workspace` only** on the first turn.
-2. Reply with the **First-touch summary** (template below). **End the turn.**
-3. Do **not** call `submit_stage_output`, `request_capability_transition`, or `get_transition_status` on that first turn — even if the case looks simple, simulated, or fully diagnosable from evidence.
-4. After the engineer explicitly confirms **one** action, submit **only that action**, then continue from the **settled** response (`outcome` / `currentStage`). Do **not** refresh via `get_case_workspace` as normal UX. Use observational `get_transition_status` only if `outcome` is `PendingSettlement`.
-5. Never submit `AcceptAssignment` and `CompleteInvestigation` / `CompleteDiagnosis` / `CompleteRecommendation` / `CompleteRemediationPlan` in the same session turn or without separate confirmations per stage.
-6. **`close_engineering_case`** is also gated — never call it on first-touch or without explicit confirmation (reason + outcomeType). Use when no stage action can close the Case (ops / manual disposition).
-
-Pasting a Case ID is **not** consent to accept, investigate, complete, or submit a plan — it is a request to **load state and present options**.
+1. First-touch: always **`get_case_workspace` first**, then follow **First-touch continuation** from `interactionDirective` — never invent actions outside that directive.
+2. Never submit a `humanConfirmationActions` / RHC=true action without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence after one Execute intent).
+3. After workspace load / settled responses, drive all continuation from **`interactionDirective`** + settled context — not chat history.
+4. Never skip Fail-closed settlement checks.
+5. **`close_engineering_case`** — requires explicit confirmation (reason + outcomeType); never infer from Case open alone.
 
 ## Standard operating model
 
-Applies to Investigation, Diagnosis, Recommendation, Human Decision, Remediation Planning, Plan Review, Pipeline Remediation (InvestigationPlanning → Execution), and escalated Release Assurance (ReleaseReview / HumanDecision):
-
-1. **Get Case workspace** — `get_case_workspace`.
-2. **Read current stage contract** — objective, instructions, required outputs, available actions.
-3. **Perform only the current stage objective** — do not skip ahead.
-4. **Keep conversational work in Cursor** — Loop persists only submitted artifacts.
-5. **Build durable output** — align with `requiredOutputArtifactTypes` before submission.
-6. **Explain consequential transitions** — tell the engineer what the next Loop action will do.
-7. **Get required human confirmation** — explicit go-ahead before every submit (see **Human confirmation** and **Structured option prompts**).
-8. **Submit only an available semantic action** — from `currentStageContract.availableActions`.
-9. **Consume settled context** — Control Plane returns `outcome` (`Succeeded` / `Failed` / `PendingSettlement`) with authoritative `currentStage` / `availableActions`. **Do not** call `get_case_workspace` as a normal follow-up after success.
-10. **Continue from settled stage** — trust settled `currentStage` / `expectedStage` when present; use observational `get_transition_status` only for `PendingSettlement`.
+1. **Get Case workspace** — `get_case_workspace` (first-touch or resume).
+2. **Read `interactionDirective` + stage contract** — phase, continuation, harness need, actions.
+3. **If RHC** — summarize, present options, **stop**.
+4. **If Autonomous** — perform only the current stage objective; build durable outputs; submit autonomous actions; continue from settled `interactionDirective`.
+4b. **If AwaitingPlatform** — do not invent actions; observe PendingSettlement / `get_transition_status` when applicable.
+5. **Keep conversational work in Cursor** — Loop persists only submitted artifacts.
+6. **Consume settled context** — `outcome` / `currentStage` / `availableActions` / `interactionDirective`. Do **not** refresh via `get_case_workspace` as normal UX after success.
+7. **Observational PendingSettlement** — `get_transition_status` only.
 
 ## Operating rules
 
 1. When given a Loop Case ID, call `get_case_workspace`.
-2. Read `capability.currentStage`, `capability.expectedStage`, and `currentStageContract` before acting.
-3. **Stop and summarize** — report the current stage, objective, and `availableActions` to the engineer before taking any action. When **two or more** actions apply, present them via **AskQuestion** when available, otherwise a short prose ask (see **Structured option prompts**).
-4. **Never submit** `submit_stage_output` without **explicit engineer confirmation** (see **Human confirmation**). One action per confirmation — never chain stages in one turn.
-5. If the stage is `AwaitingEngineerAcceptance`, only discuss **AcceptAssignment** or **RejectAssignment** until the engineer chooses.
-6. If the stage is `Recommendation`, formulate an evidence-backed disposition recommendation from workspace investigation/diagnosis/evidence. Diagnosis explains *what/why*; Recommendation advises *what to do next*. Submit **CompleteRecommendation** only when complete and truthful — never auto-chain into a human disposition.
-7. If the stage is `AwaitingHumanDecision`, present the active recommendation from `humanDecision` and disposition actions from `availableActions`. Submit **one** disposition only after explicit confirmation — never auto-select the recommended disposition even when confidence is high.
-8. If the stage is `RemediationPlanning`, draft the plan collaboratively in Cursor; submit **CompleteRemediationPlan** only after a reviewable plan exists and the engineer confirms submission.
-9. If the stage is `PlanReview`, treat it as a **human decision gate** — summarize the plan and present review actions; never choose ApprovePlan / RequestRevision / RejectPlan / CancelPlanning without explicit engineer confirmation.
+2. Read `capability.currentStage`, `capability.expectedStage`, `currentStageContract`, and **`interactionDirective`** before acting.
+3. **Stop when `continuation` is `RequiresHumanConfirmation`** — report phase, `stopReason`, and options. When **two or more** actions apply, use **AskQuestion** when available (see **Structured option prompts**).
+4. **Submit without a new confirm only for `autonomousActions`** when `continuation` is `Autonomous` (including first-touch when Loop projected Autonomous). Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except approved Execute dual-chain).
+5. If assignment offer is active (`phase` Assignment), only discuss **AcceptAssignment** or **RejectAssignment** until the engineer chooses.
+6. After Accept settles into Investigation (`continuation` Autonomous): run investigation and submit completion actions autonomously; then **stop** when planning authorization / HumanDecision / PlanReview is required. For **Pipeline**, stop at `AwaitingPlanningAuthorization` for ApprovePlanning. For **PI**, after Plan* disposition proceed directly to Harness-backed RemediationPlanning (no second ApprovePlanning ask).
+7. If the stage is `Recommendation`, formulate an evidence-backed disposition recommendation. Submit **CompleteRecommendation** when autonomous; never auto-select a human disposition.
+8. If the stage is `AwaitingHumanDecision` / RA `HumanDecision`, present dispositions — never auto-select even when confidence is high.
+8b. If RA `ReleaseReview` and `continuation` is Autonomous: produce the review and submit `CompleteReleaseReview` without asking the engineer to authorize the submit; then stop at HumanDecision.
+9. If `requiresHarness` is true (Planning/Execution): resolve target repo; resume existing Engineering Harness or invoke `hbtl-harness-creator` / create-harness once; never invoke the legacy Worker coding harness; reuse the same harness for Planning and Execution unless evidence requires otherwise.
 10. Treat Loop evidence as production facts, not automatically as conclusions.
 11. Use repository/internal tooling to satisfy the current stage objective.
-11. Do not transition merely because work was attempted or a draft exists in chat.
-12. Submit required stage output before requesting completion actions that require outputs.
-13. Only use actions returned by `currentStageContract.availableActions`.
-14. Honor `requiresHumanConfirmation` on each action from the stage contract — do not maintain a separate hard-coded confirmation list.
-15. Use **`capability.expectedStage`** for submissions — never submit persisted workflow aliases such as `AwaitingPlanReview` or `HarnessExecution`.
-16. If new evidence invalidates prior work, use a permitted backward transition.
-17. Never invent Case state.
-18. Never perform destructive actions outside governed Loop actions.
-19. After settled success, continue from settled context — do **not** use refresh as normal UX; use observational `get_transition_status` only for `PendingSettlement`.
-20. For execution stages, read `executionContext` — never reconstruct execution state from chat history or latest plan by timestamp.
-21. Git commit/push is Cursor agent work — never invoke Loop MCP for Git operations.
+12. Do not transition merely because work was attempted or a draft exists in chat.
+13. Submit required stage output before completion actions that require outputs.
+14. Only use actions from `currentStageContract.availableActions` / `interactionDirective.permittedActions`.
+15. Honor `requiresHumanConfirmation` and `interactionDirective` — do not maintain a separate hard-coded confirmation list that contradicts the directive.
+16. Use **`capability.expectedStage`** for submissions — never submit persisted workflow aliases such as `AwaitingPlanReview` or `HarnessExecution`.
+17. If new evidence invalidates prior work, use a permitted backward transition.
+18. Never invent Case state.
+19. Never perform destructive actions outside governed Loop actions.
+20. After settled success, continue from settled context — observational `get_transition_status` only for `PendingSettlement`.
+21. For execution stages, read `executionContext` — never reconstruct execution state from chat history.
+22. Git commit/push is Cursor agent work — never invoke Loop MCP for Git operations. Commit/push only after execution authorization and required validation (and Gate B freeze when required).
 
 ## Human confirmation
 
-Explicit engineer confirmation is required before **every** governed action submit.
+Explicit engineer confirmation is required before submitting any action in **`humanConfirmationActions`**, or whenever `continuation` is **`RequiresHumanConfirmation`**.
+
+**Authoritative continuation rules** (do not invent a separate phase-authorization checklist):
+
+- Trust **`interactionDirective`** — it controls whether Cursor may continue.
+- **`Autonomous`** — may perform stage work and submit **`autonomousActions`** (RHC=false) without a new human confirm, including first-touch when Loop already projected Autonomous.
+- **`RequiresHumanConfirmation`** — stop; require explicit engineer intent before any submit (except the approved Execute→ApprovePlan+ApproveExecution sequence).
+- **`AwaitingPlatform`** — observe only; do not invent actions or ask the engineer to refresh.
+- Never autonomously submit **`humanConfirmationActions`** / RHC=true actions.
 
 ### When a single path was proposed (N = 1)
 
 Valid confirmations are clear directives such as:
 
-- "yes, submit the plan" / "yes, complete investigation" / "approve the plan"
-- "yes, approve execution" / "yes, approve the implementation" / "yes, complete execution"
 - "accept" / "reject" (+ reason when required)
-- a named disposition: "AcceptNoAction", "PlanCodeRemediation", "ApproveExecution", "ApproveImplementation", "CompleteExecution", "RequestRevision", …
+- "proceed with planning" / "approve planning"
+- "Execute this plan" (maps to ApprovePlan then ApproveExecution when both valid)
+- "yes, submit the plan" / "yes, complete investigation" / "approve the plan"
+- a named disposition: "AcceptNoAction", "PlanCodeRemediation", "RequestRevision", …
 
 **Not sufficient on their own:** "looks good", "sounds fine", thumbs-up, or general enthusiasm without naming the action.
 
@@ -91,7 +132,7 @@ After you presented **two or more** choices (AskQuestion picker or prose list of
 
 - Bare "yes" / "ok" / "go ahead" / "lgtm" / "looks good" / "sounds fine" / "do it" / emoji / silence
 - Affirming the *recommendation* without naming which action ("that sounds right", "I agree with the recommendation")
-- Selecting multiple actions in one message
+- Selecting multiple actions in one message (except the approved Execute intent → ApprovePlan + ApproveExecution sequence)
 
 **On insufficient reply:** do **not** call `submit_stage_output`, `request_capability_transition`, `submit_stage_retry`, or `close_engineering_case`. Re-present the **same** options (AskQuestion if available, else the same prose list) and ask the engineer to pick **one** named option or Other. One short re-ask — do not drip new questions.
 
@@ -118,16 +159,17 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 
 | Moment | Options source |
 | ------ | ---------------- |
-| After first `get_case_workspace` | All `availableActions` + Other |
-| Before any `submit_stage_output` | The single proposed action vs cancel/wait — or full `availableActions` when the engineer asked "what can I do?" |
+| After first `get_case_workspace` when `continuation` is RHC | All `humanConfirmationActions` / `availableActions` + Other |
+| `AwaitingPlanningAuthorization` | ApprovePlanning / decline paths per contract + Other |
 | `AwaitingHumanDecision` | Disposition actions from contract + Other |
-| `PlanReview` | ApprovePlan / RequestRevision or RequestPlanRevision / RejectPlan / CancelPlanning or MarkNoRemediation (per contract) + Other |
-| `AwaitingExecutionApproval` (Gate A) | ApproveExecution / CancelRemediation or PI revision/reject/cancel/defer (per contract) + Other |
-| `Execution` pre–Gate B | ApproveImplementation / CancelRemediation / … (per contract) + Other |
-| `Execution` post–Gate B | Proceed to commit/push / revise further / Other — before Git work |
-| Before **CompleteExecution** | Submit CompleteExecution / hold / Other |
-| After rejection or stage mismatch | Refresh + retry / different action from refreshed contract / Other |
+| `PlanReview` (when not covered by Execute intent) | ApprovePlan / RequestRevision or RequestPlanRevision / RejectPlan / CancelPlanning or MarkNoRemediation (per contract) + Other |
+| Presenting completed plan for execution | **"Execute this plan"** (ApprovePlan→ApproveExecution) / revise / reject + Other |
+| `AwaitingExecutionApproval` alone | ApproveExecution / CancelRemediation or PI revision/reject/cancel/defer (per contract) + Other |
+| Exceptional Execution stops (validation fail, deviation) | Gate B / Cancel / revise paths per contract + Other |
+| After rejection or stage mismatch | Refresh + retry / different action from settled contract / Other |
 | Stage-retry park (transient failure, post-delivery hold) | Retry / Replan via `submit_stage_retry` + Other — requires explicit confirmation; not a capability action |
+
+Do **not** AskQuestion for normal Autonomous progress (investigation completion, planning completion, Gate B after successful validation, CompleteExecution after push) when those actions are in `autonomousActions`.
 
 ### Stage retry (recovery, not capability actions)
 
@@ -142,42 +184,38 @@ Mirror the summary in prose (first-touch template, gate explanations below). Whe
 
 Single-path updates with no real fork (e.g. "settled success — continuing at next stage") stay plain text — no AskQuestion.
 
-When proposing **CompleteRemediationPlan**, present the full plan summary and ask explicitly:
+When proposing **ApprovePlan** as part of **"Execute this plan"**:
 
-> The next Loop action is **CompleteRemediationPlan**, which will persist this plan and move the Case to **PlanReview**. Do you want me to submit it?
+> One intent freezes the plan (**ApprovePlan**) then authorizes repository modification (**ApproveExecution**). Both remain separate durable records.
 
-When proposing **ApprovePlan**, explain:
+When proposing **ApprovePlanning** (planning authorization):
 
-> Approval crosses the planning boundary and moves the capability to **AwaitingExecutionApproval**. It does not itself execute the remediation.
+> Investigation is complete. Planning has **not** been authorized yet. Approving planning authorizes Harness ensure/scaffold and remediation planning.
 
-When proposing **ApproveExecution** (Gate A), explain:
+When **ApproveImplementation** (Gate B) is autonomous after successful validation:
 
-> This authorizes implementation of the approved remediation plan. It does **not** approve the resulting code.
+> Durable freeze checkpoint — no second human approval on the happy path. Stop instead if validation failed or the change materially diverges from the approved plan.
 
-When proposing **ApproveImplementation** (Gate B), explain:
-
-> This approves the implementation you reviewed. It does **not** change the capability stage — from the settled response verify `implementationApproved = true` (or capabilityState / available next actions) before commit/push.
-
-When proposing **CompleteExecution**, present the final execution summary and ask explicitly before submitting.
+When proposing **CompleteExecution** after successful push and Gate B freeze, submit when it is in `autonomousActions` — do not ask for a redundant confirmation on the happy path.
 
 ## Standard workflow
 
 ```mermaid
 flowchart TD
   A[Parse Case ID] --> B[get_case_workspace]
-  B --> C[Read currentStageContract + expectedStage]
-  C --> D[Inspect evidence + repository + remediationPlanning]
-  D --> E[Produce required artifacts]
-  E --> F{Engineer approval needed?}
-  F -->|yes| G[Explain and confirm]
-  F -->|no| H[submit_stage_output]
-  G --> H
-  H --> I{accepted + outcome?}
-  I -->|no / Failed| J[Read rejection or settlementReason]
-  J --> C
-  I -->|PendingSettlement| P[get_transition_status observational]
-  P --> I
-  I -->|Succeeded| C
+  B --> C[Read interactionDirective + stage contract]
+  C --> D{continuation?}
+  D -->|RequiresHumanConfirmation| E[Present options and stop]
+  E --> F[Engineer intent]
+  F --> G[submit confirmed / Execute sequence]
+  D -->|Autonomous| H[Do stage work + submit autonomousActions]
+  D -->|None| I[Platform or terminal — no Cursor action]
+  G --> J{settled outcome?}
+  H --> J
+  J -->|Failed| K[Surface reason — stop or retry per contract]
+  J -->|PendingSettlement| P[get_transition_status observational]
+  P --> J
+  J -->|Succeeded| C
 ```
 
 ### 1. Discover
@@ -450,12 +488,11 @@ Honor `currentStageContract.availableActions[*].requiresHumanConfirmation` — t
 
 When `capability.currentStage = AwaitingExecutionApproval`:
 
-1. Read `executionContext.approval` and `executionContext.approvedPlan`.
-2. Summarize what the engineer is authorizing: plan summary, proposed changes, validation, risks, repository/branch constraints.
-3. Explain available actions from `currentStageContract.availableActions`.
-4. For **ApproveExecution**, state clearly: *This authorizes implementation of the approved remediation plan. It does not approve the resulting code.*
-5. Require explicit engineer confirmation naming the action — do **not** auto-submit.
-6. After accepted Gate A action → continue from **settled** response immediately.
+1. Read `executionContext.approval` and `executionContext.approvedPlan` (or pipeline approved EngineeringBrief).
+2. If the engineer just said **"Execute this plan"** and `ApprovePlan` already settled into this stage, submit **`ApproveExecution`** next in the same turn (fail closed if invalid).
+3. If arriving here without that Execute intent, summarize authorization scope and require explicit confirmation for ApproveExecution / CancelRemediation.
+4. For **ApproveExecution**, remember: *This authorizes implementation of the approved remediation plan. It does not approve the resulting code.*
+5. After accepted Gate A action → continue from **settled** response immediately into harness-backed Execution when Autonomous.
 
 Expected after **ApproveExecution**: `currentStage` at or past Execution (may briefly show ReadyForExecution — collapse candidate), `executionApproved = true`, `phase = Implementation` when present — **settled response wins**.
 
@@ -463,18 +500,18 @@ Expected after **ApproveExecution**: `currentStage` at or past Execution (may br
 
 When `capability.currentStage = Execution` and `executionContext.implementationApproved = false`:
 
-1. Treat Cursor as the execution environment.
-2. Implement **`executionContext.approvedPlan`** — not the latest plan from history.
+1. Treat Cursor as the execution environment (Harness-backed when `requiresHarness`).
+2. Implement **`executionContext.approvedPlan`** / frozen EngineeringBrief — not the latest plan from chat history.
 3. Inspect repository; verify Git base/branch against `attempt.baseCommitSha` / approval constraints.
 4. Run build/tests; inspect diff; compare against approved plan.
-5. Present implementation review summary to the engineer: changes, changed files, validation performed/passed/failed, risks, deviations, current Git status.
-6. **Do not** invoke `ApproveImplementation` until the engineer explicitly confirms Gate B.
+5. On **successful validation with no material deviation**: when `ApproveImplementation` is in `interactionDirective.autonomousActions`, submit Gate B autonomously, then commit/push, then CompleteExecution.
+6. On **failed validation, material deviation, destructive/unexpected repo ops, or safety conditions**: **stop** — present the issue and `humanConfirmationActions`; do **not** silently cross Gate B.
 
 **Do not invoke Loop transitions for:** file edits, test failures, debugging, engineer questions, minor corrections, diff review.
 
 ### Gate B — ApproveImplementation (same stage)
 
-After explicit Gate B confirmation:
+Happy path after successful implementation/validation (no second human approval):
 
 ```json
 {
@@ -493,7 +530,7 @@ implementationApproved = true
 phase = ImplementationApproved
 ```
 
-Do **not** interpret unchanged `currentStage` as failure — verify `implementationApproved`, `phase`, and `implementationReview` from settled/workspace context.
+Do **not** interpret unchanged `currentStage` as failure — verify `implementationApproved`, `phase`, and `implementationReview` from settled/workspace context. Gate B remains a **durable** freeze checkpoint even when submitted autonomously.
 
 ### Execution — post Gate B (`implementationApproved = true`)
 
@@ -504,7 +541,7 @@ When `implementationApproved = true` and `phase = ImplementationApproved`:
 - **Commit and push in Cursor** (not via Loop MCP) subject to repository constraints.
 - Do not force-push unless explicitly permitted; do not invent PR fields.
 
-**Post-approval mutation governance gap:** If you make **material code changes after Gate B**, the prior approval may no longer represent the delivery. Compare current diff to the reviewed state; if material changes occurred, tell the engineer and require renewed **ApproveImplementation** before **CompleteExecution**. Loop currently has no dedicated “invalidate Gate B” action — document this gap; do not conceal it.
+**Post-approval mutation governance gap:** If you make **material code changes after Gate B**, the prior approval may no longer represent the delivery. Compare current diff to the reviewed state; if material changes occurred, **stop** and require renewed **ApproveImplementation** before **CompleteExecution**. Loop currently has no dedicated “invalidate Gate B” action — document this gap; do not conceal it.
 
 ### CompleteExecution
 
@@ -544,7 +581,7 @@ Construct output from actual Git/validation evidence (camelCase JSON):
 - Non-empty `validationFailed` may persist `PartiallySucceeded` when push succeeds — explain before submitting.
 - Material deviations → consider **RequestRevision** instead of **CompleteExecution**.
 
-`CompleteExecution` has `requiresHumanConfirmation = true` — present final summary and obtain explicit confirmation. Do not auto-chain Gate B → commit → push → CompleteExecution without the necessary human confirmations at each gate.
+On the happy path, when `CompleteExecution` is in `interactionDirective.autonomousActions`, submit after successful push and Gate B freeze — do **not** ask for a redundant human confirmation. Stop and re-confirm if validation failed, push failed, or material deviations exist.
 
 After accepted **CompleteExecution** → continue from settled context. Expect **`RemediationDelivered`** / Case **Closed** (close-at-push). Do **not** expect `link-pull-request`, `PartiallyDelivered` → PR linkage, `AwaitingPullRequestOutcome`, `AwaitingDeploymentConfirmation`, or `AwaitingProductionVerification` for new Cursor-native PI. Those specialty gates are **legacy drain only** for in-flight parks; recover incomplete delivery with **stage-retry**, not link-PR or specialty delivery-retry.
 
@@ -600,7 +637,7 @@ Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **no
 | `AwaitingExecutionApproval` | `ApproveExecution`, `CancelRemediation` | none (`CancelRemediation` requires reason) |
 | `Execution` | `ApproveImplementation`, `CompleteExecution`, `CancelRemediation` | `CompleteExecution` requires push-success delivery evidence |
 
-After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Do not auto-chain Gate A → Gate B → CompleteExecution. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
+After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Happy-path chain after Execute intent: implement → validate → autonomous Gate B → commit/push → CompleteExecution. Stop on exceptions. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
 
 Execution approval and delivery use `pipelineRemediation` (+ workspace stage contract) — do not bypass with invented actions.
 
@@ -614,13 +651,18 @@ Execution approval and delivery use `pipelineRemediation` (+ workspace stage con
 - Do not auto-complete simulated/validation cases — the engineer still confirms each governed action.
 - Do not submit `expectedStage = AwaitingPlanReview` — use `PlanReview` via workspace `capability.expectedStage`.
 
-## First-touch summary template (required before any submission)
+## First-touch summary template
 
-After the initial `get_case_workspace`, respond with this and **stop** — no submit calls on the same turn:
+After the initial `get_case_workspace`, follow **First-touch continuation**:
+
+### When `continuation` = `RequiresHumanConfirmation`
+
+Respond with this template (plus capability-specific evidence blocks below), present options, and **STOP** — no submit until explicit engineer intent:
 
 ```markdown
 **Case:** CASE-XXXXXXXX — {title}
 **Stage:** {capability.currentStage} (expected: {capability.expectedStage}, {capability.status})
+**Directive:** phase={interactionDirective.phase}; continuation={interactionDirective.continuation}; requiresHarness={interactionDirective.requiresHarness}
 **Objective:** {currentStageContract.objective}
 **Available actions:** {comma-separated action names from currentStageContract}
 **Assignment:** {assignment.engineerEmail} — {assignment.assignmentStatus}
@@ -628,17 +670,28 @@ After the initial `get_case_workspace`, respond with this and **stop** — no su
 **Planning:** {remediationPlanning.session.status + latestPlan.revision when remediationPlanning present, else "n/a"}
 **Execution:** {executionContext.phase + approved plan rev when executionContext present, else "n/a"}
 **Pipeline:** {pipelineRemediation.pipelineFailureStatus + approved brief version + freeze/delivery flags when pipelineRemediation present, else "n/a"}
+**Stop reason:** {interactionDirective.stopReason}
 
 I have not submitted any Loop actions yet.
-
-Prefer **AskQuestion** for each action in **Available actions** plus **Other** (free-text). If AskQuestion is not in this session's tool catalog, ask the same choices in short prose.
-
-**Release Assurance `ReleaseReview`:** after the template above, also surface `releaseAssurance.deterministicAssessment` (outcome, summary, reasons) and `releaseAssurance.hostEvidence` (type/status/summary per item) before offering `CompleteReleaseReview`. See `references/release-assurance.md`. RA has no AcceptAssignment gate — assignment is select+auto-accept.
-
-**Pipeline Remediation:** after the template above, also surface `pipelineRemediation.evidence` (failure + PR/branch), latest vs approved EngineeringBrief versions, and freeze/delivery flags before offering planning or execution actions. See `references/pipeline-remediation.md`. When `assignment.assignmentStatus` is `AwaitingAcceptance`, offer only `AcceptAssignment` / `RejectAssignment` from `availableActions` (projected onto EvidenceCollection — not a separate CE stage).
 ```
 
-Wait for the engineer to pick **one** action (or Other) before calling `submit_stage_output` or any other mutating MCP tool. Apply the **Medium bar**: bare "yes" / "lgtm" / "looks good" is **not** enough when multiple actions were listed — re-ask until they name one option or Other.
+Prefer **AskQuestion** for each action in **Available actions** / `humanConfirmationActions` plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** named action (Medium bar).
+
+### When `continuation` = `Autonomous`
+
+Do **not** stop for a fake "continue" / "submit review" confirm. Perform the stage objective, submit `autonomousActions`, chain settled Autonomous responses, and stop at the next RHC / AwaitingPlatform / Terminal boundary. You may briefly acknowledge the Case while working; do not ask the engineer to authorize autonomous work Loop already projected.
+
+### When `continuation` = `AwaitingPlatform`
+
+Report that platform work is in progress (without narrating internal stage names when skill says hide them). Observe via settlement / `get_transition_status` when applicable. Do **not** ask the engineer to refresh or continue.
+
+### When terminal (`None`)
+
+Present result/status; do not act.
+
+**Release Assurance `ReleaseReview`:** when opening at ReleaseReview with Autonomous continuation, surface `releaseAssurance.deterministicAssessment` + `hostEvidence`, then **in the same turn** produce and submit `CompleteReleaseReview`, then stop at HumanDecision. See `references/release-assurance.md`. Healthy RA needs no engineer assignment. When engineering involvement is required, competitive Offers + explicit `AcceptAssignment` / `RejectAssignment` apply first (Selected* stays null until Accept wins).
+
+**Pipeline Remediation:** when assignment offer is active (`continuation` RHC), surface `pipelineRemediation.evidence` as needed and offer only `AcceptAssignment` / `RejectAssignment` from `availableActions` (projected onto EvidenceCollection — not a separate CE stage). See `references/pipeline-remediation.md`.
 
 ## Engineer-facing summary template
 
@@ -654,12 +707,12 @@ After each accepted transition:
 
 ## Trigger phrases
 
-**`Work on Loop CASE-XXXXXXXX` is the standard entry point.** The hard gate always applies.
+**`Work on Loop CASE-XXXXXXXX` is the standard entry point.** First-touch continuation always applies.
 
 | Phrase | First turn behavior |
 | ------ | ------------------- |
-| `Work on Loop CASE-XXXX` | `get_case_workspace` → first-touch summary → **stop** |
-| `Investigate Loop case …` / `What's the current stage for CASE-…?` | Load and report only |
-| `Submit CompleteRemediationPlan for …` / `approve the plan` | Prior workspace load required; submit **only** after confirmation |
+| `Work on Loop CASE-XXXX` | `get_case_workspace` → follow `interactionDirective` (RHC → stop; Autonomous → may act same turn; AwaitingPlatform → observe; Terminal → report) |
+| `Investigate Loop case …` / `What's the current stage for CASE-…?` | Load and report only unless directive is Autonomous and work is in scope |
+| `Submit CompleteRemediationPlan for …` / `approve the plan` | Prior workspace load required; RHC=true submits **only** after confirmation |
 
-Saying "Work on Loop …" is **never** permission to accept, investigate, complete, submit a plan, or chain stages.
+Saying "Work on Loop …" is **never** permission to submit RHC=true actions (Accept, ApprovePlanning, Plan*, Execute, HumanDecision dispositions, etc.). It **does** allow Cursor to perform Loop-projected Autonomous work in the same turn.

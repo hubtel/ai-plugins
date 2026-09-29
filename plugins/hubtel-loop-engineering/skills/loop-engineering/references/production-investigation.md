@@ -12,16 +12,29 @@ Durable stage names (from Loop/Temporal) differ from agent-friendly objectives i
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
 | `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
 
-Preserve disposition (`AwaitingHumanDecision`) and dual approvals (PlanReview ≠ Gate A; Gate B in Execution). Settlement does not replace human confirmation.
+Preserve disposition (`AwaitingHumanDecision`) — all Plan* / AcceptNoAction / Escalate / Defer / Cancel options remain intact. **Plan* dispositions authorize Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B is durable and autonomous after successful validation (RHC=false). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`.
 
 ### Hide incidental machine stages from chat
 
 | Machine stage | Cursor treatment |
 |---------------|------------------|
-| Pre-Cursor platform stages (evidence collection → enrichment) | **Hide** — not engineer interaction |
+| Pre-Cursor platform stages (evidence collection → enrichment) | **Hide** — continuation `AwaitingPlatform`; observe via Accept PendingSettlement / `get_transition_status` |
 | `RepositoryWorkspacePreparation` / `RepositoryInvestigation` | **Hide** — soft “starting investigation” |
-| `ReadyForExecution` | **Collapse candidate** (not collapsed this batch) — if observed, treat as transitional toward Execution; do not narrate as a separate engineer gate |
+| `ReadyForExecution` | **Collapse candidate** — treat as transitional toward Execution |
 | PlanReview / AwaitingExecutionApproval / Execution | **Keep** — distinct durable boundaries |
+| `AwaitingPlanningAuthorization` | **Recovery only** — normal Plan* skips this |
+
+### Target journey (after Accept)
+
+```text
+Accept → PendingSettlement until InvestigationBrief (platform stages) → Autonomous
+AUTONOMOUS Brief → Diagnosis → Recommendation
+→ Human: disposition (AwaitingHumanDecision — options intact)
+→ (Plan*): HARNESS ensure/resume → AUTONOMOUS RemediationPlanning → PlanReview
+→ Human: Execute this plan (ApprovePlan → ApproveExecution)
+→ HARNESS-backed Execution → autonomous Gate B → commit/push → CompleteExecution
+```
+
 
 ## InvestigationBrief
 
@@ -46,8 +59,27 @@ Preserve disposition (`AwaitingHumanDecision`) and dual approvals (PlanReview �
 | Action | Target stage | Notes |
 | ------ | ------------ | ----- |
 | `CompleteInvestigation` | `ProductionDiagnosis` | Requires stage outputs |
-| `RequestMoreEvidence` | — | Non-terminal; workflow stays awaiting |
-| `RequestHumanInput` | — | Non-terminal; workflow stays awaiting |
+| `RequestMoreEvidence` | `InvestigationBrief` | Same-stage autonomous ack; platform gathers evidence; Cursor resumes |
+| `RequestHumanInput` | `AwaitingHumanInput` | Agent-initiated (RHC=false); requires `reason` (the question). Settles into a human-input boundary — not an "approve asking" gate |
+
+## AwaitingHumanInput
+
+**Objective:** Supply the human input Cursor requested so autonomous investigation can resume.
+
+**Ownership:** One meaningful human interaction — answering the requested question. Cursor already raised `RequestHumanInput` autonomously; do **not** ask the engineer to authorize asking.
+
+**Instructions (from contract):**
+
+1. Read the outstanding question from `interactionDirective.humanInputRequest.question` (authoritative Loop state — not chat history).
+2. Present that exact question to the engineer and stop.
+3. Submit `ProvideHumanInput` with `reason` = the engineer response after they answer.
+4. After settlement, resume the prior investigation stage (`humanInputRequest.requestedFromStage`) autonomously.
+
+**Available actions:**
+
+| Action | Target stage | Notes |
+| ------ | ------------ | ----- |
+| `ProvideHumanInput` | — (returns to prior stage) | RHC=true; requires `reason` (engineer response) |
 
 ## ProductionDiagnosis
 
@@ -73,7 +105,7 @@ Preserve disposition (`AwaitingHumanDecision`) and dual approvals (PlanReview �
 | ------ | ------------ | ----- |
 | `CompleteDiagnosis` | `Recommendation` | Requires stage outputs |
 | `ReturnToInvestigation` | `InvestigationBrief` | Requires `reason`; use when evidence invalidates prior investigation |
-| `RequestHumanInput` | — | Non-terminal |
+| `RequestHumanInput` | `AwaitingHumanInput` | Agent-initiated (RHC=false); requires `reason` (the question) |
 
 ## Recommendation
 
@@ -143,10 +175,13 @@ Submit via `submit_stage_output` with the disposition as `action` (not the legac
 
 **Instructions (from contract):**
 
-1. Remain in this stage while drafting with the engineer in Cursor.
-2. Do not complete until a reviewable plan exists.
-3. Reference diagnosis, evidence, and prior revisions.
-4. Address `revisionContext.requestedReason` when revising.
+1. Planning is already authorized by the Plan* HumanDecision — ensure/resume the Engineering Harness when `requiresHarness` is true.
+2. Autonomously develop a reviewable remediation plan from Case Workspace artifacts, investigation evidence, and repository context.
+3. Do not ask the engineer for planning confirmation or collaborative drafting on the happy path; stop only when genuinely blocked (exceptional durable `RequestHumanInput` when needed).
+4. Loop does not persist conversational drafting — only submit the durable completed plan via `CompleteRemediationPlan`, then stop at PlanReview for the engineer decision.
+5. Reference the active diagnosis, recommendation, and evidence from the Case Workspace.
+6. Include validation steps, risks, rollback considerations, and affected components.
+7. Address `revisionContext.requestedReason` when revising after `RequestRevision`.
 
 **Required outputs for `CompleteRemediationPlan`:**
 
@@ -225,13 +260,13 @@ After **ApproveExecution** settles → expect `currentStage` at or past Executio
 
 **Pre Gate B** (`implementationApproved = false`): implement, validate, present diff — no Loop transitions for ordinary coding.
 
-**Gate B** — `ApproveImplementation` (no outputs; `requiresHumanConfirmation`):
+**Gate B** — `ApproveImplementation` (no outputs; **RHC=false** / in `autonomousActions` on happy path):
 
 ```json
 { "caseId": "CASE-…", "action": "ApproveImplementation" }
 ```
 
-Stage stays `Execution`; from settled context verify `implementationApproved = true`, `phase = ImplementationApproved`.
+Stage stays `Execution`; from settled context verify `implementationApproved = true`, `phase = ImplementationApproved`. Do **not** ask the engineer for a normal Gate B confirmation when it is autonomous. Stop on validation failure / material deviation / safety conditions.
 
 **Post Gate B**: commit/push in Cursor; then **CompleteExecution** with full output:
 
@@ -254,10 +289,10 @@ Do **not** submit **CompleteExecution** until push has succeeded. Loop rejects `
 
 | Action | Notes |
 | ------ | ----- |
-| `ApproveImplementation` | Gate B — same stage after accept |
-| `CompleteExecution` | Requires full outputs + successful push (`pushed: true`) + human confirmation |
-| `RequestRevision` | Returns to planning — requires `reason` |
-| `RejectImplementation` / `CancelRemediation` | Terminal hold actions — require `reason` |
+| `ApproveImplementation` | Gate B — durable freeze; autonomous after successful validation |
+| `CompleteExecution` | Requires full outputs + successful push (`pushed: true`); autonomous on happy path |
+| `RequestRevision` | Returns to planning — requires `reason` + RHC |
+| `RejectImplementation` / `CancelRemediation` | Terminal hold actions — require `reason` + RHC |
 
 ## ImplementationApproved
 

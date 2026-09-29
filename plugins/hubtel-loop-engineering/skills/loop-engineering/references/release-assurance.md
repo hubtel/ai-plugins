@@ -8,7 +8,7 @@ Release Assurance answers: based on host evidence for the deployed release, does
 
 ```text
 Healthy → automatic Complete (no Cursor / Engineer review agent / Human Guidance / Electron)
-Unhealthy | Inconclusive → Cursor ReleaseReview → HumanDecision
+Unhealthy | Inconclusive → Cursor autonomous ReleaseReview (CompleteReleaseReview) → HumanDecision (one human disposition)
 ```
 
 ## Settled actions (no refresh UX)
@@ -19,16 +19,17 @@ Unhealthy | Inconclusive → Cursor ReleaseReview → HumanDecision
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
 | `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
 
-Preserve ReleaseReview and HumanDecision confirmation gates.
+Preserve HumanDecision confirmation gates. Honor `interactionDirective` — RA uses **Review** / **Decision** / **Platform** / **Terminal** phases only. **ReleaseReview is autonomous agent work** (`CompleteReleaseReview` RHC=false) — do not ask the engineer to authorize submitting the review. Do **not** invent fake Planning or Execution phases for Release Assurance.
 
 ### Hide automatic chatter from chat
 
 | Machine stage | Cursor treatment |
 |---------------|------------------|
-| `CollectingHostEvidence` | **Hide** — Host Agent waves; not Cursor work |
+| `CollectingHostEvidence` | **Hide** — Host Agent waves; continuation `AwaitingPlatform` |
 | `AssessingReleaseHealth` | **Hide** — deterministic branch; optional later fold |
 | Pre-escalation deployment stages | **Hide** |
-| `ReleaseReview` / `HumanDecision` | **Keep** — escalated engineer path |
+| `ReleaseReview` | **Autonomous** — produce + submit CompleteReleaseReview; then stop at HumanDecision |
+| `HumanDecision` | **Keep** — genuine human disposition |
 
 ## Stages
 
@@ -36,25 +37,42 @@ Preserve ReleaseReview and HumanDecision confirmation gates.
 |-------|--------|------|
 | CollectingHostEvidence | Automatic / Host Agent | Not Cursor |
 | AssessingReleaseHealth | Automatic | Healthy → Complete |
-| ReleaseReview | Cursor | Unhealthy or Inconclusive only |
+| ReleaseReview | Cursor autonomous | Unhealthy or Inconclusive only |
 | HumanDecision | Human via Cursor | Governed disposition |
 | RollbackRequested | Terminal RA CE | After RequestRollback; Case stays Open for Rollback CE |
 | ReleaseAssuranceCompleted | Terminal | Healthy auto or AcceptReleaseRisk |
 
-## Engineer assignment (Cursor-native)
+## Engineer assignment (competitive offers)
 
-Release Assurance **selects** an eligible engineer worker then **auto-accepts** them. There is no `AwaitingEngineerAcceptance` stage and no `AcceptAssignment` / `RejectAssignment` actions. Workspace `assignment.assignmentStatus` should be `Accepted` (not `AwaitingAcceptance`) when a candidate was found. Cursor proceeds directly to `ReleaseReview` / `HumanDecision`.
+Healthy / platform-only RA completes with **zero** engineer assignment ceremony: no `CaseAssignmentOffer` rows, no `SelectedEngineer*`, no Accept/Reject.
 
-## ReleaseReview first-touch (required evidence surface)
+When engineering involvement is required (Unhealthy / Inconclusive escalated path):
 
-When `currentStage` is `ReleaseReview`, the first-touch summary **must** include a short evidence block from `workspace.releaseAssurance` before offering `CompleteReleaseReview`:
+1. Resolve repository + evaluate eligible Workers — **do not** designate an owner (`SelectedEngineerWorkerId` stays null).
+2. Open competitive `CaseAssignmentOffer` rows (Offered) for eligible Workers.
+3. Case stays `AwaitingAcceptance` while Offers are open.
+4. Engineer Accept / Reject is a genuine RHC boundary (`AcceptAssignment` / `RejectAssignment`).
+5. First valid Accept wins atomically in Postgres; only then populate `SelectedEngineer*` and continue post-Accept RA lifecycle.
+6. Sibling Offers close as `WonByOther`; Rejected engineers are excluded for that Case (not re-offered).
+
+Silent auto-accept of an arbitrary first Worker is **disabled**.
+
+## ReleaseReview first-touch (evidence + autonomous submit)
+
+When `currentStage` is `ReleaseReview` and `interactionDirective.continuation` is `Autonomous`:
+
+1. Surface a short evidence block from `workspace.releaseAssurance` (deployment, `deterministicAssessment`, reasons, host evidence).
+2. **In the same turn**, produce the durable ReleaseReview and submit `CompleteReleaseReview` — do **not** ask the engineer to continue, refresh, or authorize submitting the review.
+3. After settlement → `HumanDecision` / RequiresHumanConfirmation: present disposition options and **stop**.
+
+Evidence block contents:
 
 1. **Deployment** — release name/id, stage, definition (from `releaseAssurance.deployment`)
 2. **Assessment** — `deterministicAssessment.outcome` + `summary`
 3. **Reasons** — bullet the assessment `reasons` / `failedRules` (cite host evidence; do not invent)
 4. **Host evidence** — for each item in `releaseAssurance.hostEvidence` (or `evidence.engineeringEvidence`): type, status, summary (and evidence id when recommending SupportingEvidence)
 
-Do not offer `CompleteReleaseReview` as a bare action label without that context. Healthy releases must not be in this stage.
+Healthy releases must not be in this stage. Never invent a "continue" / "submit review" human message when Loop projected Autonomous.
 
 ## CompleteReleaseReview
 
@@ -169,7 +187,7 @@ Rollback confirmation Guidance threads are not created for the Cursor-native pat
 2. Do **not** auto-chain into RequestRollback or ConfirmRollback.
 3. Do **not** invent a CreateProductionInvestigation path — it is deferred.
 4. On a **rollback verification** Case, `AcceptReleaseRisk` (and manual `close_engineering_case` with `ReleaseRiskAccepted` / healthy outcomes) auto-completes the **linked originating** Case when A↔B linkage exists.
-5. When a Case has no stage contract to close it, use MCP **`close_engineering_case`** only after explicit engineer confirmation (reason + outcomeType). Never on first-touch.
-6. Loop sends CCI Teams notifications on **RA engineer auto-accept** and when Rollback reaches **`AwaitingRollbackConfirmation`** (not on every ReleaseReview/HumanDecision stage).
+5. When a Case has no stage contract to close it, use MCP **`close_engineering_case`** only after explicit engineer confirmation (reason + outcomeType). Never infer close from Case open alone.
+6. Loop sends CCI Teams notifications on **new local Offered assignment offers** (when engineering involvement is required) and when Rollback reaches **`AwaitingRollbackConfirmation`** (not on every ReleaseReview/HumanDecision stage). Healthy RA creates no assignment notifications.
 7. After settled mutations, continue from settled context — **no refresh** as normal UX. Use observational `get_transition_status` only for `PendingSettlement`.
 8. Do **not** narrate `CollectingHostEvidence` or `AssessingReleaseHealth` as engineer-facing waits when the Case is already at ReleaseReview / HumanDecision.

@@ -7,8 +7,9 @@ Pipeline Remediation remediates Azure Pipeline / CI failures on an existing PR s
 ```text
 Temporal / Loop = durable Case / CapabilityExecution / decisions
 Cursor Agent   = investigation, EngineeringBrief, implementation, commit/push
-Engineer       = confirms consequential gates
+Engineer       = confirms consequential gates (Accept, ApprovePlanning, Execute this plan)
 Engineer Worker = orchestration / assignment endpoint — not the coding harness on Cursor-native Cases
+Harness        = AGENTS.md / feature_list / create-harness scaffold in the target repo
 ```
 
 Do **not** invoke the legacy Engineer Worker coding harness, Human Guidance, or Electron chat for Cursor-native Pipeline Remediation.
@@ -19,73 +20,113 @@ Mutations settle in Control Plane before the MCP tool returns:
 
 | `outcome` | Agent behaviour |
 |-----------|-----------------|
-| `Succeeded` | Consume `currentStage`, `availableActions`, and capability state from the submit response. **Do not** call `get_case_workspace` as a normal follow-up. Continue from the settled stage. |
+| `Succeeded` | Consume `currentStage`, `availableActions`, **`interactionDirective`**, and capability state from the submit response. **Do not** call `get_case_workspace` as a normal follow-up. Continue per `interactionDirective.continuation`. |
 | `Failed` | Surface `settlementReason` / `message`. Do not re-submit the same intent without engineer direction. |
 | `PendingSettlement` | Exceptional only. Call observational `get_transition_status` with the same `submissionId` / `idempotencyKey` — **never** re-signal. Do **not** narrate "Temporal is processing" or invent a refresh loop. |
 
-Keep all human confirmation gates (PlanReview, Gate A, Gate B). Settlement does not replace engineer approval.
+`RequiresHumanConfirmation` on the directive is the stop signal. Settlement does not replace human authorization at those gates. RHC=false `autonomousActions` may chain in the same turn.
 
-## Lifecycle (engineer-facing)
-
-Speak in **actions**, not incidental machine stage waits:
+## Lifecycle (engineer-facing target)
 
 ```text
-Accept assignment
-→ Investigate / plan (InvestigationPlanning)
-→ CompleteInvestigationPlanning
-→ Review plan (PlanReview) — human
-→ ApprovePlan / RequestPlanRevision / RejectPlan / MarkNoRemediation
-→ Authorize execution (AwaitingExecutionApproval / Gate A) — human
-→ ApproveExecution / CancelRemediation
-→ Implement (Execution) + ApproveImplementation (Gate B) — human
-→ commit/push in Cursor
-→ CompleteExecution
-→ Done
+Case offered
+→ Human: Accept
+
+AUTONOMOUS INVESTIGATION
+→ evidence/workspace/branch/repository investigation
+→ CompleteInvestigationPlanning → AwaitingPlanningAuthorization
+
+Cursor presents Investigation Result
+→ Human: Proceed with planning (ApprovePlanning)
+
+HARNESS ENSURED/SCAFFOLDED (mandatory)
+AUTONOMOUS PLANNING
+→ CompletePlanning → PlanReview
+
+Cursor presents Plan
+→ Human: Execute this plan
+
+ApprovePlan → ApproveExecution (separate durable records)
+→ HARNESS-BACKED EXECUTION (same repo harness)
+→ implementation → validation
+→ autonomous durable Gate B (ApproveImplementation)
+→ commit/push → CompleteExecution
+
+Cursor presents Execution Result
 ```
+
+No normal additional human confirmations on the happy path. Stop on exceptional conditions (validation failure, material deviation, destructive ops).
+
+## Engineering Harness (mandatory for Planning and Execution)
+
+When `interactionDirective.requiresHarness` is true (Planning / Execution after authorization):
+
+1. Resolve the **target repository** from Case Workspace / pipeline evidence (PR source branch repo).
+2. Detect whether the governed **Engineering Harness** already exists (`AGENTS.md`, `feature_list.json`, harness scaffold markers).
+3. If present — **resume/use it**; do **not** recreate.
+4. If absent — invoke **`hbtl-harness-creator` / create-harness** once (existing flow). Do **not** duplicate Harness behavior inside Loop.
+5. Do **not** invoke the legacy Engineer Worker coding harness.
+6. Reuse the **same** repository Harness for Planning and Execution unless implementation evidence requires otherwise.
+
+**Orthogonality:**
+
+| System | Owns |
+|--------|------|
+| Loop | Whether work is authorized, capability lifecycle, artifacts, decisions |
+| Harness | How governed engineering work is scaffolded/performed (`AGENTS.md`, feature rows, verification) |
+| Cursor | Coordinates both |
+| Temporal | Durable capability state machine |
+
+**Loop authorization always overrides Harness `approvalMode` / autopilot.** Never let harness autopilot bypass ApprovePlanning, ApprovePlan, ApproveExecution, or safety stops.
 
 ### Machine stages to hide from chat
 
 | Machine stage | Cursor treatment |
 |---------------|------------------|
-| **EvidenceCollection** | Automatic after Accept. **Hide** — do not narrate "waiting for evidence collection" or treat it as engineer work. After Accept settles, continue when InvestigationPlanning (or assignment-settled actions) appears. |
+| **EvidenceCollection** | Automatic after Accept. **Hide** — continuation `AwaitingPlatform` while platform collects. **AcceptAssignment** settles as **PendingSettlement** until `InvestigationPlanning` is actionable, then Succeeded + Autonomous — continue investigation without asking the engineer to refresh. |
 | Assignment offer | Keep — human Accept/Reject |
 
-**PlanReview ≠ Gate A.** ApprovePlan freezes the plan only; ApproveExecution separately authorizes repository work. Do not collapse or skip either gate.
+**ApprovePlan ≠ ApproveExecution.** One Execute intent may submit both sequentially; they remain separate durable records.
+
+**Gate B** remains a durable freeze checkpoint; on the happy path after successful validation it does **not** require a second human response.
 
 ## Full machine lifecycle (reference)
 
 ```text
 Assignment offer [Case AwaitingAcceptance; Accept/Reject on EvidenceCollection contract]
 → EvidenceCollection [automatic after Accept — hide from Cursor chat]
-→ InvestigationPlanning [Cursor]
+→ InvestigationPlanning [Cursor autonomous]
 → CompleteInvestigationPlanning
-→ PlanReview [human]
-→ ApprovePlan / RequestPlanRevision / RejectPlan / MarkNoRemediation
-→ AwaitingExecutionApproval [human Gate A]
-→ ApproveExecution / CancelRemediation
-→ Execution [Cursor]
-→ ApproveImplementation [human Gate B; stays in Execution]
+→ AwaitingPlanningAuthorization [human — ApprovePlanning]
+→ Planning [Harness ensure + Cursor autonomous]
+→ CompletePlanning
+→ PlanReview [human — Execute this plan → ApprovePlan then ApproveExecution]
+→ AwaitingExecutionApproval
+→ Execution [Harness-backed; autonomous Gate B after validation]
+→ ApproveImplementation [durable freeze; autonomous on happy path]
 → commit/push in Cursor
 → CompleteExecution
 → Complete [RemediationDelivered]
 ```
 
-Assignment acceptance is **not** a CapabilityExecution stage (unlike Production Investigation's `AwaitingEngineerAcceptance`). CE stays on `EvidenceCollection` while the Case assignment is offered.
+Assignment acceptance is **not** a CapabilityExecution stage. CE stays on `EvidenceCollection` while the Case assignment is offered.
 
-While `assignment.assignmentStatus` is `AwaitingAcceptance`, the workspace **overlays** `AcceptAssignment` / `RejectAssignment` on the EvidenceCollection contract (same `expectedStage`). Submit those via MCP like any other governed action — do not wait for evidence, and do not invent a CE AcceptAssignment stage.
+While `assignment.assignmentStatus` is `AwaitingAcceptance`, the workspace **overlays** `AcceptAssignment` / `RejectAssignment` on the EvidenceCollection contract. Submit those via MCP like any other governed action.
 
-Teams (`Work on Loop CASE-XXXX`) is discovery only. After Accept settles successfully, evidence collection may still run on the machine — **do not** tell the engineer to wait on EvidenceCollection; wait for settled progression into InvestigationPlanning (or PendingSettlement follow-up).
+Teams (`Work on Loop CASE-XXXX`) is discovery only. After Accept settles, do **not** narrate EvidenceCollection as a stage the engineer must wait through.
 
 ## Stages
 
 | Stage | Owner | Notes |
 |-------|--------|------|
-| Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection`; actions overlay Accept/Reject |
-| EvidenceCollection | Automatic | After Accept — **hide** from chat; no Cursor actions |
-| InvestigationPlanning | Cursor | Produce EngineeringBrief |
-| PlanReview | Human via Cursor | Approve / revise / reject / no remediation — **distinct from Gate A** |
-| AwaitingExecutionApproval | Human via Cursor | Gate A — authorize work on approved snapshot — **≠ PlanReview** |
-| Execution | Cursor + human Gate B | Implement, freeze, push, CompleteExecution |
+| Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection` |
+| EvidenceCollection | Automatic | After Accept — **hide** from chat |
+| InvestigationPlanning | Cursor autonomous | Investigation result / EngineeringBrief understanding |
+| AwaitingPlanningAuthorization | Human via Cursor | ApprovePlanning before Harness-backed planning |
+| Planning | Cursor + Harness | Ensure/resume harness (`AGENTS.md` / create-harness); CompletePlanning |
+| PlanReview | Human via Cursor | Execute intent → ApprovePlan (+ ApproveExecution) |
+| AwaitingExecutionApproval | Human / chained | Gate A — authorize work on approved snapshot |
+| Execution | Cursor + Harness | Implement, autonomous Gate B after validation, push, CompleteExecution |
 | Complete | Terminal | Delivery or truthful non-delivery |
 
 ## Workspace — read `pipelineRemediation`
@@ -120,44 +161,47 @@ Submit EngineeringBrief fields (camelCase MCP `output`):
 }
 ```
 
-Not a ProductionInvestigation remediation plan. Do not invent PI recommendation models.
+Lands on **AwaitingPlanningAuthorization**. Not a ProductionInvestigation remediation plan.
+
+## AwaitingPlanningAuthorization — ApprovePlanning
+
+Human gate. After ApprovePlanning settles → **Planning** (Harness ensure mandatory before autonomous planning).
+
+## Planning — CompletePlanning
+
+Same EngineeringBrief output shape as investigation completion. Lands on **PlanReview**.
 
 ## PlanReview
-
-All actions require explicit engineer confirmation:
 
 | Action | Effect |
 |--------|--------|
 | `ApprovePlan` | Freeze approved snapshot → AwaitingExecutionApproval |
-| `RequestPlanRevision` | Return to InvestigationPlanning (reason required) |
+| `RequestPlanRevision` | Return to **Planning** (reason required) |
 | `RejectPlan` | Terminal no-delivery disposition |
-| `MarkNoRemediation` | Terminal; reason category required (e.g. `UnsupportedNonPrFailure`) |
+| `MarkNoRemediation` | Terminal; reason category required |
+
+One intent **"Execute this plan"** may submit `ApprovePlan` then `ApproveExecution` when both are valid (fail closed).
 
 ## Gate A — ApproveExecution
 
 - Authorizes implementation of the **frozen** `ApprovedEngineeringBriefVersion` only.
-- Does **not** approve resulting code and does **not** auto-chain Gate B.
+- Does **not** approve resulting code.
 - Non-PR cases cannot authorize delivery — use `CancelRemediation` with `UnsupportedNonPrFailure`.
-- `CancelRemediation` terminates without delivery (known reason category).
 
 ## Execution + Gate B — ApproveImplementation
 
-- Remain in Execution while editing/validating in Cursor.
-- Work on the **existing PR source branch** — no force-push, no new feature branch as the delivery path.
-- `ApproveImplementation` stays in Execution and freezes material engineering for that approved version.
-- After Gate B: **commit/push allowed**; material code changes require a governed revision path.
-- Do **not** auto-chain `CompleteExecution`.
+- Remain in Execution while editing/validating under the **same Engineering Harness**.
+- Work on the **existing PR source branch**.
+- After successful validation with no material deviation: submit `ApproveImplementation` autonomously (durable freeze), then commit/push, then `CompleteExecution`.
+- Stop on validation failure, material deviation, or unexpected destructive repo ops.
 
 ## CompleteExecution
 
 Only after successful push:
 
 - `pushResult.pushed` must be `true`
-- Include changeSummary, changedFiles, validation*, delivery evidence (commit SHA / evidenceReferences)
-- Completion boundary is **successful push** — not CI-green or pipeline rerun wait
-- Outcome: RemediationDelivered → CE Complete → Case Closed
-
-Failed push / local-validation-only must not complete.
+- Include changeSummary, changedFiles, validation*, delivery evidence
+- Completion boundary is **successful push** — not CI-green
 
 ## First-touch (Pipeline)
 
@@ -166,18 +210,17 @@ After `get_case_workspace`, when `capability.capabilityType` is Pipeline Remedia
 ```markdown
 **Pipeline:** {pipelineRemediation.pipelineFailureStatus}; PR/branch from evidence
 **Brief:** latest v{n}; approved v{m or none}; freeze={materialCodeChangesFrozen}; deliveryAllowed={deliveryMechanicsAllowed}
+**Directive:** phase={interactionDirective.phase}; continuation={interactionDirective.continuation}; requiresHarness={interactionDirective.requiresHarness}
 **Evidence:** short failure summary + whether PR source branch is resolvable
 ```
 
-If `assignment.assignmentStatus` is `AwaitingAcceptance`, `availableActions` must include `AcceptAssignment` / `RejectAssignment` — present those and stop. Do **not** tell the engineer to wait for evidence while assignment is still awaiting acceptance.
-
-After Accept **settled**, do **not** narrate EvidenceCollection as a stage the engineer must wait through.
+If `assignment.assignmentStatus` is `AwaitingAcceptance`, present Accept/Reject and stop.
 
 ## Terminals
 
 | Action | When |
 |--------|------|
-| `MarkNoRemediation` | PlanReview — truthful non-delivery |
+| `MarkNoRemediation` | InvestigationPlanning / AwaitingPlanningAuthorization / Planning / PlanReview |
 | `CancelRemediation` | AwaitingExecutionApproval or Execution |
 | `RejectPlan` | PlanReview reject |
 
