@@ -15,7 +15,7 @@
 //   - hubtel-sonarquabe      (SonarQube issues + quality gate)     [required]
 //   - hubtel-design-system   (Hubtel UI components/tokens/patterns) [soft,
 //                             auto-appended only for frontend projects]
-//   - chrome-devtools        (live browser / step 3.7 UI runtime)  [required
+//   - chrome-devtools        (live browser / step-3.8 Reviewer behaviour lane)  [required
 //                             when installed — auto-appended on frontend]
 //
 // Agents registered (default): cursor claude-code codex
@@ -73,7 +73,7 @@ Notes:
   hubtel-engineering, hubtel-sprint-planner, hubtel-azure-devops, and
   hubtel-sonarquabe are always required (exit 3 on failure).
   chrome-devtools is required when installed on frontend (exit 3 on failure) —
-  needed for step 3.7 UI runtime assertion.
+  needed for the step-3.8 Reviewer to drive UI features.
 
 Exit codes:
   0  all required servers installed (optional server may have warned)

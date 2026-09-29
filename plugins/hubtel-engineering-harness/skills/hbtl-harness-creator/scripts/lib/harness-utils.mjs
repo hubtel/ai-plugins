@@ -468,554 +468,6 @@ const UI_SURFACE_PATTERN = /\b(page|screen|route|layout|form|wizard|list|table|m
 // `pipelines-karate-test` (fetch via engineering MCP get_doc at implementation time).
 const BACKEND_SERVICE_PATTERN = /\b(endpoint|controller|handler|api|route|service|consumer|producer|worker|job|webhook|kafka|rabbit|grpc|microservice|business flow|business logic)\b|\.cs\b|\.java\b|Program\.cs|Startup\.cs/i;
 const BACKEND_STACKS = new Set(['dotnet', 'java-maven', 'java-gradle']);
-const UI_RUNTIME_GATE_STATUSES = new Set(['verified', 'done']);
-const UI_RUNTIME_ARTIFACT_DIR = '.harness/ui-runtime';
-// Baseline probes every UI run records. These prove the browser was inspected;
-// they do NOT by themselves prove the deliverable is correct (that is what
-// `criteria` + `issues` cover). Renamed from v1 "assertions" to "checks".
-const UI_RUNTIME_REQUIRED_CHECKS = [
-  'dev-server',
-  'url-loaded',
-  'a11y-content',
-  'styled-not-default',
-  'console-errors',
-  'network-errors',
-  'screenshot'
-];
-const UI_RUNTIME_OPTIONAL_CHECKS = ['interaction', 'server-output'];
-const UI_RUNTIME_CHECK_IDS = [...UI_RUNTIME_REQUIRED_CHECKS, ...UI_RUNTIME_OPTIONAL_CHECKS];
-const UI_RUNTIME_CHECK_RESULTS = new Set(['clear', 'issue-found', 'not-applicable']);
-const UI_RUNTIME_ISSUE_STATUS = new Set(['open', 'resolved', 'waived']);
-const UI_RUNTIME_ISSUE_SEVERITY = new Set(['blocker', 'major', 'minor']);
-const UI_RUNTIME_CRITERIA_RESULT = new Set(['pass', 'fail']);
-const UI_RUNTIME_RUN_PHASES = new Set(['initial', 'recheck']);
-// Heuristic: criteria about logos/images/assets need load proof, not just a11y-tree presence.
-const MEDIA_CRITERION_PATTERN = /\b(logo|image|icon|asset|font|favicon|svg|thumbnail|avatar|photo|picture|banner|sprite)\b/i;
-const LOAD_PROOF_PATTERN = /\b(200|naturalWidth|\.complete|img\.complete|no failed|failed count:\s*0|list_network|network request|HTTP OK|asset.*load|evaluate_script)\b/i;
-
-function isMediaCriterion(criterion) {
-  const text = `${criterion?.id || ''} ${criterion?.summary || ''}`;
-  return MEDIA_CRITERION_PATTERN.test(text);
-}
-
-function artifactHasMediaCriteria(criteria) {
-  return (Array.isArray(criteria) ? criteria : []).some(isMediaCriterion);
-}
-
-function runHasLoadProof(run) {
-  const checks = Array.isArray(run?.checks) ? run.checks : [];
-  return checks.some((check) => {
-    const detail = check?.detail != null ? String(check.detail) : '';
-    return LOAD_PROOF_PATTERN.test(detail);
-  });
-}
-
-function indexRunChecks(run) {
-  const byId = new Map();
-  for (const check of Array.isArray(run?.checks) ? run.checks : []) {
-    if (check?.id != null) byId.set(String(check.id).trim(), check);
-  }
-  return byId;
-}
-
-export function isUiSurfaceFeature(feature) {
-  const surfaceText = `${feature.name || feature.title || ''} ${feature.description || ''} ${feature.verification || ''}`;
-  return UI_SURFACE_PATTERN.test(surfaceText);
-}
-
-export function uiRuntimeArtifactPath(repoRoot, featId) {
-  return path.join(repoRoot, UI_RUNTIME_ARTIFACT_DIR, `${featId}.json`);
-}
-
-function readUiRuntimeArtifact(repoRoot, featId) {
-  const artifactPath = uiRuntimeArtifactPath(repoRoot, featId);
-  if (!existsSync(artifactPath)) {
-    return { ok: false, errors: [`${featId}: missing UI runtime artifact at ${UI_RUNTIME_ARTIFACT_DIR}/${featId}.json`] };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(artifactPath, 'utf8'));
-  } catch {
-    return { ok: false, errors: [`${featId}: UI runtime artifact is not valid JSON (${UI_RUNTIME_ARTIFACT_DIR}/${featId}.json)`] };
-  }
-  return { ok: true, artifact: parsed, artifactPath };
-}
-
-// Derives a run's pass/fail from its own content — never from a self-reported
-// `status`. A run FAILS if it carries any open issue, any issue-found check, a
-// failing criteriaResult, a screenshot check that is clear without a path, or a
-// required criterion with no result on the run.
-export function deriveRunStatus(run, { criteria = [] } = {}) {
-  const reasons = [];
-  if (!run || typeof run !== 'object' || Array.isArray(run)) {
-    return { status: 'fail', reasons: ['run missing or invalid'] };
-  }
-
-  const issues = Array.isArray(run.issues) ? run.issues : [];
-  for (const issue of issues) {
-    const status = issue && issue.status != null ? String(issue.status).trim() : '';
-    if (status === 'open') {
-      const sev = issue.severity ? `${issue.severity} ` : '';
-      reasons.push(`open ${sev}issue ${issue.id || ''}`.trim());
-    }
-  }
-
-  const checks = Array.isArray(run.checks) ? run.checks : [];
-  for (const check of checks) {
-    const result = check && check.result != null ? String(check.result).trim() : '';
-    if (result === 'issue-found') {
-      reasons.push(`check ${check.id || ''} issue-found`.trim());
-    }
-    if (check && check.id === 'screenshot' && result === 'clear') {
-      const shotPath = check.path != null ? String(check.path).trim() : '';
-      if (!shotPath) reasons.push('screenshot check clear without a path');
-    }
-  }
-
-  const criteriaResults = Array.isArray(run.criteriaResults) ? run.criteriaResults : [];
-  const byCriterion = new Map();
-  for (const cr of criteriaResults) {
-    if (cr && cr.criterionId != null) byCriterion.set(String(cr.criterionId).trim(), cr);
-    if (cr && cr.result != null && String(cr.result).trim() === 'fail') {
-      reasons.push(`criterion ${cr.criterionId || ''} fail`.trim());
-    }
-  }
-  const requiredCriteria = (Array.isArray(criteria) ? criteria : []).filter(
-    (c) => c && c.required !== false && c.id != null
-  );
-  for (const c of requiredCriteria) {
-    if (!byCriterion.has(String(c.id).trim())) {
-      reasons.push(`required criterion ${c.id} has no result on this run`);
-    }
-  }
-
-  return { status: reasons.length === 0 ? 'pass' : 'fail', reasons };
-}
-
-// Human/agent-facing summary of the LATEST run. Used by the CLI helper
-// (summarize-ui-runtime.mjs) and to enrich tier-1 validation error messages.
-export function summarizeUiRuntimeArtifact(artifact, { featId } = {}) {
-  const id = featId || (artifact && artifact.featId) || 'feat-?';
-  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
-    return { ok: false, closed: false, runCount: 0, latestRun: null, openIssues: [], criteriaResults: [], lines: [`${id}: artifact missing or invalid`] };
-  }
-  if (artifact.skipped === true) {
-    return {
-      ok: true, closed: true, skipped: true, runCount: 0, latestRun: null, openIssues: [], criteriaResults: [],
-      lines: [`${id}: UI runtime skipped (${artifact.skipReason || 'MCP unavailable'})`]
-    };
-  }
-  if (artifact.blocked === true) {
-    return {
-      ok: true, closed: false, blocked: true, runCount: 0, latestRun: null, openIssues: [], criteriaResults: [],
-      lines: [`${id}: UI runtime blocked (${artifact.blockedReason || 'no reason given'})`]
-    };
-  }
-
-  const runs = Array.isArray(artifact.runs) ? artifact.runs : [];
-  const criteria = Array.isArray(artifact.criteria) ? artifact.criteria : [];
-  const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
-  const derived = latestRun ? deriveRunStatus(latestRun, { criteria }) : { status: 'fail', reasons: ['no runs recorded'] };
-  const openIssues = latestRun && Array.isArray(latestRun.issues)
-    ? latestRun.issues.filter((i) => i && String(i.status).trim() === 'open')
-    : [];
-  const criteriaResults = latestRun && Array.isArray(latestRun.criteriaResults) ? latestRun.criteriaResults : [];
-  const closed = derived.status === 'pass';
-
-  const lines = [];
-  lines.push(`${id}: UI runtime ${closed ? 'CLOSED' : 'OPEN'} (${runs.length} run${runs.length === 1 ? '' : 's'}${artifact.url ? `, ${artifact.url}` : ''})`);
-  if (!closed) {
-    for (const reason of derived.reasons) lines.push(`  - ${reason}`);
-  }
-  if (openIssues.length > 0) {
-    lines.push('  Open issues (latest run):');
-    for (const issue of openIssues) {
-      const sev = issue.severity ? `[${issue.severity}] ` : '';
-      const crit = issue.source && issue.source.criterionId ? ` (${issue.source.criterionId})` : '';
-      lines.push(`    - ${sev}${issue.id}: ${issue.summary || ''}${crit}`);
-    }
-  }
-  if (criteriaResults.length > 0) {
-    lines.push('  Criteria (latest run):');
-    for (const cr of criteriaResults) {
-      lines.push(`    - ${cr.criterionId}: ${cr.result}`);
-    }
-  }
-  if (latestRun && Array.isArray(latestRun.checks)) {
-    const shots = latestRun.checks
-      .filter((c) => c && c.id === 'screenshot' && c.path)
-      .map((c) => c.path);
-    for (const shot of shots) lines.push(`  Screenshot: ${shot}`);
-  }
-
-  return { ok: true, closed, runCount: runs.length, latestRun, derived, openIssues, criteriaResults, lines };
-}
-
-function indexChecks(checks, featId, runLabel, errors) {
-  const byId = new Map();
-  if (!Array.isArray(checks)) {
-    errors.push(`${featId}: ui-runtime ${runLabel}.checks must be an array`);
-    return byId;
-  }
-  for (const check of checks) {
-    if (!check || typeof check !== 'object') {
-      errors.push(`${featId}: ui-runtime ${runLabel} has an invalid check entry`);
-      continue;
-    }
-    const cid = check.id != null ? String(check.id).trim() : '';
-    if (!UI_RUNTIME_CHECK_IDS.includes(cid)) {
-      errors.push(`${featId}: ui-runtime ${runLabel} has unknown check id "${cid}"`);
-      continue;
-    }
-    if (byId.has(cid)) {
-      errors.push(`${featId}: ui-runtime ${runLabel} duplicates check id "${cid}"`);
-      continue;
-    }
-    byId.set(cid, check);
-  }
-  return byId;
-}
-
-function validateUiRuntimeCheck(check, id, { featId, runLabel, issueIds, errors }) {
-  const result = check.result != null ? String(check.result).trim() : '';
-  if (!UI_RUNTIME_CHECK_RESULTS.has(result)) {
-    errors.push(`${featId}: ui-runtime ${runLabel}.${id}.result must be clear, issue-found, or not-applicable`);
-    return;
-  }
-  if (result === 'issue-found') {
-    const linkedId = check.issueId != null ? String(check.issueId).trim() : '';
-    if (!linkedId) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.${id} is issue-found but has no issueId`);
-    } else if (!issueIds.has(linkedId)) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.${id}.issueId "${linkedId}" does not match any issue in this run`);
-    }
-  }
-  if (id === 'console-errors' || id === 'network-errors') {
-    if (result === 'clear' && (check.count == null || typeof check.count !== 'number')) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.${id} requires count when result is clear (use count: 0 after reading console/network via MCP)`);
-    } else if (check.count != null && (typeof check.count !== 'number' || check.count < 0)) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.${id}.count must be a non-negative number`);
-    } else if (result === 'clear' && typeof check.count === 'number' && check.count !== 0) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.${id} cannot be clear with count ${check.count}`);
-    }
-  }
-  if (id === 'screenshot' && result === 'clear') {
-    const shotPath = check.path != null ? String(check.path).trim() : '';
-    if (!shotPath) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.screenshot requires path when result is clear`);
-    }
-  }
-}
-
-function validateUiRuntimeRun(run, { featId, runIndex, issueIds, criterionIds }) {
-  const errors = [];
-  const runLabel = `runs[${runIndex}]`;
-  if (!run || typeof run !== 'object' || Array.isArray(run)) {
-    errors.push(`${featId}: ui-runtime ${runLabel} is missing or invalid`);
-    return errors;
-  }
-
-  const phase = run.phase != null ? String(run.phase).trim() : '';
-  if (!UI_RUNTIME_RUN_PHASES.has(phase)) {
-    errors.push(`${featId}: ui-runtime ${runLabel}.phase must be "initial" or "recheck"`);
-  }
-  if (runIndex === 0 && phase !== 'initial') {
-    errors.push(`${featId}: ui-runtime runs[0].phase must be "initial"`);
-  }
-  if (runIndex > 0 && phase === 'initial') {
-    errors.push(`${featId}: ui-runtime ${runLabel}.phase must be "recheck" (only runs[0] is initial)`);
-  }
-
-  const at = run.at != null ? String(run.at).trim() : '';
-  if (!at || Number.isNaN(Date.parse(at))) {
-    errors.push(`${featId}: ui-runtime ${runLabel}.at must be an ISO-8601 timestamp`);
-  }
-
-  const byId = indexChecks(run.checks, featId, runLabel, errors);
-  for (const id of UI_RUNTIME_REQUIRED_CHECKS) {
-    const check = byId.get(id);
-    if (!check) {
-      errors.push(`${featId}: ui-runtime ${runLabel} missing required check "${id}"`);
-      continue;
-    }
-    const result = check.result != null ? String(check.result).trim() : '';
-    if (result === 'not-applicable') {
-      errors.push(`${featId}: ui-runtime ${runLabel}.${id} cannot be not-applicable (required check)`);
-      continue;
-    }
-    validateUiRuntimeCheck(check, id, { featId, runLabel, issueIds, errors });
-  }
-  for (const id of UI_RUNTIME_OPTIONAL_CHECKS) {
-    const check = byId.get(id);
-    if (!check) continue;
-    validateUiRuntimeCheck(check, id, { featId, runLabel, issueIds, errors });
-  }
-
-  if (run.issues != null) {
-    if (!Array.isArray(run.issues)) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.issues must be an array`);
-    } else {
-      const seen = new Set();
-      for (const issue of run.issues) {
-        if (!issue || typeof issue !== 'object') {
-          errors.push(`${featId}: ui-runtime ${runLabel} has an invalid issue entry`);
-          continue;
-        }
-        const iid = issue.id != null ? String(issue.id).trim() : '';
-        if (!iid) {
-          errors.push(`${featId}: ui-runtime ${runLabel} has an issue without id`);
-          continue;
-        }
-        if (seen.has(iid)) {
-          errors.push(`${featId}: ui-runtime ${runLabel} duplicates issue id "${iid}"`);
-        }
-        seen.add(iid);
-        const status = issue.status != null ? String(issue.status).trim() : '';
-        if (!UI_RUNTIME_ISSUE_STATUS.has(status)) {
-          errors.push(`${featId}: ui-runtime ${runLabel}.${iid}.status must be open, resolved, or waived`);
-        }
-        if (issue.severity != null && !UI_RUNTIME_ISSUE_SEVERITY.has(String(issue.severity).trim())) {
-          errors.push(`${featId}: ui-runtime ${runLabel}.${iid}.severity must be blocker, major, or minor`);
-        }
-        if (status === 'resolved' && !(issue.resolution != null && String(issue.resolution).trim())) {
-          errors.push(`${featId}: ui-runtime ${runLabel}.${iid} is resolved but has no resolution`);
-        }
-        if (status === 'waived' && !(issue.reason != null && String(issue.reason).trim())) {
-          errors.push(`${featId}: ui-runtime ${runLabel}.${iid} is waived but has no reason`);
-        }
-      }
-    }
-  }
-
-  if (run.criteriaResults != null) {
-    if (!Array.isArray(run.criteriaResults)) {
-      errors.push(`${featId}: ui-runtime ${runLabel}.criteriaResults must be an array`);
-    } else {
-      for (const cr of run.criteriaResults) {
-        if (!cr || typeof cr !== 'object') {
-          errors.push(`${featId}: ui-runtime ${runLabel} has an invalid criteriaResults entry`);
-          continue;
-        }
-        const cid = cr.criterionId != null ? String(cr.criterionId).trim() : '';
-        if (!cid) {
-          errors.push(`${featId}: ui-runtime ${runLabel} has a criteriaResults entry without criterionId`);
-          continue;
-        }
-        if (criterionIds.size > 0 && !criterionIds.has(cid)) {
-          errors.push(`${featId}: ui-runtime ${runLabel}.criteriaResults references unknown criterion "${cid}"`);
-        }
-        const result = cr.result != null ? String(cr.result).trim() : '';
-        if (!UI_RUNTIME_CRITERIA_RESULT.has(result)) {
-          errors.push(`${featId}: ui-runtime ${runLabel}.criteriaResults[${cid}].result must be pass or fail`);
-        }
-        if (result === 'fail') {
-          const linkedId = cr.issueId != null ? String(cr.issueId).trim() : '';
-          if (!linkedId) {
-            errors.push(`${featId}: ui-runtime ${runLabel}.criteriaResults[${cid}] is fail but has no issueId`);
-          } else if (!issueIds.has(linkedId)) {
-            errors.push(`${featId}: ui-runtime ${runLabel}.criteriaResults[${cid}].issueId "${linkedId}" does not match any issue in this run`);
-          }
-        }
-      }
-    }
-  }
-
-  return errors;
-}
-
-export function validateUiRuntimeArtifact(artifact, { featId, featureStatus } = {}) {
-  const errors = [];
-  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
-    return { ok: false, errors: [`${featId}: UI runtime artifact must be a JSON object`] };
-  }
-
-  const version = artifact.version != null ? String(artifact.version).trim() : '';
-
-  const artifactFeatId = artifact.featId != null ? String(artifact.featId).trim() : '';
-  if (featId && artifactFeatId !== featId) {
-    errors.push(`${featId}: ui-runtime artifact featId "${artifactFeatId}" does not match feature id`);
-  }
-
-  // Skipped shape (MCP unavailable) — accepted regardless of version for
-  // backward compatibility; it records only the explicit skip decision.
-  if (artifact.skipped === true) {
-    const skipReason = artifact.skipReason != null ? String(artifact.skipReason).trim() : '';
-    if (!skipReason) {
-      errors.push(`${featId}: ui-runtime skipped artifact requires skipReason`);
-    }
-    if (artifact.mcp !== 'unavailable') {
-      errors.push(`${featId}: ui-runtime skipped artifact must set mcp to "unavailable"`);
-    }
-    return { ok: errors.length === 0, errors };
-  }
-
-  // Connected artifacts must be v3. The v1 assertion-only shape is obsolete.
-  if (version === '1') {
-    return {
-      ok: false,
-      errors: [`${featId}: UI runtime artifact version 1 is obsolete; re-run step 3.7 and write version 3 (see agents.md -> UI Runtime Assertion)`]
-    };
-  }
-  if (version !== '3') {
-    errors.push(`${featId}: ui-runtime artifact version must be "3"`);
-  }
-
-  if (artifact.blocked === true) {
-    const blockedReason = artifact.blockedReason != null ? String(artifact.blockedReason).trim() : '';
-    if (!blockedReason) {
-      errors.push(`${featId}: ui-runtime blocked artifact requires blockedReason`);
-    }
-    if (featureStatus && featureStatus !== 'blocked') {
-      errors.push(`${featId}: ui-runtime blocked artifact requires feature status "blocked" (got "${featureStatus}")`);
-    }
-    return { ok: errors.length === 0, errors };
-  }
-
-  const url = artifact.url != null ? String(artifact.url).trim() : '';
-  if (!url) {
-    errors.push(`${featId}: ui-runtime artifact requires url`);
-  }
-  if (artifact.mcp !== 'connected') {
-    errors.push(`${featId}: ui-runtime artifact must set mcp to "connected" when not skipped`);
-  }
-
-  const criteria = Array.isArray(artifact.criteria) ? artifact.criteria : [];
-  const criterionIds = new Set();
-  if (!Array.isArray(artifact.criteria)) {
-    errors.push(`${featId}: ui-runtime artifact requires a criteria array`);
-  } else {
-    for (const c of criteria) {
-      if (!c || typeof c !== 'object') {
-        errors.push(`${featId}: ui-runtime has an invalid criterion entry`);
-        continue;
-      }
-      const cid = c.id != null ? String(c.id).trim() : '';
-      if (!cid) {
-        errors.push(`${featId}: ui-runtime criterion is missing an id`);
-        continue;
-      }
-      if (criterionIds.has(cid)) {
-        errors.push(`${featId}: ui-runtime duplicates criterion id "${cid}"`);
-      }
-      criterionIds.add(cid);
-      if (!(c.summary != null && String(c.summary).trim())) {
-        errors.push(`${featId}: ui-runtime criterion "${cid}" requires a summary`);
-      }
-    }
-  }
-
-  const runs = Array.isArray(artifact.runs) ? artifact.runs : null;
-  if (!runs || runs.length === 0) {
-    errors.push(`${featId}: ui-runtime artifact requires a non-empty runs array`);
-    return { ok: errors.length === 0, errors };
-  }
-
-  const allIssueIds = new Set();
-  let prevAt = NaN;
-  runs.forEach((run, index) => {
-    const issueIds = new Set(
-      (run && Array.isArray(run.issues) ? run.issues : [])
-        .map((i) => (i && i.id != null ? String(i.id).trim() : ''))
-        .filter(Boolean)
-    );
-    for (const iid of issueIds) allIssueIds.add(iid);
-    errors.push(...validateUiRuntimeRun(run, { featId, runIndex: index, issueIds, criterionIds }));
-    const at = run && run.at != null ? Date.parse(String(run.at)) : NaN;
-    if (!Number.isNaN(at)) {
-      if (!Number.isNaN(prevAt) && at <= prevAt) {
-        errors.push(`${featId}: ui-runtime runs[${index}].at must be after the previous run`);
-      }
-      prevAt = at;
-    }
-  });
-
-  if (artifact.remediation != null) {
-    if (!Array.isArray(artifact.remediation)) {
-      errors.push(`${featId}: ui-runtime remediation must be an array`);
-    } else {
-      const firstAt = runs[0] && runs[0].at != null ? Date.parse(String(runs[0].at)) : NaN;
-      const lastAt = runs[runs.length - 1] && runs[runs.length - 1].at != null ? Date.parse(String(runs[runs.length - 1].at)) : NaN;
-      for (const rem of artifact.remediation) {
-        if (!rem || typeof rem !== 'object') {
-          errors.push(`${featId}: ui-runtime has an invalid remediation entry`);
-          continue;
-        }
-        const rid = rem.issueId != null ? String(rem.issueId).trim() : '';
-        if (!rid) {
-          errors.push(`${featId}: ui-runtime remediation entry is missing issueId`);
-        } else if (!allIssueIds.has(rid)) {
-          errors.push(`${featId}: ui-runtime remediation references unknown issue "${rid}"`);
-        }
-        if (!(rem.action != null && String(rem.action).trim())) {
-          errors.push(`${featId}: ui-runtime remediation for "${rid}" requires an action`);
-        }
-        const remAt = rem.at != null ? Date.parse(String(rem.at)) : NaN;
-        if (Number.isNaN(remAt)) {
-          errors.push(`${featId}: ui-runtime remediation for "${rid}" requires an ISO-8601 at`);
-        } else if (!Number.isNaN(firstAt) && !Number.isNaN(lastAt) && (remAt < firstAt || remAt > lastAt)) {
-          errors.push(`${featId}: ui-runtime remediation for "${rid}" at must fall between the first and last run`);
-        }
-      }
-    }
-  }
-
-  // Gate reads the LATEST run only; earlier runs are history.
-  const latestRun = runs[runs.length - 1];
-  const latestDerived = deriveRunStatus(latestRun, { criteria });
-  if (latestDerived.status !== 'pass') {
-    errors.push(`${featId}: ui-runtime latest run is not closed (${latestDerived.reasons.join('; ')})`);
-  }
-
-  // A failed initial run must be followed by at least one recheck.
-  const initialDerived = deriveRunStatus(runs[0], { criteria });
-  if (initialDerived.status === 'fail' && runs.length < 2) {
-    errors.push(`${featId}: ui-runtime initial run failed but no recheck run was appended`);
-  }
-
-  // Every issue ever opened must be carried onto the latest run as resolved or waived.
-  const latestIssueStatus = new Map(
-    (Array.isArray(latestRun.issues) ? latestRun.issues : [])
-      .filter((i) => i && i.id != null)
-      .map((i) => [String(i.id).trim(), i.status != null ? String(i.status).trim() : ''])
-  );
-  for (const iid of allIssueIds) {
-    if (!latestIssueStatus.has(iid)) {
-      errors.push(`${featId}: ui-runtime issue "${iid}" is not carried onto the latest run (must be resolved or waived there)`);
-    }
-  }
-
-  // When the latest run is closed and criteria mention logos/images/assets, require
-  // server-output (dev-server 404s are a common miss) and load proof before a media
-  // criterion may be marked pass.
-  if (latestDerived.status === 'pass' && artifactHasMediaCriteria(criteria)) {
-    const latestChecks = indexRunChecks(latestRun);
-    if (!latestChecks.has('server-output')) {
-      errors.push(`${featId}: ui-runtime latest run requires server-output check when criteria include logo/image/asset (dev-server 404s are common)`);
-    }
-    for (const cr of Array.isArray(latestRun.criteriaResults) ? latestRun.criteriaResults : []) {
-      if (cr && String(cr.result).trim() !== 'pass') continue;
-      const cid = cr.criterionId != null ? String(cr.criterionId).trim() : '';
-      const crit = criteria.find((c) => c && String(c.id).trim() === cid);
-      if (!crit || !isMediaCriterion(crit)) continue;
-      if (!runHasLoadProof(latestRun)) {
-        errors.push(`${featId}: ui-runtime criteriaResult pass for media criterion "${cid}" requires load proof in a check detail (network 200, naturalWidth/complete, or list_network_requests)`);
-      }
-    }
-  }
-
-  return { ok: errors.length === 0, errors };
-}
-
-export function validateUiRuntimeArtifactForFeature(feature, repoRoot) {
-  if (!repoRoot || !isUiSurfaceFeature(feature)) {
-    return { ok: true, errors: [] };
-  }
-  const loaded = readUiRuntimeArtifact(repoRoot, feature.id);
-  if (!loaded.ok) {
-    return loaded;
-  }
-  return validateUiRuntimeArtifact(loaded.artifact, { featId: feature.id, featureStatus: feature.status });
-}
 
 // Splits generated commands into the fast (per-task) tier and the full /
 // push tier (run via `node init.mjs --build`).
@@ -1152,6 +604,7 @@ export function dedupe(values) {
   return [...new Set(values)];
 }
 
+const REVIEW_VERDICTS = new Set(['pass', 'gaps', 'fail-overridden']);
 const DONE_STATUSES = new Set(['done']);
 // Per-repo delivery-gate policy (top-level approvalMode). Absent ⇒ supervised.
 const APPROVAL_MODES = new Set(['autopilot', 'supervised']);
@@ -1386,8 +839,40 @@ export function validateFeatureList(parsed, options = {}) {
   // fires when a hash maps to 2+ taskIds, so it never sees a 1-of-N half-commit (only one
   // task of the feature done so far) — that hole is closed here by walking each featId directly.
   for (const [featId, members] of featGroups) {
+    // featureBaseSha marks where the feature began, so the step-3.8 review can scope
+    // in-feature commits. Like evidence, it is written to every row in the group —
+    // so a disagreement between rows means one of them is wrong about its own feature.
+    const baseShas = new Set(members
+      .map((task) => (task.featureBaseSha != null ? String(task.featureBaseSha).trim().toLowerCase() : ''))
+      .filter(Boolean));
+    if (baseShas.size > 1) {
+      errors.push(`Feature ${featId} rows carry different featureBaseSha values — the feature has one starting point, recorded identically on every row`);
+    }
+    for (const sha of baseShas) {
+      if (!/^[0-9a-f]{7,40}$/.test(sha)) {
+        errors.push(`Feature ${featId}: featureBaseSha "${sha}" is not a git hash (7–40 hex chars)`);
+      }
+    }
+    // The step-3.8 review writes no report file, so reviewVerdict on the rows is the
+    // only trace it ran. Without it a skipped review looks exactly like a clean one.
+    const verdicts = new Set(members
+      .map((task) => (task.reviewVerdict != null ? String(task.reviewVerdict).trim().toLowerCase() : ''))
+      .filter(Boolean));
+    if (verdicts.size > 1) {
+      errors.push(`Feature ${featId} rows carry different reviewVerdict values — one review covers the whole feature`);
+    }
+    for (const verdict of verdicts) {
+      if (!REVIEW_VERDICTS.has(verdict)) {
+        errors.push(`Feature ${featId}: reviewVerdict "${verdict}" is not one of ${[...REVIEW_VERDICTS].join(', ')}`);
+      }
+    }
     const doneMembers = members.filter((task) => DONE_STATUSES.has(task.status));
     if (doneMembers.length === 0) continue;
+    if (verdicts.size === 0) {
+      // Warning, not tier-1: harnesses created before the rail existed have done
+      // features with no verdict, and upgrading should not invalidate their history.
+      warnings.push(`Feature ${featId} is done with no reviewVerdict — step 3.8 (feature review) leaves no other trace; record pass/gaps/fail-overridden on its rows`);
+    }
     const doneIds = doneMembers.map((task) => task.id);
     const hashes = new Set(doneMembers.map((task) => {
       const evidenceText = task.evidence != null ? String(task.evidence).trim() : '';
@@ -1425,14 +910,6 @@ export function validateFeatureList(parsed, options = {}) {
   }
 
   if (repoRoot) {
-    for (const task of parsed.tasks) {
-      if (!UI_RUNTIME_GATE_STATUSES.has(task.status) || !isUiSurfaceFeature(task)) continue;
-      const uiRuntime = validateUiRuntimeArtifactForFeature(task, repoRoot);
-      if (!uiRuntime.ok) {
-        errors.push(...uiRuntime.errors);
-      }
-    }
-
     for (const task of parsed.tasks) {
       const planFile = task.planFile != null ? String(task.planFile).trim() : '';
       if (!planFile) continue;
@@ -1534,7 +1011,6 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['audit_packages'], 'Package audit gate documented'),
       textHas(agents, ['hbtl-software-development'], 'Software-development skill referenced'),
       textHas(agents, ['hubtel-design-system', 'search_components', 'validate_imports'], 'Design System MCP documented'),
-      textHas(agents, ['chrome-devtools-mcp', 'UI Runtime Assertion', 'UI Runtime', 'step 3.7', '3.7c', 'recheck', 're-check', '.harness/ui-runtime', 'summarize-ui-runtime', 'criteriaResults', 'issue closure', 'append-only', 'Summarize before speak', 'list_network_requests', 'naturalWidth'], 'UI runtime assertion documented'),
       textHas(agents, ['Planning Phase', 'planning subagent', '.harness/plans/'], 'Planning subagent phase documented'),
       textHas(agents, ['all plans', 'all Azure tasks', 'all rows before', 'before any code', 'before ANY implementation'], 'All-before-code triage gate documented'),
       textHas(agents, ['get_harness_task_structure', 'strictly follow', 'Target File', 'Summary', 'Implementation Guidelines'], 'Strict task description template alignment documented'),
@@ -1582,6 +1058,11 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['Owned elsewhere — do not report'], 'Reviewer non-duplication exclusions documented'),
       textHas(agents, ['failureScenario'], 'Reviewer finding rubric (grounded findings) documented'),
       textHas(agents, ['can *refute* a behavioural criterion'], 'Reviewer independent behaviour verification documented'),
+      textHas(agents, ['Feature review (independent rail'], 'Feature review rail (step 3.8) documented'),
+      textHas(agents, ['featureBaseSha'], 'featureBaseSha recorded at feature start'),
+      textHas(agents, ['reviewVerdict'], 'Feature review verdict marker documented'),
+      textHas(agents, ['Every `observed` line states what you did'], 'Reviewer trail requires evidence on observed rows'),
+      textHas(agents, ['link_to_pull_request'], 'Later features link work items to the open PR (P.12b)'),
       textHas(agents, ['Closing report', 'evidence: commit'], 'Closing report status line documented'),
       textHas(agents, ['Invalid', 'commit'], 'Invalid verbose evidence examples documented')
     ],

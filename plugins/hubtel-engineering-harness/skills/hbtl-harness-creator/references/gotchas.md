@@ -296,57 +296,45 @@ registry.register('shell', {
 
 **Cause**: `verification`, `requiredTests`, and static reconciliation prove code and config in isolation; they do not execute the built surface in a real browser.
 
-**Fix**: Step **3.7** (UI runtime assertion) when `chrome-devtools-mcp` is connected — see `templates/agents.md` → **UI Runtime Assertion**. Backend/infra/script/test rows skip it.
+**Fix**: The **step-3.8 feature review** runs the app on a development server and drives it through `chrome-devtools-mcp` before commit approval — independently of the builder, whose own green checks are exactly what missed it. Behavioural criteria pass only when **observed**. See `templates/agents.md` → **Completing a feature** step 3.8 and **On-demand Reviewer** → Behaviour lane. *(Previously fixed by step 3.7, retired in 2.7.0.)*
 
 ---
 
 ## 26. Skipped Step 3.7 When the MCP Was Connected
 
-**Symptom**: On a UI row with the MCP connected, an agent finished verification and went straight to commit approval without running step 3.7.
-
-**Cause**: A non-blocking or judgment-based framing let agents deprioritize the live check; the commit-approval overview did not require runtime evidence.
-
-**Fix**: Step 3.7 is **mandatory before commit approval** for every UI row when the MCP is connected. When the MCP is not connected, skip the live check but still write a **skipped** runtime artifact before `verified`/`done`. See `templates/agents.md` → **UI Runtime Assertion** and **Commit approval gate** → UI runtime evidence.
+**Retired in 2.7.0.** Step 3.7 (the per-task UI runtime assertion) and its `.harness/ui-runtime/` artifact were removed; behaviour is now verified once per feature, independently, by the step-3.8 review. This entry is kept so its number stays stable for cross-references. The underlying lesson is carried into **#53 (a blocking step outside the delivery shape gets skipped)**.
 
 ---
 
 ## 27. Advanced to Commit Approval Without a Passing Re-Check
 
-**Symptom**: Step 3.7 found an issue on the first run; the agent applied fixes and moved on after verification passed again — without a second live check (or without the issue closed on a later run in the artifact).
-
-**Cause**: "Fix and re-check" was stated but not structured or machine-checked; agents treated "fixes applied + tests pass" as equivalent to a closed runtime loop.
-
-**Fix**: Run the **3.7a → 3.7b → 3.7c** loop and write the tier-1 v3 artifact before `verified`/`done`. The validator gates on the **latest run only** and requires every issue ever opened to be carried onto it as `resolved`/`waived` — a failed initial run with no appended recheck fails tier-1. See `templates/agents.md` → **UI Runtime Assertion** and `references/ui-runtime-artifact.schema.json`.
+**Retired in 2.7.0.** Step 3.7 (the per-task UI runtime assertion) and its `.harness/ui-runtime/` artifact were removed; behaviour is now verified once per feature, independently, by the step-3.8 review. This entry is kept so its number stays stable for cross-references. The underlying lesson is carried into **#the step-3.8 remediation loop (G17 in `REVIEWER-GATE-PLAN.md`) — a fix is re-observed by the Reviewer, never taken on the builder's word**.
 
 ---
 
 ## 28. Ran Push-Gate Build or Production Serve During Feature Work
 
-**Symptom**: During a UI row, an agent ran a production build or production serve — or `node init.mjs --build` — to unblock step 3.7 or because the browser showed stale or wrong output.
+**Symptom**: During feature work, an agent ran a production build or production serve — or `node init.mjs --build` — to get an app running for a browser check, or because the browser showed stale or wrong output.
 
-**Cause**: Step 3.7 requires a development server, but the harness did not always distinguish dev recovery from the push-gate build; agents treated "fresh output" as "run build."
+**Cause**: Browser checks need a development server, but the harness did not always distinguish dev recovery from the push-gate build; agents treated "fresh output" as "run build."
 
-**Fix**: Step 3.7 uses the **development** server only; the push-gate quality gate (`node init.mjs --build` → `aqua quality-gate`, which includes the production build) runs only at push on human consent. Dev-server recovery (stop process, clear dev cache, restart dev) is not a production build. See `templates/agents.md` → **UI Runtime Assertion** (development server only) and **Verification** (tiered baseline).
+**Fix**: Browser checks — since 2.7.0, the step-3.8 Reviewer's Behaviour lane — use the **development** server only; the push-gate quality gate (`node init.mjs --build` → `aqua quality-gate`, which includes the production build) runs only at push. The Reviewer also does not debug a server that will not start: it records a limit and stops. See `templates/agents.md` → **On-demand Reviewer** → Behaviour lane and **Verification** (tiered baseline).
 
 ---
 
 ## 29. All Runtime Checks Passed but the Surface Was Still Wrong
 
-**Symptom**: A UI row's runtime checks were all green — dev server up, URL loaded, zero console/network errors, screenshot captured — and the agent reported the surface "correct," yet the delivered page was visibly broken (a distorted logo that still returned `200`, a misaligned layout, unreadable contrast). The tracking said pass; the deliverable did not match the row's "done" definition.
+**Symptom**: A UI surface's runtime checks were all green — dev server up, URL loaded, zero console/network errors, screenshot captured — and it was reported "correct", yet the delivered page was visibly broken (a distorted logo, the wrong layout, a missing state).
 
-**Cause**: The v1 artifact modeled success as "all assertions passed." Baseline checks only prove the page was *inspected*, not that it is *correct* — a clean check bar cannot catch a defect that loads without error. Nothing forced the agent to compare the render against the row's acceptance criteria or to record what it saw as a trackable, gating finding.
+**Cause**: A clean check bar proves the page was *inspected*, not that it is *correct*. A defect that loads without error passes every generic check.
 
-**Fix**: v3 flips the gate from "checks passed" to **issue closure**. Each run carries acceptance `criteria`, generic `checks`, and typed `issues`; a defect spotted against a criterion (even when every check is `clear`) is opened as an `issue` (`source.from: "acceptance"`) with a failing `criteriaResults` entry. A run's status is **derived** — any open issue, `issue-found` check, or failing criterion fails it — so a clean check bar can no longer mask an open acceptance issue. See `templates/agents.md` → **UI Runtime Assertion** (mental model; acceptance against criteria) and `references/ui-runtime-artifact.schema.json`.
+**Fix**: Judge against **acceptance criteria**, not checks. The step-3.8 Reviewer walks the plan's `## Acceptance criteria` and the Azure specs, and a criterion is `pass` only when its **outcome** was observed; anything wrong is a gap with a concrete failure scenario, whatever the console and network said. Clean checks are evidence of nothing on their own. See `templates/agents.md` → **On-demand Reviewer** → Finding rubric and Behaviour lane. *(The v3 artifact's issue-closure model, which introduced this, was retired in 2.7.0.)*
 
 ---
 
 ## 30. Overwrote a Prior Run Instead of Appending a Recheck
 
-**Symptom**: After a fix, an agent rewrote the initial run in place (or reused a single `recheck` slot for a second cycle), erasing the failure history — or edited an old run to look like it had passed. The artifact showed a tidy "pass" with no trace of the loop that produced it, and a mid-approval render-changing fix left the latest run stale.
-
-**Cause**: A shape with fixed `initial`/`recheck` slots invited mutation and could not represent more than one fix cycle; there was no append-only contract and no derived, latest-run-only gate.
-
-**Fix**: v3 uses an **append-only `runs[]` timeline** — `runs[0]` is `initial`, every later run is a `recheck`, timestamps strictly increase, and prior runs are never edited. `remediation[]` records fixes between runs. The gate reads the **latest run only** and requires every issue ever opened to be carried onto it as `resolved`/`waived`; a render-changing fix at batch approval requires appending a **new** recheck run. Read what's still open with `node scripts/summarize-ui-runtime.mjs --target . feat-NNN`. See `templates/agents.md` → **UI Runtime Assertion** (fix-and-recheck loop; Changes requested at batch approval).
+**Retired in 2.7.0.** Step 3.7 (the per-task UI runtime assertion) and its `.harness/ui-runtime/` artifact were removed; behaviour is now verified once per feature, independently, by the step-3.8 review. This entry is kept so its number stays stable for cross-references. The underlying lesson is carried into **#52 (the unfalsifiable pass) — there is no run history to overwrite now; the review's confirmation trail replaces it**.
 
 ---
 
@@ -362,11 +350,11 @@ registry.register('shell', {
 
 ## 32. Passed Logo Criterion From A11y Snapshot While Asset 404
 
-**Symptom**: Step 3.7 reported pass — or a media criterion was marked `pass` — because the a11y snapshot listed `image "Hubtel"` or similar, while `list_network_requests` (or dev-server stdout) showed the asset URL returning 404.
+**Symptom**: A media criterion was marked `pass` because the a11y snapshot listed `image "Hubtel"` or similar, while `list_network_requests` (or dev-server stdout) showed the asset URL returning 404.
 
-**Cause**: `a11y-content` only proves DOM structure; React/Next render `<img>` with `alt` even when `src` fails. Agents conflated "element in tree" with "asset loaded," skipped `list_network_requests`, or wrote `network-errors: clear` without a real MCP read.
+**Cause**: An a11y snapshot only proves DOM structure; React/Next render `<img>` with its `alt` even when `src` fails. "Element in tree" was conflated with "asset loaded", and `list_network_requests` was never read.
 
-**Fix**: Follow the **3.7a MCP sequence** — always call `list_network_requests` before writing the artifact; record `count: 0` only after that read. Write media criteria in load terms (HTTP 200 + `naturalWidth > 0`), not DOM presence. Do not report UI runtime pass until `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0**. The validator now requires `count` on clear console/network checks, `server-output` on closed runs with media criteria, and load proof in check `detail` before a media criterion may be `pass`. See `templates/agents.md` → **UI Runtime Assertion** (Summarize before speak; 3.7a MCP sequence; anti-patterns).
+**Fix**: When driving a UI, always read `list_network_requests` and `list_console_messages`, and write media criteria in **load terms** — the asset request returned `200` **and** `img.complete && naturalWidth > 0` — never DOM presence. This applies to whoever drives the browser, which since 2.7.0 is the step-3.8 Reviewer. See `templates/agents.md` → **On-demand Reviewer** → Behaviour lane → *Checking a UI properly*.
 
 ---
 
@@ -575,7 +563,27 @@ Same turn; both modes. No skip command — dismissed form, silence, or no clear 
 
 **A third shape — the unfalsifiable pass.** Tuned against noise, the Reviewer started returning `pass` with no rows and nothing to check: the engineer had to take the verdict on trust, and a misread criterion was invisible. **Findings are capped; evidence is not.** Every passing criterion gets a confirmation line naming where it is satisfied (`file:line`), exempt from the caps, and the verdict carries a one-line `evidenceCaveat` when it rests on narrow ground (no plan AC, no runtime evidence anywhere, Azure unavailable). Noise is what an engineer reads and acts on nowhere; a trail they can falsify in seconds is the opposite.
 
-**Fix**: The Reviewer is **on request only** — never spawned by the agent, never part of a gate (a bare "review this" is not an acceptance-review ask; clarify first). Every row must pass the four-part bar: changes a decision, grounded at `path:line` **by reading the file**, carries a concrete failure scenario, maps to a named criterion or guideline ref — anything else is **dropped, not downgraded**. Never re-report what step 3.5, Sonar P.4–P.6, 3.6 or 3.7 owns; the guidelines lane fires only on touched lines with a violation still in the code, and **zero rows is the expected result** on a feature that passed 3.5. Cap at **≤5 rows per lane**, no `info` severity, no generic advice, uncertainty becomes **one question** and reads as `gaps` — never `fail`. See `templates/agents.md` → **On-demand Reviewer**.
+**Fix**: The Reviewer's **at-will** path is on request only — never spawned by the agent for an ad-hoc review (a bare "review this" is not an acceptance-review ask; clarify first). Its **rail** invocation at step 3.8 is deliberate and scoped: once per feature, and only an acceptance/behaviour `fail` blocks — gate creep beyond that is still the failure to avoid. Every row must pass the four-part bar: changes a decision, grounded at `path:line` **by reading the file**, carries a concrete failure scenario, maps to a named criterion or guideline ref — anything else is **dropped, not downgraded**. Never re-report what step 3.5, Sonar P.4–P.6, 3.6 or 3.7 owns; the guidelines lane fires only on touched lines with a violation still in the code, and **zero rows is the expected result** on a feature that passed 3.5. Cap at **≤5 rows per lane**, no `info` severity, no generic advice, uncertainty becomes **one question** and reads as `gaps` — never `fail`. See `templates/agents.md` → **On-demand Reviewer**.
+
+---
+
+## 53. Skipped the Feature Review Because It Sat Outside the Delivery Shape
+
+**Symptom**: A feature went `verified` → commit → push → PR with no step-3.8 review. Asked why, the agent said it "rushed the autopilot path and treated the Reviewer as optional". In the same delivery it also half-ran step 3.7 — wrote the artifact, used the browser, never ran `summarize-ui-runtime.mjs` to exit `0`.
+
+**Cause**: Not discipline — placement. Delivery is executed as a memorised shape (**commit → push → PR**), and the **Autopilot completion sequence** literally began at *Commit*. Step 3.8 was documented in *Completing a feature* and *Feature completion*, neither of which an autopilot agent re-reads mid-flight, and it was absent from the **Definition of Done** checklist. Worse, the rail left **no trace**: the Reviewer writes no report by design, so a skipped review was indistinguishable from a clean one — where a skipped 3.7 at least left a missing artifact behind (gotcha #26). A blocking step that is neither in the memorised sequence nor detectable afterwards is a convention, not a rail.
+
+**Fix**: Put the step where the agent actually looks — **step 1 of the Autopilot completion sequence, before Commit** — and on the **Definition of Done** checklist. Make compliance visible: `reviewVerdict` (`pass` / `gaps` / `fail-overridden`) on every row sharing the `featId`, tier-1 on mismatch or a bad value, and a validator warning when a `done` feature carries none. General principle: **when you add a blocking step, add it to the sequence that gets executed and give it a trace that survives the turn** — otherwise you have documented an intention. See `templates/agents.md` → **Approval mode** (Autopilot completion), **Completing a feature** step 3.8, **Review verdict marker**.
+
+---
+
+## 54. Later Features' Work Items Never Reached the Shared PR
+
+**Symptom**: In an autopilot run with several features, feature 1 opened the PR and later features pushed into it correctly — but the PR's linked work items listed only feature 1's tasks. Every later feature's Azure tasks were missing from the PR, so its linked work-item list no longer showed everything the branch delivered.
+
+**Cause**: P.10 resolves `workItems` **once**, at PR creation, from the `Closed: #…` commits on the branch *at that moment* — which is only feature 1's. Later features correctly skipped creating a second PR, and the template said to "extend the open PR on the next push", but no step linked their work items. A commit's `Closed:` trailer links the item to the **commit**, not to the PR.
+
+**Fix**: **P.12b** — before P.9, detect an active PR for the branch (`repo_pull_request list` by `sourceRefName`, falling back to the id in `progress.md`). If one exists, skip P.9–P.11 and call `wit_work_item_link_write` `action: link_to_pull_request` for each of the feature's `taskId`s; verify they appear on the PR; record them; do **not** append `pr-opened`. Linking attaches items without modifying the PR, so `repo_pull_request_write` stays `create`-only. See `templates/agents.md` → **Post-push pull request** → *PR already open for this branch*.
 
 ---
 

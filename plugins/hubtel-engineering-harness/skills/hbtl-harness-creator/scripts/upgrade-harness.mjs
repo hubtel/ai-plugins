@@ -42,6 +42,20 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 // Plans written before that requirement are reported, never repaired or failed:
 // the section is the planning subagent's to author, and a backfilled stub would
 // read as criteria without being any.
+// Step 3.7 (per-task UI runtime assertion) was retired in 2.7.0. Repos upgraded from
+// earlier versions may still hold .harness/ui-runtime/ artifacts. They are inert — nothing
+// reads or validates them — and the upgrade never deletes them: they are the repo's own
+// history. Report once so nobody mistakes them for live evidence.
+function legacyUiRuntimeArtifacts(targetRoot) {
+  try {
+    return readdirSync(path.join(targetRoot, '.harness', 'ui-runtime'))
+      .filter((name) => name.endsWith('.json'))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 function plansMissingAcceptanceCriteria(targetRoot) {
   const plansDir = path.join(targetRoot, '.harness', 'plans');
   let entries;
@@ -192,12 +206,20 @@ function printPlanText() {
     lines.push('');
   }
 
+  const legacyUi = legacyUiRuntimeArtifacts(target);
+  if (legacyUi.length > 0) {
+    lines.push(`NOTE: ${legacyUi.length} legacy .harness/ui-runtime/ artifact(s) — step 3.7 was retired in 2.7.0`);
+    lines.push('  They are inert (not read, not validated) and are left in place. Behaviour is now verified by the step-3.8 feature review.');
+    lines.push('');
+  }
+
   lines.push('Next step: re-run with --apply (upgrade request is consent; no go/no-go ask).');
   console.log(lines.join('\n'));
 }
 
 if (!apply) {
   plan.plansMissingAcceptanceCriteria = plansMissingAcceptanceCriteria(target);
+  plan.legacyUiRuntimeArtifacts = legacyUiRuntimeArtifacts(target);
   if (asJson) {
     console.log(JSON.stringify(planPayload(), null, 2));
   } else {
@@ -298,6 +320,7 @@ if (asJson) {
     integrationBranchWarning: integrationMerge.warning || null,
     manifestPath: path.relative(target, manifest.path),
     plansMissingAcceptanceCriteria: plansMissingAcceptanceCriteria(target),
+    legacyUiRuntimeArtifacts: legacyUiRuntimeArtifacts(target),
     actions,
     postValidation: {
       overall: postValidation.overall,
@@ -329,6 +352,11 @@ if (asJson) {
     console.log(`Note: ${staleAcPlans.length} existing plan(s) predate the required "## Acceptance criteria" section:`);
     for (const name of staleAcPlans) console.log(`  - .harness/plans/${name}`);
     console.log('  Not a failure and not backfilled — new plans get the section from the planning subagent.');
+  }
+  const legacyUiApplied = legacyUiRuntimeArtifacts(target);
+  if (legacyUiApplied.length > 0) {
+    console.log('');
+    console.log(`Note: ${legacyUiApplied.length} legacy .harness/ui-runtime/ artifact(s) left in place — step 3.7 was retired in 2.7.0; they are inert.`);
   }
   console.log('');
   console.log(formatScoreReport(postValidation, target));

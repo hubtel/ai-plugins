@@ -8,7 +8,6 @@ import {
   CONVENTIONAL_COMMIT_TYPES,
   buildAgentsReplacements,
   composeUpgradedAgentsFile,
-  deriveRunStatus,
   detectDotnetMonorepo,
   detectManagedRegionEdits,
   extractHarnessManagedRegion,
@@ -25,10 +24,8 @@ import {
   readSkillMetadata,
   renderAgentsFromTemplate,
   resolveTouchedServices,
-  summarizeUiRuntimeArtifact,
   validateCommitMessage,
   validateFeatureList,
-  validateUiRuntimeArtifact,
   writeHarnessManifest
 } from './lib/harness-utils.mjs';
 import { azureWorkItemUrl, metricsHtmlReport, parsePlanTitle, repairUtf8Mojibake } from './lib/metrics-utils.mjs';
@@ -38,7 +35,6 @@ const skillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const createScript = path.join(skillRoot, 'scripts', 'create-harness.mjs');
 const validateScript = path.join(skillRoot, 'scripts', 'validate-harness.mjs');
 const upgradeScript = path.join(skillRoot, 'scripts', 'upgrade-harness.mjs');
-const summarizeScript = path.join(skillRoot, 'scripts', 'summarize-ui-runtime.mjs');
 
 // Azure tracking is mandatory: the scaffolder now requires sprint planner args
 // (normally captured via the MCP's get_active_sprint_boards). Dummy values for tests.
@@ -57,34 +53,6 @@ const SPRINT_BLOCK = {
   sprintBoardUrl: 'https://dev.azure.com/hubtel/example/_sprints/taskboard/example',
   parentStory: { id: '12345', title: 'Self-test parent' }
 };
-
-// v3 helper: baseline "clear" checks for a healthy run.
-function clearChecks(screenshotPath = '.harness/ui-runtime/screenshots/run.png', { media = true } = {}) {
-  const checks = [
-    { id: 'dev-server', result: 'clear', detail: 'next dev ready on http://localhost:3000' },
-    { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
-    { id: 'a11y-content', result: 'clear', detail: 'heading + fields present' },
-    { id: 'styled-not-default', result: 'clear', detail: 'themed background; Sora font' },
-    { id: 'console-errors', result: 'clear', count: 0, detail: 'list_console_messages: 0 errors' },
-    {
-      id: 'network-errors',
-      result: 'clear',
-      count: 0,
-      detail: 'list_network_requests: no failed requests; logo asset 200 OK'
-    },
-    { id: 'screenshot', result: 'clear', path: screenshotPath }
-  ];
-  if (media) {
-    checks.push({ id: 'server-output', result: 'clear', detail: 'dev-server log: no asset 404s' });
-  }
-  return checks;
-}
-
-const V3_CRITERIA = [
-  { id: 'crit-logo', summary: 'Logo loads and renders correctly' },
-  { id: 'crit-a11y', summary: 'Primary CTA meets WCAG AA contrast' },
-  { id: 'crit-auth', summary: 'Sign-in flow completes successfully' }
-];
 
 function runNode(script, args) {
   const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
@@ -480,15 +448,12 @@ try {
   if (!checkPasses('Design System MCP documented')) {
     throw new Error('fresh scaffold is missing the Design System MCP instruction check');
   }
-  if (!checkPasses('UI runtime assertion documented')) {
-    throw new Error('fresh scaffold is missing the UI runtime assertion instruction check');
-  }
-
-  // The scaffolded instructions must carry the v3 UI-runtime vocabulary and the summarize helper.
+  // Step 3.7 (UI runtime assertion) is retired: the step-3.8 feature review verifies
+  // behaviour independently on any surface. Guard against the old contract creeping back.
   const scaffoldedAgents = await readFile(path.join(tempRoot, 'AGENTS.md'), 'utf8');
-  for (const marker of ['summarize-ui-runtime', 'criteriaResults', 'append-only', 'issue closure', '"version": "3"']) {
-    if (!scaffoldedAgents.includes(marker)) {
-      throw new Error(`scaffolded AGENTS.md is missing the v3 UI-runtime marker "${marker}"`);
+  for (const retired of ['summarize-ui-runtime', 'UI Runtime Assertion', '.harness/ui-runtime/<featId>.json']) {
+    if (scaffoldedAgents.includes(retired)) {
+      throw new Error(`scaffolded AGENTS.md still references the retired UI-runtime contract ("${retired}")`);
     }
   }
   if (!checkPasses('Task-details resume lookup')) {
@@ -999,318 +964,36 @@ try {
     throw new Error('fast tier should contain the lint (static) command');
   }
 
-  // --- UI runtime artifact v3 ---
-
-  // Scenario 1: closed loop — initial fail (logo 404 + contrast) → remediation → recheck pass.
-  const closedLoopArtifact = {
-    version: '3',
-    featId: 'feat-002',
-    url: 'http://localhost:3000/',
-    mcp: 'connected',
-    criteria: V3_CRITERIA,
-    remediation: [
-      { at: '2026-07-20T21:36:10.000Z', issueId: 'logo-broken', action: 'copied logo.svg to public/logo.png; updated img src' },
-      { at: '2026-07-20T21:36:15.000Z', issueId: 'button-contrast', action: 'updated button bg from #a78bfa to #5b21b6' }
-    ],
-    runs: [
-      {
-        phase: 'initial',
-        at: '2026-07-20T21:35:00.000Z',
-        checks: [
-          { id: 'dev-server', result: 'clear' },
-          { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
-          { id: 'a11y-content', result: 'clear' },
-          { id: 'styled-not-default', result: 'clear' },
-          { id: 'console-errors', result: 'clear', count: 0 },
-          { id: 'network-errors', result: 'issue-found', count: 1, issueId: 'logo-broken' },
-          { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-002-initial.png' }
-        ],
-        issues: [
-          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'open', summary: 'Logo asset /logo.png returned 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial' },
-          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'open', summary: 'Sign-in button contrast 2.8:1 below WCAG AA', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial' }
-        ],
-        criteriaResults: [
-          { criterionId: 'crit-logo', result: 'fail', issueId: 'logo-broken' },
-          { criterionId: 'crit-a11y', result: 'fail', issueId: 'button-contrast' },
-          { criterionId: 'crit-auth', result: 'pass' }
-        ]
-      },
-      {
-        phase: 'recheck',
-        at: '2026-07-20T21:36:45.000Z',
-        checks: clearChecks('.harness/ui-runtime/screenshots/feat-002-recheck.png'),
-        issues: [
-          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'resolved', summary: 'Logo asset /logo.png returned 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'asset restored; 200 OK' },
-          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'resolved', summary: 'Sign-in button contrast 2.8:1 below WCAG AA', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'contrast now 7.1:1' }
-        ],
-        criteriaResults: [
-          { criterionId: 'crit-logo', result: 'pass' },
-          { criterionId: 'crit-a11y', result: 'pass' },
-          { criterionId: 'crit-auth', result: 'pass' }
-        ]
-      }
-    ]
-  };
-  const closedLoop = validateUiRuntimeArtifact(closedLoopArtifact, { featId: 'feat-002' });
-  if (!closedLoop.ok) {
-    throw new Error(`ui-runtime v3 closed-loop artifact should validate: ${closedLoop.errors.join('; ')}`);
-  }
-  if (deriveRunStatus(closedLoopArtifact.runs[0], { criteria: V3_CRITERIA }).status !== 'fail') {
-    throw new Error('deriveRunStatus should mark the initial run as fail (open issues)');
-  }
-  if (deriveRunStatus(closedLoopArtifact.runs[1], { criteria: V3_CRITERIA }).status !== 'pass') {
-    throw new Error('deriveRunStatus should mark the recheck run as pass (no open issues)');
-  }
-
-  // Scenario 2: multi-recheck — initial fail → recheck fail (one issue still open) → second recheck pass.
-  const multiRecheckArtifact = {
-    version: '3',
-    featId: 'feat-003',
-    url: 'http://localhost:3000/',
-    mcp: 'connected',
-    criteria: [{ id: 'crit-logo', summary: 'Logo renders' }, { id: 'crit-a11y', summary: 'CTA contrast' }],
-    remediation: [
-      { at: '2026-07-20T22:00:30.000Z', issueId: 'logo-broken', action: 'restored logo asset' },
-      { at: '2026-07-20T22:01:30.000Z', issueId: 'button-contrast', action: 'darkened CTA background' }
-    ],
-    runs: [
-      {
-        phase: 'initial',
-        at: '2026-07-20T22:00:00.000Z',
-        checks: [
-          { id: 'dev-server', result: 'clear' },
-          { id: 'url-loaded', result: 'clear' },
-          { id: 'a11y-content', result: 'clear' },
-          { id: 'styled-not-default', result: 'clear' },
-          { id: 'console-errors', result: 'clear', count: 0 },
-          { id: 'network-errors', result: 'issue-found', count: 1, issueId: 'logo-broken' },
-          { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-003-1.png' }
-        ],
-        issues: [
-          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'open', summary: 'Logo 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial' },
-          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'open', summary: 'CTA contrast low', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial' }
-        ],
-        criteriaResults: [
-          { criterionId: 'crit-logo', result: 'fail', issueId: 'logo-broken' },
-          { criterionId: 'crit-a11y', result: 'fail', issueId: 'button-contrast' }
-        ]
-      },
-      {
-        phase: 'recheck',
-        at: '2026-07-20T22:01:00.000Z',
-        checks: clearChecks('.harness/ui-runtime/screenshots/feat-003-2.png'),
-        issues: [
-          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'resolved', summary: 'Logo 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'asset restored' },
-          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'open', summary: 'CTA contrast still low', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial' }
-        ],
-        criteriaResults: [
-          { criterionId: 'crit-logo', result: 'pass' },
-          { criterionId: 'crit-a11y', result: 'fail', issueId: 'button-contrast' }
-        ]
-      },
-      {
-        phase: 'recheck',
-        at: '2026-07-20T22:02:00.000Z',
-        checks: clearChecks('.harness/ui-runtime/screenshots/feat-003-3.png'),
-        issues: [
-          { id: 'logo-broken', class: 'network-error', severity: 'blocker', status: 'resolved', summary: 'Logo 404', source: { from: 'check', checkId: 'network-errors' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'asset restored' },
-          { id: 'button-contrast', class: 'accessibility', severity: 'major', status: 'resolved', summary: 'CTA contrast fixed', source: { from: 'acceptance', criterionId: 'crit-a11y' }, openedIn: 'initial', resolvedIn: 'recheck', resolution: 'contrast now 6.2:1' }
-        ],
-        criteriaResults: [
-          { criterionId: 'crit-logo', result: 'pass' },
-          { criterionId: 'crit-a11y', result: 'pass' }
-        ]
-      }
-    ]
-  };
-  const multiRecheck = validateUiRuntimeArtifact(multiRecheckArtifact, { featId: 'feat-003' });
-  if (!multiRecheck.ok) {
-    throw new Error(`ui-runtime v3 multi-recheck artifact should validate: ${multiRecheck.errors.join('; ')}`);
-  }
-
-  // Scenario 3: smoke checks all clear but an acceptance issue is still open →
-  // latest run is not closed → validation must fail (the core v3 guarantee).
-  const openIssueArtifact = {
-    version: '3',
-    featId: 'feat-004',
-    url: 'http://localhost:3000/',
-    mcp: 'connected',
-    criteria: [{ id: 'crit-logo', summary: 'Logo renders undistorted' }],
-    runs: [
-      {
-        phase: 'initial',
-        at: '2026-07-20T23:00:00.000Z',
-        checks: clearChecks('.harness/ui-runtime/screenshots/feat-004.png'),
-        issues: [
-          { id: 'logo-distorted', class: 'visual-defect', severity: 'major', status: 'open', summary: 'Logo loads (200) but renders stretched', source: { from: 'acceptance', criterionId: 'crit-logo' }, openedIn: 'initial' }
-        ],
-        criteriaResults: [{ criterionId: 'crit-logo', result: 'fail', issueId: 'logo-distorted' }]
-      }
-    ]
-  };
-  const openIssue = validateUiRuntimeArtifact(openIssueArtifact, { featId: 'feat-004' });
-  if (openIssue.ok) {
-    throw new Error('ui-runtime v3 artifact with all checks clear but an open acceptance issue should fail validation');
-  }
-
-  // Scenario 3b: console/network clear without count must fail tier-1.
-  const missingCountArtifact = {
-    version: '3',
-    featId: 'feat-007',
-    url: 'http://localhost:3000/',
-    mcp: 'connected',
-    criteria: [{ id: 'crit-page', summary: 'Sign-in page renders' }],
-    runs: [{
-      phase: 'initial',
-      at: '2026-07-21T10:00:00.000Z',
-      checks: [
-        { id: 'dev-server', result: 'clear' },
-        { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
-        { id: 'a11y-content', result: 'clear' },
-        { id: 'styled-not-default', result: 'clear' },
-        { id: 'console-errors', result: 'clear' },
-        { id: 'network-errors', result: 'clear' },
-        { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-007.png' }
-      ],
-      issues: [],
-      criteriaResults: [{ criterionId: 'crit-page', result: 'pass' }]
-    }]
-  };
-  const missingCount = validateUiRuntimeArtifact(missingCountArtifact, { featId: 'feat-007' });
-  if (missingCount.ok) {
-    throw new Error('ui-runtime artifact with clear console/network checks but no count should fail validation');
-  }
-  if (!/requires count when result is clear/.test(missingCount.errors.join('; '))) {
-    throw new Error('missing count rejection should mention count requirement');
-  }
-
-  // Scenario 3c: media criterion pass without load proof on a closed run must fail.
-  const mediaPassNoProofArtifact = {
-    version: '3',
-    featId: 'feat-008',
-    url: 'http://localhost:3000/',
-    mcp: 'connected',
-    criteria: [{ id: 'crit-logo', summary: 'Hubtel logo loads and displays' }],
-    runs: [{
-      phase: 'initial',
-      at: '2026-07-21T11:00:00.000Z',
-      checks: [
-        { id: 'dev-server', result: 'clear' },
-        { id: 'url-loaded', result: 'clear', detail: 'GET / 200' },
-        { id: 'a11y-content', result: 'clear', detail: 'image "Hubtel" in a11y tree' },
-        { id: 'styled-not-default', result: 'clear' },
-        { id: 'console-errors', result: 'clear', count: 0 },
-        { id: 'network-errors', result: 'clear', count: 0 },
-        { id: 'screenshot', result: 'clear', path: '.harness/ui-runtime/screenshots/feat-008.png' }
-      ],
-      issues: [],
-      criteriaResults: [{ criterionId: 'crit-logo', result: 'pass' }]
-    }]
-  };
-  const mediaPassNoProof = validateUiRuntimeArtifact(mediaPassNoProofArtifact, { featId: 'feat-008' });
-  if (mediaPassNoProof.ok) {
-    throw new Error('ui-runtime artifact with media criterion pass but no load proof should fail validation');
-  }
-  if (!/load proof|server-output/.test(mediaPassNoProof.errors.join('; '))) {
-    throw new Error('media pass without proof should mention load proof or server-output requirement');
-  }
-
-  // Scenario 4: v1 connected artifact is obsolete and must be rejected with a re-run message.
-  const v1Connected = validateUiRuntimeArtifact({
-    version: '1',
-    featId: 'feat-005',
-    url: 'http://localhost:3000/page',
-    mcp: 'connected',
-    initial: { at: '2026-07-20T14:00:00Z', status: 'pass', assertions: [{ id: 'dev-server', status: 'pass' }] }
-  }, { featId: 'feat-005' });
-  if (v1Connected.ok) {
-    throw new Error('ui-runtime v1 connected artifact should be rejected as obsolete');
-  }
-  if (!/version 1 is obsolete/.test(v1Connected.errors.join('; '))) {
-    throw new Error('ui-runtime v1 connected rejection should mention the obsolete version and re-run guidance');
-  }
-
-  // Scenario 5: v1 skipped shape (MCP unavailable) is still accepted.
-  const v1Skipped = validateUiRuntimeArtifact({
-    version: '1',
-    featId: 'feat-006',
-    skipped: true,
-    skipReason: 'MCP unavailable',
-    mcp: 'unavailable'
-  }, { featId: 'feat-006' });
-  if (!v1Skipped.ok) {
-    throw new Error(`ui-runtime v1 skipped shape should still validate: ${v1Skipped.errors.join('; ')}`);
-  }
-
-  // summarizeUiRuntimeArtifact surfaces the latest run's open issues.
-  const openSummary = summarizeUiRuntimeArtifact(openIssueArtifact, { featId: 'feat-004' });
-  if (openSummary.closed) {
-    throw new Error('summarizeUiRuntimeArtifact should report an artifact with an open issue as not closed');
-  }
-  if (!openSummary.openIssues.some((i) => i.id === 'logo-distorted')) {
-    throw new Error('summarizeUiRuntimeArtifact should list the open issue id from the latest run');
-  }
-  const closedSummary = summarizeUiRuntimeArtifact(closedLoopArtifact, { featId: 'feat-002' });
-  if (!closedSummary.closed) {
-    throw new Error('summarizeUiRuntimeArtifact should report the closed-loop artifact as closed');
-  }
-
-  // summarize-ui-runtime.mjs CLI: exit 1 + open issue id when open; exit 0 when closed.
-  const summarizeDir = path.join(tempRoot, 'summarize-fixture');
-  await mkdir(path.join(summarizeDir, '.harness', 'ui-runtime'), { recursive: true });
-  await writeFile(path.join(summarizeDir, '.harness', 'ui-runtime', 'feat-004.json'), JSON.stringify(openIssueArtifact, null, 2));
-  await writeFile(path.join(summarizeDir, '.harness', 'ui-runtime', 'feat-002.json'), JSON.stringify(closedLoopArtifact, null, 2));
-
-  const summarizeOpen = runNode(summarizeScript, ['--target', summarizeDir, 'feat-004']);
-  if (summarizeOpen.status !== 1) {
-    throw new Error(`summarize-ui-runtime.mjs should exit 1 for an open artifact (got ${summarizeOpen.status})`);
-  }
-  if (!/logo-distorted/.test(summarizeOpen.stdout)) {
-    throw new Error('summarize-ui-runtime.mjs should print the open issue id');
-  }
-  const summarizeClosed = runNode(summarizeScript, ['--target', summarizeDir, 'feat-002']);
-  if (summarizeClosed.status !== 0) {
-    throw new Error(`summarize-ui-runtime.mjs should exit 0 for a closed artifact (got ${summarizeClosed.status})`);
-  }
-  const summarizeMissing = runNode(summarizeScript, ['--target', summarizeDir, 'feat-999']);
-  if (summarizeMissing.status !== 2) {
-    throw new Error(`summarize-ui-runtime.mjs should exit 2 when the artifact file is missing (got ${summarizeMissing.status})`);
-  }
-
-  const uiArtifactDir = path.join(tempRoot, '.harness', 'ui-runtime');
-  await mkdir(uiArtifactDir, { recursive: true });
-  const uiFeaturePath = path.join(tempRoot, 'feature_list.json');
-  await writeFile(uiFeaturePath, JSON.stringify({
-    sprintPlanner: SPRINT_BLOCK,
-    tasks: [{
-      id: 'task-010',
-      featId: 'feat-010',
-      name: 'Dashboard page',
-      description: 'User-facing dashboard screen',
-      verification: 'pnpm test dashboard',
-      status: 'verified',
-      taskId: '99901',
-      evidence: '',
-      dependencies: []
-    }]
-  }, null, 2));
-
-  const missingArtifact = validateFeatureList(JSON.parse(await readFile(uiFeaturePath, 'utf8')), { repoRoot: tempRoot });
-  if (missingArtifact.ok) {
-    throw new Error('validateFeatureList should fail when a verified UI row lacks a ui-runtime artifact');
-  }
-
-  await writeFile(path.join(uiArtifactDir, 'task-010.json'), JSON.stringify({
-    version: '1',
-    featId: 'task-010',
-    skipped: true,
-    skipReason: 'MCP unavailable',
-    mcp: 'unavailable'
-  }, null, 2));
-
-  const skippedArtifact = validateFeatureList(JSON.parse(await readFile(uiFeaturePath, 'utf8')), { repoRoot: tempRoot });
-  if (!skippedArtifact.ok) {
-    throw new Error(`validateFeatureList should accept skipped ui-runtime artifact: ${skippedArtifact.errors.join('; ')}`);
+  // --- Step 3.7 retired: a verified UI row no longer needs a ui-runtime artifact ---
+  // Behaviour is verified once per feature by the step-3.8 review (reviewVerdict on the
+  // rows), not per task by a self-graded artifact. Existing .harness/ui-runtime/ files in
+  // consumer repos are inert: nothing reads or validates them.
+  {
+    const retiredRoot = await mkdtemp(path.join(os.tmpdir(), 'harness-self-test-retired-37-'));
+    await mkdir(path.join(retiredRoot, '.harness', 'ui-runtime'), { recursive: true });
+    await writeFile(path.join(retiredRoot, '.harness', 'ui-runtime', 'feat-010.json'), '{ not valid json', 'utf8');
+    const uiRow = {
+      sprintPlanner: SPRINT_BLOCK,
+      tasks: [{
+        id: 'task-010',
+        featId: 'feat-010',
+        name: 'Dashboard page',
+        description: 'User-facing dashboard screen',
+        verification: 'pnpm test dashboard',
+        requiredTests: ['e2e'],
+        status: 'verified',
+        taskId: '99901',
+        evidence: '',
+        dependencies: []
+      }]
+    };
+    const retiredResult = validateFeatureList(uiRow, { repoRoot: retiredRoot });
+    if (!retiredResult.ok) {
+      throw new Error(`a verified UI row must validate without a ui-runtime artifact now that step 3.7 is retired: ${retiredResult.errors.join('; ')}`);
+    }
+    if ([...retiredResult.errors, ...retiredResult.warnings].some((m) => /ui-runtime/i.test(m))) {
+      throw new Error('validateFeatureList must not read legacy .harness/ui-runtime/ files (they are inert)');
+    }
   }
 
   const nestedInitCheck = spawnSync(process.execPath, ['--check', path.join(nestedRoot, 'init.mjs')], { encoding: 'utf8' });
@@ -1335,7 +1018,7 @@ try {
     }
   }
   const agentsTemplate = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
-  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue', 'session.json', 'force-new-session', 'Post-PR CI monitor (P.13)', 'Monitor this PR for build failures', 'Fix these CI failures', 'refs/pull/', 'CI fix pushed', 'On-demand Reviewer', 'Hubtel Harness Reviewer', 'Owned elsewhere — do not report', 'failureScenario', 'Never spawn this subagent on your own', 'Acceptance criteria (required on every', 'exercise the app yourself', 'LIMITS — what this review could not check']) {
+  for (const marker of ['karate', 'Conventional Commits', 'Overall plan approval gate', 'Phase 2', 'Services', 'Documentation Gate', 'Harness Documentation', 'P.0 Documentation gate', 'Usage telemetry', 'append-usage-event', 'ship-usage-telemetry', 'chat-scoped', 'Cycle feedback', 'scaffold', 'feature-started', 'Atomic start', 'Continue the queue', 'session.json', 'force-new-session', 'Post-PR CI monitor (P.13)', 'Monitor this PR for build failures', 'Fix these CI failures', 'refs/pull/', 'CI fix pushed', 'On-demand Reviewer', 'Hubtel Harness Reviewer', 'Owned elsewhere — do not report', 'failureScenario', 'Never spawn this subagent on your own', 'Acceptance criteria (required on every', 'exercise the app yourself', 'LIMITS — what this review could not check', 'Feature review (independent rail', 'featureBaseSha', 'Guideline findings are advisory here', 'reviewVerdict', 'Feature review (step 3.8) — before the commit', 'Phrase each criterion as an outcome', 'Every `observed` line states what you did', 'link_to_pull_request', 'P.12b Link to the open PR']) {
     if (!agentsTemplate.includes(marker)) {
       throw new Error(`templates/agents.md is missing the "${marker}" section/reference`);
     }
@@ -1409,7 +1092,10 @@ try {
     'On-demand Reviewer documented',
     'Reviewer non-duplication exclusions documented',
     'Reviewer finding rubric (grounded findings) documented',
-    'Reviewer independent behaviour verification documented'
+    'Reviewer independent behaviour verification documented',
+    'Feature review rail (step 3.8) documented',
+    'featureBaseSha recorded at feature start',
+    'Feature review verdict marker documented'
   ]) {
     if (!checkPasses(qaCheck)) {
       throw new Error(`scoreHarness should pass "${qaCheck}" after scaffold`);

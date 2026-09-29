@@ -58,12 +58,13 @@ One branch covers the whole request (which may span several task rows). Establis
 | Gate | `autopilot` | `supervised` (default) |
 |------|-------------|------------------------|
 | **Where to start** | **Skip the ask** — start the earliest feature in the plan's order (same default as answering `all`). Where-to-start only picks **which feature is Active first** — not the end of the request. **Atomic start (before any code):** first task `in-progress` → Azure Active → append + ship `feature-started` → note `Starting feat-NNN (autopilot — plan order)` → implement. After that feature is `delivered`, **Continue the queue** (below) — do **not** ask the human to continue | Ask `Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)` after triage; atomic-start only what they name. If they answer `all` (or equivalent), **Continue the queue** after each `delivered` the same as autopilot — never invent a "say continue" gate |
-| **Commit** (`Approve this commit?`) | After the full verification stack passes (steps 1–3.7), present the review overview and commit **in the same turn** — no pause. Closing line unchanged: `Feature <featId>: done — evidence: commit <hash>` | Pause; present the review overview and commit **only** after an explicit affirmative in a later message (same-turn ban applies) |
+| **Commit** (`Approve this commit?`) | After the full verification stack passes (steps 1–3.6 per task, then the step-3.8 feature review), present the review overview and commit **in the same turn** — no pause. Closing line unchanged: `Feature <featId>: done — evidence: commit <hash>` | Pause; present the review overview and commit **only** after an explicit affirmative in a later message (same-turn ban applies) |
 | **Push** (`Push now?`) | Skip the ask; run the push gate (P.1–P.7) inline. Still emit the **Delivered** body + **Before pushing** sentence so the human sees what ran | Ask; push only on an explicit push affirmative |
 | **Sonar at P.6** | **Auto-fix** — when review is not clean (actionable MCP findings or failed Sonar quality gate), enter the **fix loop** inline without asking. Re-run P.2–P.6 until clean, then push. **`push anyway` is never inferred** in either mode | Pause when review is not clean; ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)` |
 | **PR** (`Open a pull request?`) | Skip the ask; run P.10–P.12 (`repo_pull_request_write` + `repo_pull_request_label`) inline, then report title/id/link | Ask; open only on `yes` |
 | **PR CI monitor** (`Monitor this PR for build failures?`) | Separate soft-ask **only when the implementation queue is empty**, after Cycle feedback resolves; silence = decline; poll only on explicit yes (see **Post-PR CI monitor (P.13)**) | Same |
 | **CI fix** (`Fix these CI failures?`) | Soft-ask on a code-related PR build failure; **yes = fix + commit + push** — **no** `Approve this commit?` / `Push now?` | Same |
+| **Feature review** (step 3.8 rail) | Runs automatically once all rows are `verified`; on `fail` show the first report, then fix inline and re-run (cap 2) | Same trigger; on `fail` ask `Fix review findings and re-run? (yes / push anyway / not yet)` |
 
 **Hard rails (never relaxed, any mode — including `autopilot`).** Autopilot must **never** auto-push (or must pause/clarify) when any of these hold:
 
@@ -72,21 +73,22 @@ One branch covers the whole request (which may span several task rows). Establis
 - Sonar MCP review is **not clean** (actionable findings or failed Sonar quality gate): in **`supervised`**, pause at P.6 unless explicit prior **`push anyway`**; in **`autopilot`**, enter the fix loop inline (never infer **`push anyway`**).
 - The branch is `main` / `master` / `development` (P.1 branch check).
 - `audit_packages` blocks a dependency change in this feature.
-- A UI row in the feature has an unresolved runtime issue (latest `.harness/ui-runtime/<featId>.json` run does not derive pass).
+- **Step 3.8 Feature review returned an acceptance/behaviour `fail`** and remediation did not clear it within the 2-cycle cap. (`gaps` and guideline findings are **not** rails — they report and delivery continues.)
 - Deliverable-shaping ambiguity, unconfirmed assumptions, or high-stakes/destructive scope — clarify/pause per the existing planning and breakdown rules.
 
 **Session override.** If the human changes the mode in natural language (e.g. `approval mode: autopilot`, `run this in supervised mode`), write the new value into `feature_list.json` **once**, note the change in `progress.md`, then apply it for the rest of the session (persists per-repo).
 
 **Smart Mode note.** `approvalMode` is a **harness-text contract only** — it does not read or depend on Cursor Smart Mode or any IDE-native approval card. In `autopilot`, the plain-text ask lines are simply omitted from your output; do not substitute a runtime approval UI for the mode.
 
-**Autopilot completion sequence (run steps 1–5 in order for each feature; step 6 once the queue is empty).** In `autopilot`, the feature commit is the **start** of delivery, not the end. Once the full verification stack passes (steps 1–3.7), do **all** of the following — do **not** stop after the commit:
+**Autopilot completion sequence (run steps 1–6 in order for each feature; step 7 once the queue is empty).**
+1. **Feature review (step 3.8) — before the commit, not after.** Every row sharing the `featId` is `verified`, so dispatch the **Reviewer** on the feature's uncommitted work first (see **Completing a feature** step 3.8 and **On-demand Reviewer** → *Rail invocation*). An acceptance/behaviour **`fail` is a hard rail**: show the first report, remediate, re-run — cap 2 cycles, then `blocked`. `gaps` and guideline findings never block. **This step is inside the autopilot sequence on purpose:** delivery is a memorised shape (commit → push → PR), and a blocking step outside that shape gets skipped. In `autopilot`, the feature commit is the **start** of delivery, not the end. Once the per-task verification stack has passed for every row (steps 1–3.6), do **all** of the following — do **not** stop after the commit:
 
-1. **Commit** — present the review overview and commit in the same turn (the passing verification stack authorizes it; no `Approve this commit?` ask). This lands the `Feature <featId>: done` state, but that is **intermediate** — keep going.
-2. **Push gate inline (P.1–P.7)** — run the push gate straight away, without the `Push now?` ask (see **Pushing (quality gate)**). Every hard rail still binds: P.1 branch check, P.2 quality-gate abort, incomplete Sonar MCP. When Sonar review is not clean, run the **fix loop** inline (P.6 autopilot path) until clean or blocked — do not pause to ask.
-3. **PR inline (P.10–P.12)** — on a successful push, open the PR without the `Open a pull request?` ask (`repo_pull_request_write` + `repo_pull_request_label`, tag `hbtl-harness`), then report title/id/link (see **Post-push pull request** under **Hubtel Azure DevOps MCP**). **Usage telemetry at P.12:** append **`pr-opened` only**, then ship — **do not** re-append `feature-done` (that already shipped at step 1 / Definition of Done).
-4. **Record + close + Cycle feedback** — update `progress.md` (push status, PR status), present the delivery summary (work / commit / push / PR), emit the **final** autopilot closing line (`Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id>` — see **Closing report**), then **in that same message** soft-ask **Cycle feedback** using the **pinned form verbatim** (AskUserQuestion `elicitationForm` when available; else Markdown fallback — see **Cycle feedback**; do not rephrase) — **after** the `delivered` line. Do not yield after PR without the soft-ask unless a hard rail blocked you.
-5. **Continue the queue (same request)** — `delivered` ends **this feature's** delivery sequence, **not** the whole request. If any same-request feature still has rows `not-started` (plan-order queue), **do not** ask `continue?` / `say continue` / wait for a human to unblock the next feature. After the cycle-feedback soft-ask (decline/silence is fine — fail-open), **atomic-start the next feature in plan order** on the **same branch** (extend the open PR on the next push). Stop draining the queue only when: the queue is empty, a hard rail blocks, a feature is `blocked`, or the human **explicitly** said to stop after this feature. Supervised subset (human named specific `feat-NNN`s, not `all`) → do **not** start features they did not name.
-6. **Post-PR CI monitor (P.13) — queue empty only** — when step 5 has nothing left to start (the last or only queued feature is `delivered` and Cycle feedback resolved), soft-ask `Monitor this PR for build failures? (yes / no)` as a **separate** question (see **Post-PR CI monitor (P.13)**). Mid-queue: skip it entirely and keep draining. Same rule in `supervised` (queue = named features for a subset, remaining plan-order features for `all`).
+2. **Commit** — present the review overview and commit in the same turn (the passing verification stack authorizes it; no `Approve this commit?` ask). This lands the `Feature <featId>: done` state, but that is **intermediate** — keep going.
+3. **Push gate inline (P.1–P.7)** — run the push gate straight away, without the `Push now?` ask (see **Pushing (quality gate)**). Every hard rail still binds: P.1 branch check, P.2 quality-gate abort, incomplete Sonar MCP. When Sonar review is not clean, run the **fix loop** inline (P.6 autopilot path) until clean or blocked — do not pause to ask.
+4. **PR inline (P.10–P.12), or link to the open PR (P.12b)** — **for a later feature in the same request an active PR already exists: do not create another — link this feature's work items to it (P.12b) and do not append `pr-opened`.** Otherwise, on a successful push, open the PR without the `Open a pull request?` ask (`repo_pull_request_write` + `repo_pull_request_label`, tag `hbtl-harness`), then report title/id/link (see **Post-push pull request** under **Hubtel Azure DevOps MCP**). **Usage telemetry at P.12:** append **`pr-opened` only**, then ship — **do not** re-append `feature-done` (that already shipped at step 1 / Definition of Done).
+5. **Record + close + Cycle feedback** — update `progress.md` (push status, PR status), present the delivery summary (work / commit / push / PR), emit the **final** autopilot closing line (`Feature <featId>: delivered — evidence: commit <hash>, pushed, PR #<id>` — see **Closing report**), then **in that same message** soft-ask **Cycle feedback** using the **pinned form verbatim** (AskUserQuestion `elicitationForm` when available; else Markdown fallback — see **Cycle feedback**; do not rephrase) — **after** the `delivered` line. Do not yield after PR without the soft-ask unless a hard rail blocked you.
+6. **Continue the queue (same request)** — `delivered` ends **this feature's** delivery sequence, **not** the whole request. If any same-request feature still has rows `not-started` (plan-order queue), **do not** ask `continue?` / `say continue` / wait for a human to unblock the next feature. After the cycle-feedback soft-ask (decline/silence is fine — fail-open), **atomic-start the next feature in plan order** on the **same branch** (extend the open PR on the next push **and link that feature's work items to it — P.12b**; a PR created by feature 1 does not pick up later features' work items on its own). Stop draining the queue only when: the queue is empty, a hard rail blocks, a feature is `blocked`, or the human **explicitly** said to stop after this feature. Supervised subset (human named specific `feat-NNN`s, not `all`) → do **not** start features they did not name.
+7. **Post-PR CI monitor (P.13) — queue empty only** — when step 6 (Continue the queue) has nothing left to start (the last or only queued feature is `delivered` and Cycle feedback resolved), soft-ask `Monitor this PR for build failures? (yes / no)` as a **separate** question (see **Post-PR CI monitor (P.13)**). Mid-queue: skip it entirely and keep draining. Same rule in `supervised` (queue = named features for a subset, remaining plan-order features for `all`).
 
 In **`supervised`**, the single sanctioned pause inside the push gate is P.6 when Sonar review is not clean (unless prior **`push anyway`**). In **`autopilot`**, unclean Sonar review does **not** pause — run the fix loop inline; the only Sonar-related stop is **incomplete MCP** (auth/timeout/partial bundle) or **`blocked`** when remediation cannot complete.
 
@@ -166,7 +168,7 @@ On every implementation request, delegate to a **planning subagent** that owns t
 
 Both phases run on **one** subagent instance (Resumable Coordinator — context preserved across resumes). Below is the mechanics for both phases; each rule applies to whichever phase is active unless otherwise noted.
 
- This replaces ad-hoc decomposition and separate clarify/docs steps with a structured two-phase workflow that produces resumable planning artifacts. The subagent follows the **Resumable Coordinator pattern** (zero context on initial dispatch, context-preserving across clarification rounds via resume — see `references/multi-agent-pattern.md`): it starts fresh with only the self-contained prompt you provide, but when it needs clarification it **returns early** with `elicitationForm`, and the main agent **resumes the same subagent once** (preserving all accumulated context) after collecting the entire form. **Use model `claude-opus-4-8-thinking-medium`** for the planning subagent — it provides the reasoning depth needed for docs analysis, clarification, architectural decomposition, and flow-diagram generation.
+ This replaces ad-hoc decomposition and separate clarify/docs steps with a structured two-phase workflow that produces resumable planning artifacts. The subagent follows the **Resumable Coordinator pattern** (zero context on initial dispatch, context-preserving across clarification rounds via resume — see `references/multi-agent-pattern.md`): it starts fresh with only the self-contained prompt you provide, but when it needs clarification it **returns early** with `elicitationForm`, and the main agent **resumes the same subagent once** (preserving all accumulated context) after collecting the entire form. **Use model `claude-opus-5-5-thinking-medium`** for the planning subagent — it provides the reasoning depth needed for docs analysis, clarification, architectural decomposition, and flow-diagram generation.
 
 **Naming (visible alias).** Dispatch the planning subagent with a stable presentation alias: label `Hubtel Harness Planner`. When the active client's subagent-spawn tool exposes a `description` (or equivalent) field — e.g. Cursor and Claude Code Task tools — set it to `Hubtel Harness Planner` so the session UI shows that name. When no such field exists, prepend `Role: hbtl-harness-planner` to the self-contained prompt; the alias is prompt metadata only and does not change behavior. **Resume is always keyed by subagent ID:** capture the ID returned on the initial dispatch and pass it to every `resume` (elicitation answers, malformed-form correction, Phase 2 continuation). Never re-spawn using the alias as identity; the alias is presentation metadata, not the handle.
 
@@ -274,9 +276,9 @@ Which feature(s) do you want to start with? (feat-NNN[, feat-NNN…] / all)
 
 - Move **only** the chosen features' first task to `in-progress`. If the human names an ordered list, still only the first task of the first named feature goes `in-progress` — one active task at a time holds (see **Feature delivery**).
 - If the human answers `all` or omits an answer for a single-feature request, start with the earliest feature in the plan's order.
-- **Atomic start before any code** (same as autopilot once a feature is chosen): `in-progress` → Azure Active → append + ship `feature-started` → then implement.
+- **Atomic start before any code** (same as autopilot once a feature is chosen): `in-progress` → Azure Active → append + ship `feature-started` → **record `featureBaseSha`** → then implement.
 
-**`autopilot`** — **do not ask.** Start the earliest feature in the plan's order (same default as `all`). **Atomic start before any code** (same turn): (1) move that feature's first task to `in-progress`, (2) Azure Active sync, (3) append `feature-started` with `--feature-name` from the plan, (4) best-effort `node scripts/ship-usage-telemetry.mjs --target .`, (5) note `Starting feat-NNN (autopilot — plan order)` in `progress.md`, (6) **only then** continue implementation. Do **not** begin editing code until steps 1–5 ran (telemetry fail-open still never blocks — if ship fails, keep going after the append attempt). After that feature is `delivered`, **Continue the queue** (see **Approval mode** → Autopilot completion step 5) — never invent a "say continue" gate.
+**`autopilot`** — **do not ask.** Start the earliest feature in the plan's order (same default as `all`). **Atomic start before any code** (same turn): (1) move that feature's first task to `in-progress`, (2) Azure Active sync, (3) append `feature-started` with `--feature-name` from the plan, (4) best-effort `node scripts/ship-usage-telemetry.mjs --target .`, (5) note `Starting feat-NNN (autopilot — plan order)` in `progress.md`, (6) **record `featureBaseSha`** — `git rev-parse HEAD` written to every row sharing this `featId` (see **Feature base sha**), (7) **only then** continue implementation. Do **not** begin editing code until steps 1–5 ran (telemetry fail-open still never blocks — if ship fails, keep going after the append attempt). After that feature is `delivered`, **Continue the queue** (see **Approval mode** → Autopilot completion step 6) — never invent a "say continue" gate.
 
 **Both modes:**
 
@@ -319,15 +321,19 @@ All tasks within a feature are delivered together: implemented and verified one 
 
 **Assigning `featId`.** At triage, every task row gets the `featId` of its parent feature (e.g. `feat-001`). The feature boundary is set by the planning subagent's breakdown — adding a task mid-work means a new planning round.
 
-**Per-task loop.** Identical to single-task work through step 3.7: implement → fast gate (`node init.mjs`) → the row's `verification` passes → guidelines reconciliation (3.5) → design-system reconciliation (3.6, UI rows only — see **Hubtel Design System MCP**) → UI runtime assertion (3.7, UI rows when `chrome-devtools-mcp` is connected — see **UI Runtime Assertion**). Instead of requesting commit approval, set the row's status to **`verified`** (evidence stays empty; no commit yet) and move to the next `not-started` row in the feature. At most **one** row is `in-progress` at a time — the rest are `not-started`, `verified`, or eventually all `done`.
+**Per-task loop.** Identical to single-task work through step 3.6: implement → fast gate (`node init.mjs`) → the row's `verification` passes → guidelines reconciliation (3.5) → design-system reconciliation (3.6, UI rows only — see **Hubtel Design System MCP**). Behaviour is verified **once for the whole feature** at step 3.8, not per task. Instead of requesting commit approval, set the row's status to **`verified`** (evidence stays empty; no commit yet) and move to the next `not-started` row in the feature. At most **one** row is `in-progress` at a time — the rest are `not-started`, `verified`, or eventually all `done`.
 
 **Task status sync:** `in-progress` still moves the Azure task to Active as usual (see **Sprint Planner (Azure tasks)** → Task status sync). Moving to **`verified`** makes **no** Azure call — the task stays Active until the feature commits; closure happens via the feature's `Closed: #…` message.
 
-**Feature completion.** When **every** row sharing a `featId` is `verified`, present **one** feature commit approval (see **Commit approval gate** → Feature review overview) covering the whole feature. Before that request, every UI row in the feature must have a valid runtime artifact — full check passed, or skipped (MCP unavailable) — do not feature-approve without per-task runtime evidence. On approval, stage the feature's files, commit once with the message built from the feature's task ids (see **Commit message format**; e.g. `Closed: #12346 #12347`), run steps 6–10 once, then set **every** row in the feature to `done` with the **same** evidence (`commit <hash>` from a single post-commit `git rev-parse --short HEAD`). Close the response with **one** feature closing line — not a separate `Task …: done` line per task (see **Post-done message**).
+**Review verdict marker.** Step 3.8 writes no report file (the Reviewer is read-only), so record the outcome where it can be checked: set **`reviewVerdict`** on **every** row sharing the `featId` — `pass`, `gaps`, or `fail-overridden` when a human said `push anyway` on a real failure. All rows in the group carry the same value (tier-1 on mismatch), and a `done` feature without one is flagged by `validate-harness`. This is the only trace the rail leaves: without it, a skipped review is indistinguishable from a clean one — which is exactly how step 3.7 used to get skipped, except that one left a missing artifact behind to catch it.
+
+**Feature base sha.** At atomic start, capture `git rev-parse HEAD` and write it as **`featureBaseSha`** on **every** row sharing the `featId` — same convention as `evidence`, whose hash is also written across the group, so `feature_list.json` keeps its flat `tasks[]` shape. All rows with a given `featId` must carry an **identical**, well-formed sha (tier-1). Mirror it once in the `progress.md` Current State line. It marks where the feature began, so step 3.8 can review in-feature commits (`git diff <featureBaseSha>..HEAD`) after a remediation commit leaves the working tree clean. **Missing** (older features, resumed sessions) → the review falls back to `git diff HEAD` for uncommitted work only and says that earlier in-feature commits were out of scope. **Never** guess a base by walking history.
+
+**Feature completion.** When **every** row sharing a `featId` is `verified`, run **step 3.8 Feature review** once (the independent rail — see **Completing a feature** and **On-demand Reviewer**), then present **one** feature commit approval (see **Commit approval gate** → Feature review overview) covering the whole feature. Before that request, every UI row in the feature must have a valid runtime artifact — full check passed, or skipped (MCP unavailable) — do not feature-approve without per-task runtime evidence. On approval, stage the feature's files, commit once with the message built from the feature's task ids (see **Commit message format**; e.g. `Closed: #12346 #12347`), run steps 6–10 once, then set **every** row in the feature to `done` with the **same** evidence (`commit <hash>` from a single post-commit `git rev-parse --short HEAD`). Close the response with **one** feature closing line — not a separate `Task …: done` line per task (see **Post-done message**).
 
 **Never commit one `verified` row alone** when it carries a `featId` — wait for the whole feature, even if that row has been ready for a while.
 
-**Changes requested at feature approval.** Reopen only the task(s) the human names: that row goes back to `in-progress`, fix it, re-run the fast gate + that row's `verification` + steps 3.5–3.7 (3.7 for UI rows when the MCP is connected), then set it back to `verified`. For a UI row, a render-changing fix **invalidates its latest run** — you must **append a new recheck run** to its artifact (reopen the relevant issue or open a new one, then close it on the recheck); never feature-approve a UI task whose latest run predates the fix. Once every feature's task is `verified` again, re-present the feature overview. Do not commit until an explicit approval.
+**Changes requested at feature approval.** Reopen only the task(s) the human names: that row goes back to `in-progress`, fix it, re-run the fast gate + that row's `verification` + steps 3.5–3.6, then set it back to `verified`. Once every task is `verified` again, **re-run step 3.8 for the feature** (a fix can change behaviour the earlier review confirmed), then re-present the feature overview. Do not commit until an explicit approval.
 
 **Abandoning a feature.** If the feature can't finish (scope dropped, request superseded), move **every** row sharing that `featId` to `blocked` with the reason in `progress.md` — don't leave some rows `verified` and others abandoned, and don't try to commit a lone `verified` row out of an abandoned feature (it would still carry the `featId` and fail the feature-completeness check).
 
@@ -362,7 +368,7 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 
 - **Feature branch before code** — implementation happens on `users/<username>/feature/<short-desc>`; if the current branch doesn't match, create and check one out before editing (see **Branch Discipline**). Never work on `main`/`master`/`development`
 - **Task row before code** — update `feature_list.json` before application source changes
-- **Planning subagent before breakdown** — delegate to the planning subagent (Resumable Coordinator pattern, model `claude-opus-4-8-thinking-medium`, visible alias `Hubtel Harness Planner` / **Hubtel Harness Planner** when the client supports it) which owns docs probe, iterative clarification, and decomposition; it returns early with a structured `elicitationForm` when blocked, and the main agent renders it in client-sized batches, accumulates all answers, then resumes it once (same agent, context preserved; **resume is always keyed by subagent ID**, never by alias); final return includes per-feature plans and task breakdowns; save plans to `.harness/plans/`; use returned task breakdowns for Azure task descriptions (see **Planning Phase**)
+- **Planning subagent before breakdown** — delegate to the planning subagent (Resumable Coordinator pattern, model `claude-opus-5-5-thinking-medium`, visible alias `Hubtel Harness Planner` / **Hubtel Harness Planner** when the client supports it) which owns docs probe, iterative clarification, and decomposition; it returns early with a structured `elicitationForm` when blocked, and the main agent renders it in client-sized batches, accumulates all answers, then resumes it once (same agent, context preserved; **resume is always keyed by subagent ID**, never by alias); final return includes per-feature plans and task breakdowns; save plans to `.harness/plans/`; use returned task breakdowns for Azure task descriptions (see **Planning Phase**)
 - **GitNexus for file connections (when available)** — before dispatching the planning subagent, run `gitnexus analyze` if the CLI + MCP are available; the subagent uses GitNexus tools to populate `filesToTouch[].connections` with real dependency data (see **Planning Phase**)
 - **All plans + all Azure tasks + all rows before any code** — the entire triage sequence (save plan files → present breakdown → create Azure tasks → write rows) runs to completion for ALL features and ALL tasks before ANY row is set to `in-progress` or any implementation begins; do not interleave triage with implementation; implementation then starts via **where-to-start** (ask in `supervised`; earliest plan-order feature in `autopilot` — see **Sprint Planner (Azure tasks)** → Triage and **Present breakdown before Azure tasks** → *Where to start*)
 - **Azure task before row** — call `harness_create_tasks` before writing new task rows; no `taskId`, no row (see **Sprint Planner (Azure tasks)**)
@@ -370,7 +376,7 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 - **Implementation-ready task descriptions (subagent-authored + self-audit gate)** — the planning subagent authors each Azure task's `description` feature-by-feature (chunked, co-located with each `feat-NNN.md` — never one trailing pass over all features), strictly following the `get_harness_task_structure` structure (Target File / Summary / Implementation Guidelines / Code Sample / Reference) and emitting **HTML** (the Markdown template is reference only — Azure renders HTML, so raw Markdown breaks the board); do not reorder, rename, or omit required sections; fill with verified codebase detail; fetch the template once per session and **ignore its `nextStep`**; Implementation Guidelines must carry **Objectives**, **Regression Risks**, **Test Plan**, and **Technical Notes** as real content — never a pointer back to `.harness/plans/feat-NNN.md`. Before `harness_create_tasks`, the main agent runs the **self-audit gate** (cross-task dedup, no plan-pointer, no verb-strip/title-echo, no layer-mismatched boilerplate) across ALL features and **resumes the subagent to re-author** on any hit — this is what stops the "bespoke for the first ~11 tasks, boilerplate after" drift (see **Sprint Planner (Azure tasks)** → Task descriptions → *Content bar*, the Good / Bad contrast, and *Self-audit gate*)
 - **Mirror status to Azure** — when a row goes `in-progress`, move its Azure task to Active via `update_task_status` (see **Sprint Planner (Azure tasks)** → Task status sync)
 - **Recover task context + plans on resume** — before implementing any existing row you did not author this session, fetch full Azure specs with `get_task_details` for **non-completed tasks only** (status ∈ `{not-started, in-progress, blocked}` — skip `verified`/`done`; their work is finished) and read `planFile` if present; the local row `description` is a tracking label, not the spec (see **Sprint Planner (Azure tasks)** → Task details on resume)
-- **Review is on request only** — the **On-demand Reviewer** subagent runs when the engineer asks for an acceptance review / acceptance review, never on your own and never as part of a gate; it reports softly and blocks nothing (see **On-demand Reviewer**)
+- **Independent review runs twice-shaped** — automatically **once per feature at step 3.8** (the rail: an acceptance/behaviour `fail` blocks), and **at will** when the engineer asks (never blocks). Never skip 3.8, and never spawn the at-will path on your own (see **On-demand Reviewer**)
 - **You own the task list** — create/update rows from requests; never wait for a human
 - **Clarification via the planning subagent** — the subagent owns clarification: it probes docs, identifies ambiguity, and clarifies iteratively with the user (via the main agent relay) until zero ambiguity; infers reversible, low-stakes choices (default + note); does not inherit spec from adjacent shipped surfaces; unconfirmed assumptions require breakdown approval before Azure tasks (see **Clarification policy**)
 - **Break work down** — decompose by outcome into features, then into one independently verifiable task per row (a distinct action, surface, or shared building block); enumerate what the request implies and map each to a row; never one mega-feature or a bundled page
@@ -381,7 +387,6 @@ Infer from `src/package.json` scripts. Prefer package-manager directory flags (`
 - **Guidelines gate before done** — ground the feature in Hubtel's guidelines (`get_guidelines_catalog` + `get_guideline`) before writing each row, then reconcile before requesting commit approval; a product-code feature isn't `done` until it conforms (see **Hubtel Engineering MCP**)
 - **Audit packages before adding** — call `audit_packages` before any `package.json`/`*.csproj`/lockfile change or dependency add; block untrusted/vulnerable-without-safe-version (see **Hubtel Engineering MCP** → Packages)
 - **Hubtel UI via the design-system MCP (frontend + UI rows)** — call the MCP **tools** for mechanics (`search_components`/`get_composition_pattern` before breakdown; `get_component`/`get_design_tokens`/`find_icons` when implementing); run `validate_imports` + `check_setup` before `verified`/`done` on UI rows (see **Hubtel Design System MCP**)
-- **UI runtime assertion** — for every **UI row**, write `.harness/ui-runtime/<featId>.json` (v3) before `verified`/`done` (tier-1). When `chrome-devtools-mcp` is connected, run the full 3.7 loop and record an **append-only `runs[]`** of `checks`, `issues`, and `criteriaResults`; the gate is **no open issues on the latest run**, not "checks passed." Do not report UI runtime pass or set `verified`/`done` until `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0**. Read what's still open with that helper anytime. When it is not connected, write a **skipped** artifact and note the skip in the review overview. Does not change `requiredTests`/`verification` or CI (see **UI Runtime Assertion**)
 - **Approval-gated commit on done (mode-dependent)** — in `supervised`, present the review overview and commit only after explicit human approval; in `autopilot`, present the overview and commit in the same turn once verification passes (see **Approval mode** and **Commit approval gate**); either way, stage this feature's files, commit with message `Closed: #<taskId1> #<taskId2> ...` listing all task ids in the feature, and use that commit's hash as evidence
 - **Documentation gate before the push (all repos)** — on push (asked in `supervised`; run inline in `autopilot`), **before** the branch check/quality gate (push gate `P.0`), dispatch the **Harness Documentation** subagent (`claude-sonnet-5-thinking-medium`) to refresh docs via the installed DAC skills — `hbtl-dac-generate --ci` when `docs/index.md` is absent, else `hbtl-dac-update --ci --target-branch <integrationBranch>` — and commit them as a docs-only `docs:` commit so the change ships documented in the same PR; a DAC `ERROR` aborts the push (see **Documentation Gate**)
 - **SonarQube MCP review after the quality gate (repos with `SonarQubeProjectKey`)** — on push (asked in `supervised`; run inline in `autopilot`), run `node init.mjs --build` (the quality gate, which runs the analysis) **first**, then the Sonar MCP review **sequentially** before push (P.2 quality gate → P.3–P.6 parse artifacts → MCP query bundle → present overview → **`supervised`**: human consent when blocked; **`autopilot`**: auto-fix loop when not clean) — **never** run MCP review and `git push` in parallel; a green quality gate is **not** MCP review complete (see **Hubtel SonarQube MCP** and **Approval mode**)
@@ -419,7 +424,7 @@ node scripts/append-usage-event.mjs --target . \
   [--rating 1-5]
 ```
 
-Resolve `scripts/` from the installed `hbtl-harness-creator` skill root (same convention as `summarize-ui-runtime.mjs` / `validate-harness.mjs`).
+Resolve `scripts/` from the installed `hbtl-harness-creator` skill root (same convention as `validate-harness.mjs`).
 
 **Events (v1):** `scaffold` · `session-start` · `session-end` · `plan-approved` · `breakdown-approved` · `tasks-created` · `feature-started` · `feature-done` · `blocked` · `pr-opened` · `feedback`.
 
@@ -823,112 +828,6 @@ Before any change to `package.json` / `*.csproj` / a lockfile, or any `npm|pnpm|
 - **Step 3.6 reconciliation (UI rows) — blocking for `verified` and `done`.** After the guidelines reconciliation (3.5), run `validate_imports` on all `@hubtel/*` imports and re-run `check_setup`; fix every finding before requesting commit approval, before setting a feature's task to `verified`, and before `done`. Do not mark a UI row `verified` or `done` after lint alone.
 - **Definition of Done (UI rows).** `validate_imports` clean and `check_setup` clean; Hubtel components, subpath imports, semantic tokens, loading→content→empty states, and shell scroll contract satisfied.
 
-## UI Runtime Assertion (`chrome-devtools-mcp`)
-
-**When `chrome-devtools-mcp` is connected**, run a live check for **every UI row** — any feature that ships a rendered surface (page, route, layout, modal, form screen, dashboard, list, flow, etc.). This catches the class of failure that lint and unit tests pass straight through: unstyled pages, runtime errors in the console, broken links, failed network requests, an element that never mounts, or a surface that loads cleanly yet is *wrong* (a distorted logo, mislaid layout, unreadable contrast). It layers **on top of** the row's normal `verification`, never a replacement for it.
-
-**Mental model — checks prove inspection, issues prove quality (issue closure, not "checks passed").** The baseline `checks` only prove you looked (dev server up, URL loaded, no console/network errors, screenshot taken). They can **all be clear while the deliverable is still broken** — a logo can return `200` and still render distorted. What actually gates the row is **issues**: every defect you find — whether a `check` surfaced it or you spotted it against the task's acceptance `criteria` — is recorded as an `issue` and must be **closed** (resolved or waived) before the row ships. **The gate is "no open issues on the latest run," not "all checks passed."**
-
-**This is not optional when the MCP is connected.** Do not substitute "agent judgment" or "the tests passed" for the live check on a UI row. When the MCP is **not** connected, skip the live check only — still write a **skipped** artifact (see below) and note `UI runtime assertion: skipped (MCP unavailable)` in the review overview, then proceed.
-
-**When the MCP is not connected.** The tier-1 artifact is still required for UI rows at `verified`/`done` — the validator cannot detect MCP connectivity, so the file records the skip explicitly:
-
-```json
-{
-  "version": "3",
-  "featId": "feat-NNN",
-  "skipped": true,
-  "skipReason": "MCP unavailable",
-  "mcp": "unavailable"
-}
-```
-
-No `runs`, `criteria`, or `issues` entries. The live check (3.7a–c) does not run.
-
-**What it gates.** Step 3.7 **blocks step 4 (commit approval)** on UI rows when the MCP is connected: do not request commit approval until the loop is complete, the artifact's **latest run has no open issues**, and its summary is in the review overview. Any issue found (console/network error, broken render, unstyled page, interaction failure, or an acceptance-criterion mismatch) must be **fixed and re-checked** until it is `resolved` (or explicitly `waived` with a reason) — or the row is set to `blocked` with the failure recorded in `progress.md`. **"Fix applied + unit tests pass" does not satisfy step 3.7** — only a latest run whose issues are all closed, or **`blocked`**. While a UI row is `blocked` or mid-loop on 3.7, mirror its open issues (from the summarize helper) into `progress.md` so a fresh session sees exactly what remains open.
-
-**Summarize before speak (blocking).** Do **not** tell the human UI runtime passed, set a UI row to **`verified`/`done`**, or open commit approval until:
-
-1. The v3 artifact is written under `.harness/ui-runtime/<featId>.json`
-2. `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` exits **0** (CLOSED)
-3. The summarize CLI output is pasted into the review overview (same class as pasting `validate_imports` results at step 3.6)
-
-"Tests green" or "page looks fine" is **not** step 3.7. Only **CLOSED artifact + summarize exit 0** counts.
-
-**The fix-and-recheck loop (mandatory, append-only).** Step 3.7 is not complete after one run. The artifact keeps an **append-only `runs[]` timeline** — you never edit a prior run:
-
-| Sub-step | Action |
-|---|---|
-| **3.7a Initial run** | Derive 2–5 acceptance `criteria` from the task/row "done" definition. Run the **3.7a MCP sequence** below, then **append `runs[0]`** (`phase: "initial"`) with its `checks`, any `issues` you find (from checks **and** from eyeballing against criteria), and `criteriaResults`. Log every issue honestly — a clean check bar does **not** mean the surface is correct |
-| **3.7b If any issue is open → fix** | Read what is still open: `node scripts/summarize-ui-runtime.mjs --target . feat-NNN`. Remediate each open issue and append a `remediation[]` entry (`{ at, issueId, action }`). Any change that alters what the browser renders **invalidates** the prior run — the next step is **3.7c**, not the push-gate build |
-| **3.7c Mandatory recheck** | Re-run the full live check and **append a new run** (`phase: "recheck"`) — never mutate `runs[0]`. Carry every prior issue forward on this run marked `resolved` (with `resolution`) or `waived` (with `reason`). Repeat 3.7b→3.7c until the **latest run derives pass** (no open issues, all required criteria pass). **Do not proceed to step 4** until then or the row is set `blocked` |
-
-**3.7a MCP sequence (mandatory before writing any run).** Do not write `runs[]` until every step below has been executed via `chrome-devtools-mcp`. Recheck runs (3.7c) repeat the same sequence.
-
-| Order | MCP action | Records on check |
-|---|---|---|
-| 1 | Confirm dev server reachable | `dev-server` |
-| 2 | Navigate to the surface URL | `url-loaded` |
-| 3 | A11y snapshot (structure only — see anti-patterns below) | `a11y-content` |
-| 4 | `list_console_messages` → record error count | `console-errors` (`count: 0` to be `clear`) |
-| 5 | **`list_network_requests`** → record failed request count | `network-errors` (`count: 0` to be `clear`; put URLs/status in `detail`) |
-| 6 | Screenshot | `screenshot` (`path` when `clear`) |
-| 7 | Evaluate criteria (computed styles, `evaluate_script` for images, contrast, layout) | `criteriaResults` + `issues` |
-| 8 | When criteria mention logo/image/asset/font: read dev-server output | `server-output` *(required on closed runs with media criteria)* |
-
-**Anti-patterns (common false greens).**
-
-- **`a11y-content` ≠ asset loaded** — `image "Hubtel"` in the a11y tree only means the `<img>` and its `alt` exist in the DOM. A 404 `src` still appears in the tree. Broken images are **network** or **acceptance** failures, not "mounted."
-- **Page `200` ≠ all assets loaded** — sub-resource 404s (logo, font, chunk) show in `list_network_requests` and often in dev-server stdout.
-- **Unit tests ≠ runtime assets** — mocked `next/image` or component tests do not fetch real public paths; step 3.7 must still run.
-
-**Media / logo criteria template.** When the row's "done" definition includes a logo, icon, or other static asset, write the criterion in load terms — not DOM presence:
-
-- Good: *"Hubtel logo: asset URL returns HTTP 200 **and** `img.complete && naturalWidth > 0`"*
-- Bad: *"Logo alt text present"* or *"Logo in a11y snapshot"*
-
-Record load proof in the relevant check's `detail` (e.g. `list_network_requests: /hubtel-logo.svg 200; evaluate_script naturalWidth=120`). The validator requires load proof before a media criterion may be `pass` on the latest run.
-
-**Development server only (step 3.7).** The live check requires a **development** running instance of the app (the project's usual dev-server workflow). Do **not** use a production build or production serve to satisfy step 3.7, and do **not** substitute the push-gate build (`node init.mjs --build`) for a dev server or for a 3.7 recheck.
-
-**Dev server unavailable.** When the development server cannot be reached (port conflict, permissions error, stale process, or similar): stop conflicting processes → clear the framework dev cache if needed → restart the **development** server and retry from 3.7a. Clearing cache and restarting dev is **not** the push-gate build. If still unavailable, set the row `blocked` with the reason in `progress.md` — do not request commit approval with partial runtime evidence.
-
-**UI runtime artifact (tier-1, v3).** Before step 4 — and before setting a UI row to **`verified`** or **`done`** — write `.harness/ui-runtime/<featId>.json`. Required for **every UI row** at those statuses (same surface heuristic as the e2e warning). A connected artifact carries `criteria`, an append-only `runs[]` timeline, and `remediation[]`; the **v1 assertion-only shape is obsolete and rejected** — the validator asks you to re-run 3.7 and rewrite as v3. When the MCP is not connected, use the **skipped** shape above.
-
-Each run records **`checks`** (`result: clear | issue-found | not-applicable`; an `issue-found` check must link an `issueId`):
-
-| Check id | What it inspects |
-|---|---|
-| `dev-server` | Dev server running |
-| `url-loaded` | Navigated to the surface URL |
-| `a11y-content` | A11y snapshot confirms key **structure** mounted (headings, fields, landmarks) — **not** proof that images/assets loaded |
-| `styled-not-default` | Computed styles show themed output (not browser-default) |
-| `console-errors` | Console error count via `list_console_messages` (`count: 0` required when `clear`) |
-| `network-errors` | Failed request count via `list_network_requests` (`count: 0` required when `clear`; record URLs/status in `detail`) |
-| `screenshot` | Screenshot captured (`path` required when `clear`) |
-| `interaction` *(optional)* | A driven click/fill/submit reached the expected state |
-| `server-output` | Dev-server logs checked for SSR/server-side errors — **required on the latest run when criteria mention logo/image/asset/font** |
-
-Each run also carries **`issues`** — the findings that actually gate the row. An issue has `{ id, class, severity, status, summary, source, openedIn }`, where `status ∈ open | resolved | waived`, `severity ∈ blocker | major | minor`, and `source.from ∈ check | acceptance | manual`. Common `class` values: `network-error`, `console-error`, `unstyled-surface`, `framework-issue`, `interaction-broken`, `visual-defect`, `layout-wrong`, `content-wrong`, `accessibility`, `acceptance-mismatch`. And **`criteriaResults`** — `{ criterionId, result: pass | fail, issueId? }` mapping each acceptance criterion to its outcome on that run (a `fail` must link the `issueId` blocking it).
-
-**Derived status (never self-reported).** A run's pass/fail is computed from its content, not a `status` field you set. A run **fails** if it has any open issue, any `issue-found` check, any failing `criteriaResult`, a `screenshot` check that is `clear` without a `path`, or a required criterion with no result. The **gate reads the latest run only**; earlier runs are history. Every issue ever opened must be carried onto the latest run as `resolved` or `waived`.
-
-**Loop outcomes:** latest run derives pass (no open issues, all required criteria pass) after one or more runs; or `{ "skipped": true, "skipReason": "MCP unavailable", "mcp": "unavailable" }`; or `{ "blocked": true, "blockedReason": "..." }` with row status `blocked`. Schema: `references/ui-runtime-artifact.schema.json`. Inspect any artifact with `node scripts/summarize-ui-runtime.mjs --target . feat-NNN`.
-
-**What it does not change.** Playwright remains the committed-e2e standard; `requiredTests` and `verification` are unchanged. Browser execution stays **agent-time** via `chrome-devtools-mcp` — the artifact records checks, issues, and criteria; CI does not run DevTools. Baseline checks prove the **runtime smoke loop** closed; `criteria` + `issues` prove the surface actually matches what the row promised.
-
-**Mechanics (delegated to `chrome-devtools-mcp`).** The check drives a real browser with no project test dependency. Use a **development** server (start one or attach to an already-running dev instance) — not production build/output — and navigate to the surface's URL, then assert by intent (not a fixed script):
-
-- **Renders / styled, not browser-default** — navigate, snapshot the a11y tree, and evaluate computed styles on a key element (catches the unstyled-page failure).
-- **No console errors / failed requests** — read console messages and network requests after load; **zero errors required**.
-- **Interaction works** — for a flow, drive the click/fill/submit and assert the resulting state.
-- **Visual record** — capture a screenshot to attach to the review overview.
-- **Acceptance against criteria** — compare the rendered surface to each `criterion` from the row's "done" definition (logo undistorted, layout correct, contrast readable). A clean check bar is **not** acceptance: open an `issue` (`source.from: "acceptance"`) for anything that loads but is wrong, and record a `criteriaResults` entry.
-- **Server-side errors** — when the surface is SSR or an error may only appear server-side, also check the dev-server output; the browser console alone can miss these.
-
-Backend/infra/script/test-only rows skip step 3.7 and the runtime artifact entirely.
-
-
 ## Hubtel SonarQube MCP (pre-push review)
 
 **Applies when** `azure-pipelines.yml` declares a `SonarQubeProjectKey` (this repo's CI runs SonarQube on PRs). When it does, the **SonarQube analysis runs as a step inside the quality gate** (`node init.mjs --build` → `aqua quality-gate`), and a **local MCP review of that analysis is part of the push gate** — it runs **after** the quality gate, before push, matching Hubtel CI ordering. Repos without a `SonarQubeProjectKey` skip this section.
@@ -1064,6 +963,15 @@ PR status: opened — PR #<pullRequestId> → <targetBranch> (<link>)
 
 **On failure**, surface the error plainly and stop. **No Sprint Planner fallback.**
 
+**PR already open for this branch — link, don't create (P.12b).** Features in the same request share a branch, so after the first feature opens the PR every later feature's push **lands in that same PR**. P.10 resolves `workItems` **once**, at creation, from the commits on the branch at that moment — so without this step the PR links only the **first** feature's tasks and every later feature's work items are silently missing from it.
+
+1. **Detect** before P.9: `repo_pull_request` `list` with `sourceRefName: refs/heads/<branch>` and `status: active` (fall back to the `PR #<id>` recorded in `progress.md` **PR status**). An active PR exists → this path; none → P.9–P.12 as normal.
+2. **Skip P.9–P.11** — never open a second PR, never re-ask `Open a pull request?`, never call `repo_pull_request_write` (it stays `create`-only).
+3. **Link this feature's work items** — for **each** numeric `taskId` on the rows sharing this `featId`, call `wit_work_item_link_write` with `action: link_to_pull_request`, `project`, `repositoryId`, `pullRequestId` and `workItemId`. Same ids as the feature commit's `Closed: #…` trailer. Linking attaches the item without modifying the PR, so it needs no extra consent in either mode — the human already approved the PR (supervised) or the run (autopilot).
+4. **Verify** — `repo_pull_request` `get` for that id and confirm every id now appears in its work items; retry a missing one **once**, then report it plainly in the delivery summary (*"linked 3 of 4 work items to PR #148642 — #406943 failed: <reason>"*). A partial link is a visible fact, never a silent gap.
+5. **Record** — update `progress.md` **PR status** (`PR #<id> — feat-001, feat-002 linked`). **Telemetry: no `pr-opened`** — no PR was opened; re-firing it would double-count PRs.
+6. The delivery summary and the `delivered` closing line cite the **same** `PR #<id>`.
+
 **Sonar note.** Pre-push Sonar used **`branch`** analysis. After the PR exists, **PR CI Sonar** (using `pullRequest` context) remains the authoritative merge gate — opening the PR does not replace that.
 
 ### Post-PR CI monitor (P.13)
@@ -1117,7 +1025,7 @@ Silence, dismiss, or ambiguous = **not yet** → stop. No `push anyway` option �
 
 1. Use the log/timeline to find the code/config cause. If on closer look it's unclear or not code-related: report plainly ("couldn't tie this failure to the change — re-run the build or check the pipeline") and stop. **Do not** set any row to `blocked` — delivered rows stay `done`.
 2. Fix on the **same feature branch**.
-3. Fast gate: `node init.mjs` + the affected row(s)' `verification` (re-run 3.6/3.7 only if UI changed).
+3. Fast gate: `node init.mjs` + the affected row(s)' `verification` (re-run 3.6 only if UI changed).
 4. **New commit** — Conventional Commits message describing the fix (e.g. `fix(ci): …`), **no `Closed:` trailer**.
 5. **Re-run the push gate P.0–P.8 in full**; **skip P.9–P.12** (the push updates the open PR). **Hard rails still bind** — P.0 docs failure, P.2 abort, incomplete Sonar MCP, protected branch → stop, do not push, close with a `push blocked` line. Unclean Sonar → Sonar fix loop inline in both modes.
 6. **Row `evidence` is unchanged** — the CI fix commit is not feature evidence. No `feature-done` / `pr-opened` telemetry. Never open a second PR; never call `repo_pull_request_write` `update`.
@@ -1132,7 +1040,23 @@ Silence, dismiss, or ambiguous = **not yet** → stop. No `push anyway` option �
 
 A **Reviewer subagent** the engineer can call at will: does the delivered work match what was asked (plan acceptance criteria + Azure task specs), and does it follow Hubtel's guidelines? **Soft report only** — it never blocks commit, push, `done`, or `delivered`, and it is **not** a step in **Completing a feature**.
 
-**Invoke only on a clear ask.** "review this against the task", "review feat-002", "does this match the task?" — or equivalent. A bare **"review this"** is *not* that: it may mean PR state, defects, or acceptance. Ask which, or use **On-demand PR / CI queries** for PR state. **Never spawn this subagent on your own** — not before a commit, not at `done`, not as part of any gate.
+**Two invocations, one subagent.**
+
+| | **Rail (step 3.8)** | **At will** |
+|---|---|---|
+| Trigger | Automatic, once per feature when all rows are `verified` | You ask |
+| Scope | The feature being completed — **uncommitted** | Last delivered feature, or any feat/paths named |
+| Blocks? | Acceptance/behaviour `fail` blocks; `gaps` and guideline findings never do | Nothing ever |
+
+### Rail invocation (step 3.8)
+
+- **Scope the diff precisely.** Everything the feature touched is still uncommitted (the harness commits **once per feature**), so the diff is **`git diff HEAD`** — staged and unstaged in one. **Never** `git diff <integrationBranch>...HEAD`: features share a branch, so a three-dot range drags in every earlier feature already committed there. If the feature already has commits of its own (a remediation commit from a prior cycle), add **`git diff <featureBaseSha>..HEAD`** using the sha recorded at atomic start. **A clean working tree is not a no-op** — after a remediation commit `git diff HEAD` is empty while the fix lives in that range; review it anyway.
+- **Criteria** are the feature's plan `## Acceptance criteria` **plus** the Azure specs for **all** its rows, taken together.
+- **Remediation on `fail`:** the failing criteria map back to rows — reopen those (`verified` → `in-progress`), fix, re-run their fast gate + `verification`, then re-run **3.8 for the feature** (not per reopened row). In `autopilot`, show the **first** `fail` report in the delivery overview before remediating — a silently auto-fixed speculative finding hides a disagreement worth seeing. In `supervised`, ask `Fix review findings and re-run? (yes / push anyway / not yet)`. **Cap 2 cycles**, then `blocked`. `push anyway` is an escape hatch for a reviewer that is wrong, **not a workflow** — reaching for it repeatedly means either the rubric produces bad `fail`s or real defects are shipping.
+- **No acceptance criteria at all** (no plan AC, nothing behavioural in the Azure specs) → **`gaps` with a loud line** — *"no acceptance criteria available; nothing was verified against"* — never a fast silent `pass`.
+- **What the prompt carries and what it must not.** Facts only: criteria, scope, and how to run the app (documented dev command, port, env template, seed script, connected MCPs). **Never** the builder's self-assessment — no "all tests pass", no `progress.md` claims, no verification logs, and on a re-check no "I fixed it". A reviewer told the answer is no longer checking it.
+
+**Invoke only on a clear ask** *(at-will path)*. "review this against the task", "review feat-002", "does this match the task?" — or equivalent. A bare **"review this"** is *not* that: it may mean PR state, defects, or acceptance. Ask which, or use **On-demand PR / CI queries** for PR state. **Never spawn this subagent on your own** — not before a commit, not at `done`, not as part of any gate.
 
 **Not a bug hunt.** The Reviewer answers *"does this match what was asked, and does it follow the guidelines?"* — defects and code smells belong to Sonar (P.4–P.6) and PR review.
 
@@ -1151,7 +1075,7 @@ A **Reviewer subagent** the engineer can call at will: does the delivered work m
 
 ### Spawn
 
-- **Model** — pin **`claude-opus-5`**. The Reviewer's primary lane is reconciling stated criteria against real code and deciding what is genuinely worth a human's attention; that judgment is the whole value of the tool, so it gets the strongest model even though the run is short.
+- **Model** — pin **`claude-opus-5-5-thinking-medium`**. The Reviewer's primary lane is reconciling stated criteria against real code and deciding what is genuinely worth a human's attention; that judgment is the whole value of the tool, so it gets the strongest model even though the run is short.
 - **Label** — stable visible label **`Hubtel Harness Reviewer`**; include `Role: hbtl-harness-reviewer` at the top of the prompt body when the spawn tool has no visible-name field.
 - **Resumable, read-only, self-contained** (no parent history). **Capture the subagent ID returned on dispatch** and resume *that* agent for follow-ups ("what about the offline case?") and for return-early answers — never re-spawn using the label as identity, and never pay to re-read the plan, diff and guidelines for a follow-up question (same rule as the planning subagent).
 - **Return-early instruction** — tell it to return immediately, before reviewing, if it cannot identify the criteria to review against (no plan AC, Azure specs missing or unusable). Reviewing against guessed criteria is worse than asking: a wrong baseline produces confident, wrong rows. The main agent answers and resumes the same agent.
@@ -1179,20 +1103,23 @@ Pack into the prompt:
 
 **Anything failing any of the four is dropped** — not downgraded to "info", not rephrased as a suggestion.
 
-**Owned elsewhere — do not report.** Four gates already crossed this code; re-deriving them is the main source of noise:
+**Owned elsewhere — do not report.** Three gates already crossed this code; re-deriving them is the main source of noise:
 
 | Already owned by | Do not report |
 |---|---|
 | **Step 3.5** guidelines reconciliation (same `get_guideline` docs, mandatory before `done`) | Style/naming already reconciled — fire only on **touched lines**, with a cited ref and a violation **still present in the code**. You cannot know what 3.5 checked: never infer a miss from a silent `progress.md` |
 | **Sonar P.4–P.6** | Code smells, lint, duplication, coverage, security hotspots |
 | **Step 3.6** | `@hubtel/*` import validity, design-system component usage |
-| **Step 3.7** | Whether the builder's own runtime pass succeeded. You **re-verify behaviour independently** (see **Behaviour lane**) — that is not duplication, it is the point |
 
 **Caps and shape:**
 
 - **≤5 acceptance rows and ≤5 guideline rows**, severity-ranked, most severe first. If more survived the bar, report the top ones plus one line: *"N minor items not listed."*
 - **Empty findings is a valid, expected result** — but a bare `pass` is not a report. A clean feature returns **zero findings plus the confirmation trail** below. **Never pad with findings to look thorough; never omit the trail to look terse.**
 - **Confirmation trail (required on every criterion that passes).** One line each: the criterion, the evidence kind, and **how** it was confirmed — *"Blank title rejected inline · observed · typed empty title, inline error shown, nothing persisted"* or *"Hubtel packages under `src/` · read · src/package.json:23-25"*. **Not** subject to the ≤5 cap. On a clean `pass` it **is** the report; on `gaps`/`fail` it moves behind an offer, because the gaps are the news. A behavioural line may only say `observed` if you actually drove the app.
+  - **Every `observed` line states what you did and what you saw** — *"submitted `"   "` → inline error shown, list unchanged"*. A bare `observed` is an unfalsifiable claim, which is exactly what the trail exists to prevent; it is also the most valuable row in the report (someone actually ran it), so it must not be the least checkable. `read` lines cite `file:line`.
+  - **Phrase each criterion as an outcome a user would see**, not as code — *"Todos survive a reload"*, not *"persist to hubtel-todos"*; *"Blank title is rejected"*, not *"addTodo trims"*. Do this even when the source is implementation-shaped (Azure objectives on plans without `## Acceptance criteria`): restating is your job, not the reader's.
+  - **Only criteria belong in the trail.** "Unit tests cover the named cases" is an observation about the test file — put it under `Sources`. A line with no location and no observation ("localStorage guards · read") fails the bar and is dropped.
+  - **Group by area once the trail passes ~8 lines** — *Adding todos / Persistence / Updating / Structure* — with the `observed` groups first. A flat list of fifteen near-identical rows is unreadable even when every row is correct.
 - **No generic advice** — no "consider adding tests", "could be clearer", "consider extracting".
 - **Unconfirmable criteria get a row, not silence** — `result: unconfirmed`, inside the same ≤5 cap. Each one must say **what you checked and what is missing**: *"AC 4 (offline queue flush): no code path found; searched `sync/`, `store/queue.ts`, and the Playwright specs."* A bare "couldn't confirm" is the cheapest row there is — without the search trail it is not reportable. Five unconfirmed criteria is itself a signal (vague criteria or too-wide scope) — say that plainly instead of enumerating more.
 
@@ -1227,12 +1154,13 @@ Refutation is different: seeing the defect in code (e.g. the queue is cleared be
 
 1. **Acceptance** — read the full plan, then walk its `## Acceptance criteria` and the Azure task specs against the change; use flow / files / test plan / contracts / risks to spot scope gaps. Tag each row `source: plan|azure` with the criterion it maps to. **Verify by reading the implementation files** — an unread claim is dropped. **Full coverage, like a plan:** enumerate **every** criterion and account for each one as `pass`, `fail` or `unconfirmed` — never review a sample and never leave a criterion unmentioned in your own working list. Report the count as `criteriaChecked: <n>/<total>`; only the rows that meet the bar are printed, but the count proves the walk was complete. When GitNexus is available, check **blast radius** on the touched files (`impact` / `route_map`) for call sites a criterion depends on that the feature did not change.
 2. **Guidelines** — violations **on touched lines only**, each citing a real `domain/scope/name`. **Zero rows is the expected result on a feature that passed 3.5.**
-3. **Behaviour — exercise the app yourself (independent audit).** Derive the assertions from the **criteria**, then drive the running application like a user or a tester would. **Do not** reuse `.harness/ui-runtime/<featId>.json` as evidence and **do not** count a green spec as confirmation: both were produced by the agent that built the feature, from the same reading of the criteria — if it misread one, the artifact and the test encode that misreading and still pass. Inheriting it is exactly what a second pair of eyes exists to prevent.
+3. **Behaviour — exercise the app yourself (independent audit).** Derive the assertions from the **criteria**, then drive the running application like a user or a tester would. **Do not** count a green spec or the builder's own account as confirmation: they were produced by the agent that built the feature, from the same reading of the criteria — if it misread one, the test encodes that misreading and still passes. Inheriting it is exactly what a second pair of eyes exists to prevent. (Legacy `.harness/ui-runtime/` files from before 2.7.0 are inert — never evidence.)
    - **How:** start the app locally from its documented dev command; drive it through `chrome-devtools-mcp` — navigate, type, click, reload — observing the DOM, console and network. For non-UI work, exercise the real surface directly (call the endpoint, run the CLI, inspect the response or store).
-   - **Prior artifacts are navigation hints only** — the 3.7 file and existing specs may tell you which route to open or what seed data to use. **Never** evidence. Specs may be named under `Sources` as context, never counted as confirmation.
+   - **Existing specs are navigation hints only** — they may tell you which route to open or what seed data to use. **Never** evidence. Specs may be named under `Sources` as context, never counted as confirmation.
+   - **Checking a UI properly** (carried over from the retired step 3.7, where these were learned the hard way). **Development server only** — never a production build or serve. Beyond the visible result, read **`list_console_messages`** (errors are a gap) and **`list_network_requests`** (failed sub-resources). **False greens to avoid:** an a11y snapshot showing `image "Hubtel"` proves the `<img>` and its `alt` exist, **not** that the asset loaded — a 404 `src` still appears in the tree; a page returning `200` does not mean its logo, fonts or chunks did; a mocked `next/image` in a unit test never fetches the real path. **Media criteria need load proof**, not DOM presence: the asset request returned `200` **and** `evaluate_script` shows `img.complete && naturalWidth > 0`.
    - **Guardrails.** **Time-box the lane (~5 minutes).** If the app will not start in that window, **abort and record a limit** — *"app did not start within budget: `ECONNREFUSED postgres:5432`"* — and do **not** debug it. **Never fix anything to make it run** (read-only still holds absolutely). **Local only** — never a staging/production URL or real credentials; if the only runnable config points at a shared environment, do not run and record a limit. **Nothing destructive** — no deleting real data, moving money, or messaging real people; a criterion only assertable that way stays `unconfirmed` with the reason. **Infra failure is never a finding** — a crashed dev server is a limit, not a gap. **No exploratory testing** — every assertion maps to a criterion under review; roaming the app produces UX opinions, which is the noise this rubric exists to suppress.
    - **Could not run → behavioural criteria stay `unconfirmed`**, never `pass`. That is an honest `gaps`, not a silent pass.
-4. **Self-audit before returning (required).** Re-read your own report against the rubric and **delete** every row that: lacks `path` + `failureScenario` (or `searched` on an `unconfirmed` row); restates something step 3.5, Sonar, 3.6 or 3.7 owns; duplicates another row; or would leave the engineer doing nothing. Then check the shape: caps respected (≤5 per lane — the **confirmation trail is exempt**), no `info` severity, no generic advice, every gap carrying its own `fix`, `criteriaChecked` written as accounted-for over total with `criteriaClean` beside it, **a `confirmed[]` line for every passing criterion**, `summary` written as 2–4 sentences of real judgment (not a restatement of the verdict label), and `limits[]` populated whenever something could not be checked — **especially when the app did not run**. **No behavioural criterion may be marked `pass`/`observed` unless you exercised the running app**; if you did not, it is `unconfirmed` and the reason belongs in `limits[]`. A report that shrinks to zero **findings** in this step is a **correct** `pass` — but it still carries the trail; never strip the trail to look concise.
+4. **Self-audit before returning (required).** Re-read your own report against the rubric and **delete** every row that: lacks `path` + `failureScenario` (or `searched` on an `unconfirmed` row); restates something step 3.5, Sonar or 3.6 owns; duplicates another row; or would leave the engineer doing nothing. Then check the shape: caps respected (≤5 per lane — the **confirmation trail is exempt**), no `info` severity, no generic advice, every gap carrying its own `fix`, `criteriaChecked` written as accounted-for over total with `criteriaClean` beside it, **a `confirmed[]` line for every passing criterion** — each phrased as an outcome, every `observed` line carrying its action → result (**delete the word "observed" rather than leave it bare**: an unevidenced line is `unconfirmed`), no non-criteria rows, grouped by area past ~8 lines — `summary` written as 2–4 sentences of real judgment (not a restatement of the verdict label), and `limits[]` populated whenever something could not be checked — **especially when the app did not run**. **No behavioural criterion may be marked `pass`/`observed` unless you exercised the running app**; if you did not, it is `unconfirmed` and the reason belongs in `limits[]`. A report that shrinks to zero **findings** in this step is a **correct** `pass` — but it still carries the trail; never strip the trail to look concise.
 5. Pick the verdict, return. **Do not fix anything.**
 
 ### Return shape
@@ -1250,7 +1178,8 @@ gaps[]: { criterion|ref, kind: behaviour|evidence|guideline, severity: blocker|w
           detail, path, failureScenario|searched, fix }   # ≤5 per lane; each carries its own next step
 limits[]: <what this review could not check — missing AC, app would not start, no MCP,
            shared-environment config; omit the section entirely when empty>
-confirmed[]: { criterion, evidence: observed|read, how: <what you did / file:line> }
+confirmed[]: { area, criterion, evidence: observed|read, how }
+             # criterion phrased as an outcome; how = "<action> → <what was seen>" when observed, file:line when read
              # shown in full on a clean pass; on gaps it is available on request — NOT capped
 run?: { status: ran|not-run, how?: <dev command + surface driven>, why?: <reason when not-run> }
 droppedMinor?: <count of items that did not meet the bar>
@@ -1258,7 +1187,7 @@ droppedMinor?: <count of items that did not meet the bar>
 
 There is no `info` severity **by design** — informational means it did not meet the bar. Every gap carries `path` + `failureScenario` (or `searched`, when it is unconfirmed) **and** its own `fix` — there is no separate follow-ups list to restate them. Rows missing their evidence are dropped before returning. `criteriaChecked` is **always** accounted-for over total (`30/30`), never a pass count — the clean count lives in `criteriaClean`, so the coverage number can never be misread as "two were skipped".
 
-**Validate before presenting.** The report is the subagent's output, not gospel — check it the same way a malformed `elicitationForm` is checked before rendering. Drop rows missing their evidence, rows over the caps, `info` severity, generic advice, and follow-ups on a `pass`. If `criteriaChecked` is absent or written as a pass count, the **confirmation trail is missing or thinner than the clean-criteria count**, `summary` is a restatement of the label rather than judgment, a **behavioural criterion is marked `observed` while `run.status` is `not-run`**, a required limit is absent, or the rows contradict the verdict (a `fail` row under `verdict: pass`), **resume the same subagent** with the specific violation rather than presenting it or fixing it yourself. A bare `pass` with no trail is an incomplete report, not a clean one. Never render an unvalidated report.
+**Validate before presenting.** The report is the subagent's output, not gospel — check it the same way a malformed `elicitationForm` is checked before rendering. Drop rows missing their evidence, rows over the caps, `info` severity, generic advice, and follow-ups on a `pass`. If `criteriaChecked` is absent or written as a pass count, the **confirmation trail is missing or thinner than the clean-criteria count**, `summary` is a restatement of the label rather than judgment, a **behavioural criterion is marked `observed` while `run.status` is `not-run`**, an **`observed` trail line has no `how`** (a bare "observed" is a claim, not evidence), the trail is phrased as code rather than outcomes, a required limit is absent, or the rows contradict the verdict (a `fail` row under `verdict: pass`), **resume the same subagent** with the specific violation rather than presenting it or fixing it yourself. A bare `pass` with no trail is an incomplete report, not a clean one. Never render an unvalidated report.
 
 **Presenting it — fixed sections, gaps first.** Plain language, no raw JSON unless asked. Use these headers every run so reports are comparable at a glance, and **report what is missing, not what was done** — a satisfied criterion is the expectation, not news:
 
@@ -1282,9 +1211,26 @@ Sources: Azure <ok|failed> · plan AC <present|missing> · guidelines <clean|n f
          behaviour <ran: dev server + browser | not run: reason> · <n> minor dropped
 ```
 
+- **Trail shape, for reference:**
+
+  ```text
+  CONFIRMED  13/13 · 9 observed, 4 read
+
+  Adding todos
+    Blank or whitespace-only title is rejected   observed · submitted "   " → inline error, list unchanged
+    Title is trimmed before saving               observed · " buy milk " → stored as "buy milk"
+
+  Persistence
+    Todos survive a reload                       observed · added 2 → reload → both present
+    Corrupt storage falls back to empty          observed · set "{{{" → reload → empty state, no crash
+
+  Structure
+    Storage key is hubtel-todos                  read · src/stores/todo.ts:5
+  ```
+
 - **`GAPS` leads**; each gap carries its own `→ fix`, so there is no separate follow-ups section restating them.
 - **`LIMITS` is about the review, `GAPS` is about the work** — never merge them, and omit `LIMITS` entirely when there is nothing to declare.
-- **On a clean `pass`**, replace `GAPS` with `CONFIRMED` and print the full trail (`criterion · observed|read · how`) — with nothing missing to report, the trail is what makes the pass checkable. On `gaps`/`fail`, keep the trail out of the default view and offer it: *"trail of the N confirmed criteria available — say 'show the trail'."*
+- **On a clean `pass`**, replace `GAPS` with `CONFIRMED` and print the full trail, grouped by area past ~8 lines (`criterion · observed|read · how`) — with nothing missing to report, the trail is what makes the pass checkable. On `gaps`/`fail`, keep the trail out of the default view and offer it: *"trail of the N confirmed criteria available — say 'show the trail'."*
 - **The verdict line states the consequence**, not just the label: "no code changes needed" / "1 criterion not met — fix before merge".
 
 **The Reviewer writes nothing to `progress.md`.** Save the report to `.harness/reviews/feat-NNN-<ts>.md` **only** when the engineer asks ("save that", "write it to a file") — the main agent writes it, never the subagent.
@@ -1327,7 +1273,7 @@ At Hubtel, every project is documented and its documentation stays fresh with th
 - **Fast gate** — `node init.mjs` (install + static checks: lint/typecheck). No full test suite — each feature's `verification` proves its own tests. Run at startup and before marking any feature `done`.
 - **Quality gate** — `node init.mjs --build` delegates to **`aqua quality-gate`**, which runs the **same CI-parity quality checks** as the PR pipeline for this stack (lint, tests, coverage, build, analysis). Run only at the **push gate**, not per feature — this is where the full suite catches cross-task regressions. Aqua owns the checks; the harness does not re-derive them. If the Aqua CLI is missing, `--build` exits `2` — install/authenticate Aqua and re-run.
 
-Verification runs through `node init.mjs` (fast gate), each row's **`verification`** command, and at push only `node init.mjs --build`. Do not run other build commands, `aqua quality-gate`, or `aqua sonar-analyze` directly during feature work — including to support step 3.7.
+Verification runs through `node init.mjs` (fast gate), each row's **`verification`** command, and at push only `node init.mjs --build`. Do not run other build commands, `aqua quality-gate`, or `aqua sonar-analyze` directly during feature work — including to support the step-3.8 review, which runs the app on a **development** server.
 
 ```bash
 node init.mjs           # fast gate: per feature + startup
@@ -1336,7 +1282,7 @@ node init.mjs --build   # quality gate (aqua quality-gate — CI parity): before
 
 ### Completing a feature (run every time, no stopping)
 
-Steps 1–3.7 below run per task. Step 4 (commit approval) and step 5 (commit) happen **once for the whole feature** (all tasks sharing a `featId`), not per row — see **Feature delivery** for the full per-task loop (implement → fast gate → verification → `verified`) and the feature completion sequence.
+Steps 1–3.6 below run per task. Step 4 (commit approval) and step 5 (commit) happen **once for the whole feature** (all tasks sharing a `featId`), not per row — see **Feature delivery** for the full per-task loop (implement → fast gate → verification → `verified`) and the feature completion sequence.
 
 Run steps 1–10 as one unit, in order, **with a single sanctioned pause at step 4** (the commit approval gate). Apart from that pause you do not yield: if a step fails, fix and continue, or set `status: blocked` with the blocker in `progress.md`. Those are the only exits — never stop mid-sequence at `in-progress` for any other reason.
 
@@ -1345,12 +1291,12 @@ Run steps 1–10 as one unit, in order, **with a single sanctioned pause at step
 3. **Feature proof** — the row's `verification` passes
    3.5. **Guidelines reconciliation** — reconcile the finished code against the guidelines pulled at step 1 (`get_guidelines_catalog` + `get_guideline`, applicable domain/scope(s)); fix any divergence (see **Hubtel Engineering MCP** → Guidelines). Skip only for rows that touch no product code. Required before requesting commit approval
    3.6. **Design-system reconciliation (UI rows only)** — on a frontend project, for a row that renders UI, run the MCP tools `validate_imports` + `check_setup` and fix every finding before requesting commit approval or setting status to `verified`/`done` (see **Hubtel Design System MCP**). Skip for backend/infra/script/test rows
-   3.7. **UI runtime assertion (UI rows; blocking before commit approval when MCP connected)** — on a frontend project, for a row that renders UI: if `chrome-devtools-mcp` is connected, run the full loop (see **UI Runtime Assertion**): **3.7a** initial run (append `runs[0]`, record `criteria` + `issues`) → **3.7b** if any issue open, remediate + append `remediation[]` (check open items with `node scripts/summarize-ui-runtime.mjs --target . feat-NNN`) → **3.7c** append a recheck run, repeat until the latest run has no open issues. Write the v3 `.harness/ui-runtime/<featId>.json` (append-only `runs[]`; never edit a prior run). Attach the criteria + open/resolved issues + latest screenshot to the review overview. **Do not proceed to step 4 until the latest run derives pass or the row is `blocked`.** If the MCP is not connected, write a skipped artifact and note `UI runtime assertion: skipped (MCP unavailable)` in the review overview. Skip entirely for backend/infra/script/test-only rows
+   3.8. **Feature review (independent rail — once per feature, not per task)** — steps 1–3.6 run in the **per-task loop**; this one runs **once**, when **every** row sharing the `featId` is `verified`, immediately before step 4. Dispatch the **Reviewer** on the feature's uncommitted work (see **On-demand Reviewer** → *Rail invocation*). **Only an acceptance/behaviour `fail` blocks** — a criterion demonstrably not met, observed failing or refuted from code; remediate (below) and re-run, **cap 2 review cycles**, then `blocked`. **`gaps` never blocks** — `unconfirmed` is what healthy features return when the app will not start, an MCP is down, or the plan carries no acceptance criteria; report it and proceed. **Guideline findings are advisory here** — step 3.5 already reconciled the same docs per task; do not stop a delivery over them. Carry the verdict, any gaps and any *"behaviour not verified"* line into the step-4 review overview
 4. **Request commit approval** — present the review overview and pause for the human's go-ahead (see **Commit approval gate**). Do **not** `git add` or commit yet. Note the wait in `progress.md`; keep `status: in-progress` and `evidence` empty
 5. **Commit** (after approval) — stage this feature's files. Message **must** be `Closed: #<taskId1> #<taskId2> …` listing every task id in the feature, space-separated (numeric strings from `harness_create_tasks`, e.g. `Closed: #12346 #12347`). **One commit per feature** — all tasks sharing a `featId` share one commit (see **Feature delivery**).
 6. **Verify commit** — run `git rev-parse --short HEAD` **immediately after** step 5 succeeds — this output is the **only** hash you may use for evidence and the closing report. Confirm with `git show --stat HEAD`. Never reuse a hash from startup `git log`, an earlier turn, a pre-commit guess, or a different commit in the same session.
 7. **Evidence** — set `evidence` to exactly `commit <hash>` using that rev-parse output (see **Evidence format**). Write the **same** hash on **every** row sharing the `featId`.
-8. **Validate** — run `validate-harness.mjs --target .` when available; don't set `done` if tier-1 fails (includes UI runtime artifact checks on UI rows at `verified`/`done`)
+8. **Validate** — run `validate-harness.mjs --target .` when available; don't set `done` if tier-1 fails
 9. **Status** — set `status` to `done` (every feature row together — all rows sharing the `featId`)
 10. **Sync and report** — update `progress.md` to match (same status + hash), then send the **post-done message** (see **Post-done message**). The response **must** end with exactly **one** closing report line — feature-scoped. **Usage telemetry:** append `feature-done` with the **same** `--feature-name` used at atomic start (CLI auto-fills `--duration-minutes` from the first `feature-started` when omitted), then best-effort `node scripts/ship-usage-telemetry.mjs --target .` (see **Usage telemetry**). **Do not** re-append `feature-started` here. **Soft guard:** if this chat never appended `feature-started` for the same `--feature-name` (missed atomic start), soft-warn in the turn notes / `progress.md` — do **not** invent a backdated `feature-started` ts; still ship `feature-done`. In `autopilot`, continue into the push/PR sequence after this — do **not** append `feature-done` again at P.12.
 
@@ -1360,14 +1306,13 @@ While `in-progress` or `verified`: leave `evidence` empty; test output belongs i
 
 **Mode-dependent (see Approval mode).** In **`supervised`** (default), after the fast gate and feature proof pass (step 3) and **before any `git add` or `git commit`** (step 5), pause and get explicit human approval. Do **not** pre-stage — the working tree stays unstaged while you ask; staging happens only after approval, immediately before the commit.
 
-**In `autopilot`:** the passing verification stack (steps 1–3.7) authorizes the commit. Present the same review overview and commit **in the same turn** — do not pause for a human affirmative, and the **same-turn ban does not apply**. All other requirements are unchanged: the overview must still be complete (files, verification, UI runtime issue-closure, docs citations, proposed commit message), and every hard rail below (guidelines reconciliation, UI runtime closure, `audit_packages`) must still hold before the commit lands. The `Services` line + `build:` suffix are still auto-detected and included. After committing, continue straight into the push gate (see **Pushing (quality gate)** and **Post-done message**).
+**In `autopilot`:** the passing verification stack (steps 1–3.6 per task, then the step-3.8 feature review) authorizes the commit. Present the same review overview and commit **in the same turn** — do not pause for a human affirmative, and the **same-turn ban does not apply**. All other requirements are unchanged: the overview must still be complete (files, verification, the step-3.8 review verdict, docs citations, proposed commit message), and every hard rail below (guidelines reconciliation, no unremediated step-3.8 `fail`, `audit_packages`) must still hold before the commit lands. The `Services` line + `build:` suffix are still auto-detected and included. After committing, continue straight into the push gate (see **Pushing (quality gate)** and **Post-done message**).
 
 Present a compact **review overview** in your response (mirror the key points to `progress.md`):
 
 - **Task** — `task-NNN`, name, and the row's one-line "done" definition
 - **What changed** — bulleted files, each with a short purpose (not a raw diff dump)
 - **Verification** — the `verification` command run + its result
-- **UI Runtime** — (UI rows only) the step-3.7 result: URL tested, each acceptance `criterion` and its latest-run result, every `issue` found with its final status (`resolved`/`waived`, none left `open`), run count, and the latest screenshot; or `UI runtime assertion: skipped (MCP unavailable)`. Omit for non-UI rows
 - **Docs consulted** — `title` + `citationUrl` for each Hubtel doc the probe surfaced and you applied (omit this line when the docs probe found nothing applicable)
 - **Services** — (**.NET backend monorepos only** — see **Selective builds** below and **Commit message format**) run `git diff --cached --name-only` (or `git diff --name-only <base>...HEAD` when composing the message for the whole feature) and resolve the touched `src/<Project>/…` paths to `.csproj` basenames via `resolveTouchedServices()`. List them here and prefill the exact `build: -Proj1 -Proj2` suffix the commit will use. Auto-detected services are authoritative. Omit this line entirely on non-monorepo or frontend repos.
 - **Proposed commit message** — the exact Conventional Commits shape the commit will use: subject `<type>: <summary>[ build: -Proj1 -Proj2]`, blank line, body (≤ 300 chars), blank line, trailer `Closed: #<taskId1> #<taskId2> …` (see **Commit message format**). Present via AskUserQuestion with the pre-filled message as one option; **Other…** lets the human edit type, summary, body, or the `build:` list. Never auto-commit before the human confirms the line.
@@ -1380,27 +1325,12 @@ Present a compact **review overview** in your response (mirror the key points to
 
 **On "changes requested":** address the feedback, re-run the fast gate + feature proof, and re-present the overview. Loop until approved or the feature is set `blocked`.
 
-### UI runtime evidence (when MCP connected)
-
-Before requesting commit approval on a **UI row**, when `chrome-devtools-mcp` is connected, the review overview **must** include a **UI Runtime** subsection covering:
-
-| Item | Required when MCP connected |
-|---|---|
-| URL tested + dev server running | Yes |
-| Acceptance `criteria` + latest-run result each | Yes — every criterion `pass` on the latest run |
-| Issues found + final status | Yes — list each; **none may be `open`** (all `resolved` or `waived` with reason) |
-| Console / network errors | 0 on the latest run |
-| Run count (initial + rechecks) | Yes — show the loop closed (latest run derives pass) |
-| Latest screenshot | Yes |
-
-Generate it straight from the artifact: `node scripts/summarize-ui-runtime.mjs --target . feat-NNN` — the command must exit **0** before you present the overview or ask for approval. Missing this subsection on a UI row when `chrome-devtools-mcp` is connected — presenting it while summarize still reports OPEN, or reporting UI runtime pass before summarize exits 0 — is a **step-3.7 failure**, the same class of mistake as skipping `validate_imports` on a UI row. Do not request commit approval until it is present and closed, or until it is explicitly marked `UI runtime assertion: skipped (MCP unavailable)` because the MCP is not connected.
-
 **Feature review overview (see Feature delivery):** tasks do not pause for individual commit approval. When **every** row sharing a `featId` is `verified`, present **one** overview covering the whole feature:
 
 - **Feature** — `featId`, and every task it contains (`task-NNN`, name, one-line "done" definition)
 - **What changed** — bulleted files, grouped by task, each with a short purpose
 - **Verification** — each task's `verification` command + result
-- **UI Runtime (per UI task)** — for each UI row in the feature, its step-3.7 result (URL, acceptance criteria + latest-run results, issues with final status — none `open`, run count, latest screenshot; or `skipped (MCP unavailable)`). Omit for features with no UI rows
+- **Independent review (step 3.8)** — the Reviewer's verdict for the feature, any gaps with their fixes, and — when behaviour could not be observed — the plain line saying so (*"behaviour not verified: dev server did not start (`ECONNREFUSED postgres:5432`); 4 of 7 criteria unconfirmed"*). When **every** behavioural criterion is unconfirmed, say it in words: *"no behavioural verification took place for this feature"* — not a count. The human approves with that visible, never with it buried.
 - **Docs consulted** — `title` + `citationUrl` for each Hubtel doc surfaced across the feature's tasks and applied (omit when no task's probe found anything applicable)
 - **Proposed commit message** — the feature's `Closed: #<taskId1> #<taskId2> …` (see **Commit message format**)
 - **Out of scope / follow-ups** — anything deliberately left, or new rows you intend to add
@@ -1466,7 +1396,7 @@ Scope and proof live on the task row (`description`, `verification`); the commit
 
 After committing and marking row(s) `done`, your response has two parts: a **body** (human-readable recap + push offer) and a **closing report line** (machine-checkable — **last line only**).
 
-**Do not** repeat the full commit-approval overview (file lists, verification output, UI runtime dumps). **Do** include a compact **Delivered** summary:
+**Do not** repeat the full commit-approval overview (file lists, verification output, review dumps). **Do** include a compact **Delivered** summary:
 
 - **Delivered** — one bullet per task: `**task-NNN** — <one-line "done" definition from the row>` (feature delivery: every task in the feature)
 - **Commit** — `` `<hash>` `` from step 6's `git rev-parse --short HEAD` — the **same** hash on this line, every row's `evidence`, and the closing line — plus the commit message (`Closed: #…`)
@@ -1595,13 +1525,14 @@ The full CI-parity quality checks are validated here, not per feature. When row(
 6. **P.6 Sonar review gate** *(SonarQubeProjectKey repos only)* — if review is incomplete (MCP timeout/auth/partial bundle), **pause** in both modes; do not push. If review is not clean (actionable findings or failed Sonar quality gate): in **`supervised`**, **pause** and ask `Fix Sonar issues and re-run? (yes / push anyway / not yet)`; record `Awaiting Sonar review consent` in `progress.md`; do not push until **`push anyway`** or review is clean after a fix loop. In **`autopilot`**, **do not ask** — enter the **fix loop** inline immediately; re-run P.2–P.6 after each fix commit until clean or **`blocked`**, then proceed to P.7 when clean. If clean, proceed to P.7.
 7. **P.7 Push** — push to origin.
 8. **P.8 Record** — update `progress.md` (quality-gate status + SonarQube status + push status → `pushed to origin`).
-9. **P.9 PR offer (mode-dependent)** — in `supervised`, ask explicitly: `Open a pull request? (yes / not yet)` — do not auto-open; PR consent is separate from push consent. In **`autopilot`**, skip the ask and proceed straight to P.10–P.12 to open the PR inline after the successful push (see **Approval mode**).
+9. **P.9 PR offer (mode-dependent)** — **first check whether an active PR already exists for this branch** (a later feature in the same request): if so, skip P.9–P.11 and run **P.12b** (link this feature's work items to the open PR) instead. Otherwise, in `supervised`, ask explicitly: `Open a pull request? (yes / not yet)` — do not auto-open; PR consent is separate from push consent. In **`autopilot`**, skip the ask and proceed straight to P.10–P.12 to open the PR inline after the successful push (see **Approval mode**).
 10. **P.10 Resolve PR args** *(on yes, or always in `autopilot`)* — read-only git: current branch, integration target (`git branch -r`), last commit subject for title choice, `origin` remote URL (parse `project` + `repositoryId`); gather work-item ids from `Closed: #…` commits or row `taskId`s (see **Hubtel Azure DevOps MCP** → Post-push pull request).
 11. **P.11 Open PR** — `repo_pull_request_write` (`action: create`) then `repo_pull_request_label` (`action: add`, `name: hbtl-harness`); present title, id, and constructed link on success.
 12. **P.12 Record PR** — update `progress.md` **PR status** (id, target, link, or `not opened yet`). **Usage telemetry:** on success append **`pr-opened` only**, then best-effort `node scripts/ship-usage-telemetry.mjs --target .`. **Do not** append `feature-done` here — that event already ran at feature commit (Definition of Done step 10). Wrong event at P.12 was a known miss (agents re-fired `feature-done` and skipped `pr-opened`). Then present the delivery summary (work / commit / push / PR), emit the `delivered` closing line, and **in that same message after the closing line** run **Cycle feedback** with the **pinned form verbatim** (`elicitationForm` via AskUserQuestion when available; else Markdown soft-ask — see **Cycle feedback**; do not rephrase question/options) → parse selected label `1`–`5` ± comment → `feedback` event + ship; dismiss/silence = decline, no re-ask. Do **not** ask before the PR summary or before `delivered`, and do **not** close the turn without the soft-ask.
+12b. **P.12b Link to the open PR** *(later features in the same request)* — when an active PR already exists for this branch: `wit_work_item_link_write` `action: link_to_pull_request` for **each** of this feature's `taskId`s, verify they appear on the PR, record them in `progress.md`, and **do not** append `pr-opened` (see **Post-push pull request** → *PR already open for this branch*).
 13. **P.13 Post-PR CI monitor** *(queue empty only)* — after Cycle feedback resolves and **Continue the queue** has nothing left to start, soft-ask `Monitor this PR for build failures? (yes / no)` as a separate question; on yes, watch the latest PR build(s) for HEAD and offer `Fix these CI failures? (yes / not yet)` on a code-related failure (see **Hubtel Azure DevOps MCP** → **Post-PR CI monitor (P.13)**). Mid-queue: skip.
 
-**Fix loop** — fix → `node init.mjs` (fast gate) → affected row's `verification` (re-run 3.6/3.7 only if UI changed) → **new commit** → **re-run P.2–P.6** (the quality gate re-runs the analysis). Sonar-only fix commits use a normal message describing the remediations; do not re-run commit approval for them. In **`supervised`**, enter on **`yes`** at P.6. In **`autopilot`**, enter **automatically** when P.6 finds unclean review — no ask.
+**Fix loop** — fix → `node init.mjs` (fast gate) → affected row's `verification` (re-run 3.6 only if UI changed) → **new commit** → **re-run P.2–P.6** (the quality gate re-runs the analysis). Sonar-only fix commits use a normal message describing the remediations; do not re-run commit approval for them. In **`supervised`**, enter on **`yes`** at P.6. In **`autopilot`**, enter **automatically** when P.6 finds unclean review — no ask.
 
 On **`Push now?` → not yet** (before the push gate runs): record in `progress.md` the same **Before pushing:** sentence (project checks in plain language, Sonar included when present; not run yet — no script names).
 
@@ -1619,6 +1550,7 @@ Open a pull request? (yes / not yet)
 
 A task is `done` only when every step of **Completing a feature** is satisfied:
 
+- [ ] **Feature reviewed (step 3.8)** — the Reviewer ran once for the whole feature before commit approval, its verdict is recorded on the rows (`reviewVerdict`), and no acceptance/behaviour `fail` is left unremediated (an override is recorded as `fail-overridden`, never silently dropped)
 - [ ] Behavior implemented; `node init.mjs` (fast gate) passes; the row's `verification` passes; `requiredTests` layers satisfied
 - [ ] Code grounded in and reconciled against Hubtel guidelines (`get_guidelines_catalog` + `get_guideline`, applicable scope(s)); mechanics per the `hbtl-software-development` skill (see **Hubtel Engineering MCP**)
 - [ ] (UI rows on a frontend project) `validate_imports` + `check_setup` clean; UI built via the design-system tools (`get_component` / `get_design_tokens` / `find_icons`; `check_setup` / `get_setup_instructions` for setup rows) (see **Hubtel Design System MCP**)

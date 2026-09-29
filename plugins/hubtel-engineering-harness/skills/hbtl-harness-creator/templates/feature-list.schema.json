@@ -98,6 +98,16 @@
             "type": "string",
             "description": "Required when status is done. Must be exactly 'commit <hash>' from the commit that landed this task's feature. Leave empty or omit while in-progress or verified; use description and verification on the row for scope and proof."
           },
+          "reviewVerdict": {
+            "type": "string",
+            "enum": ["pass", "gaps", "fail-overridden"],
+            "description": "Outcome of the step-3.8 feature review, written identically to every row sharing this featId. The Reviewer writes no report file, so this is the only trace that the rail ran: a done feature without one is flagged by validate-harness. Use fail-overridden when a human answered 'push anyway' to a real failure — an override is recorded, never silently dropped."
+          },
+          "featureBaseSha": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{7,40}$",
+            "description": "Git hash of HEAD at atomic feature start, written identically to every row sharing this featId. Marks where the feature began so the step-3.8 feature review can scope in-feature commits (git diff <featureBaseSha>..HEAD) when a remediation commit leaves the working tree clean. Absent on features started before this field existed."
+          },
           "taskId": {
             "type": "string",
             "pattern": "^\\d+$",
