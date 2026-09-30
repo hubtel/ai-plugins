@@ -151,7 +151,7 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 | Action | Notes |
 | ------ | ----- |
 | `AcceptNoAction` | Close without remediation planning |
-| `PlanCodeRemediation` / `PlanOperationalRemediation` / `PlanConfigurationChange` / `PlanDataRemediation` | Authorize planning only (does not execute) |
+| `PlanCodeRemediation` | Authorize planning only (does not execute). Ops/config/data plan dispositions are no longer offered at the Human Decision Gate. |
 | `RequestMoreInvestigation` | Requires `reason` |
 | `Escalate` | Requires `output.confirmExternalHandoff: true` when handed off outside Loop |
 | `Defer` / `Cancel` | Requires `reason` |

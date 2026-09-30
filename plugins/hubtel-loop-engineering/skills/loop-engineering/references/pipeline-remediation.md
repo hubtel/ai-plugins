@@ -93,9 +93,9 @@ When `interactionDirective.requiresHarness` is true (Planning / Execution after 
 ## Full machine lifecycle (reference)
 
 ```text
-Assignment offer [Case AwaitingAcceptance; Accept/Reject on EvidenceCollection contract]
-→ EvidenceCollection [automatic after Accept — hide from Cursor chat]
-→ InvestigationPlanning [Cursor autonomous]
+EvidenceCollection [automatic on Control Plane — before worker offers]
+→ Assignment offer [Case AwaitingAcceptance; Accept/Reject]
+→ InvestigationPlanning [Cursor autonomous — uses persisted evidence + local PR branch]
 → CompleteInvestigationPlanning
 → AwaitingPlanningAuthorization [human — ApprovePlanning]
 → Planning [Harness ensure + Cursor autonomous]
@@ -109,19 +109,19 @@ Assignment offer [Case AwaitingAcceptance; Accept/Reject on EvidenceCollection c
 → Complete [RemediationDelivered]
 ```
 
-Assignment acceptance is **not** a CapabilityExecution stage. CE stays on `EvidenceCollection` while the Case assignment is offered.
+Assignment acceptance is **not** a CapabilityExecution stage. CE stays on `EvidenceCollection` while the Case assignment is offered (evidence already persisted).
 
 While `assignment.assignmentStatus` is `AwaitingAcceptance`, the workspace **overlays** `AcceptAssignment` / `RejectAssignment` on the EvidenceCollection contract. Submit those via MCP like any other governed action.
 
-Teams (`Work on Loop CASE-XXXX`) is discovery only. After Accept settles, do **not** narrate EvidenceCollection as a stage the engineer must wait through.
+Teams (`Work on Loop CASE-XXXX`) is discovery only. Evidence is gathered **before** offers; after Accept do **not** narrate EvidenceCollection as a stage the engineer must wait through.
 
 ## Stages
 
 | Stage | Owner | Notes |
 |-------|--------|------|
-| Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection` |
-| EvidenceCollection | Automatic | After Accept — **hide** from chat |
-| InvestigationPlanning | Cursor autonomous | Investigation result / EngineeringBrief understanding |
+| Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection` (evidence already on Case) |
+| EvidenceCollection | Automatic (Control Plane) | **Before** worker offers — hide from chat |
+| InvestigationPlanning | Cursor autonomous | Uses persisted evidence + local repo on PR branch |
 | AwaitingPlanningAuthorization | Human via Cursor | ApprovePlanning before Harness-backed planning |
 | Planning | Cursor + Harness | Ensure/resume harness (`AGENTS.md` / create-harness); CompletePlanning |
 | PlanReview | Human via Cursor | Execute intent → ApprovePlan (+ ApproveExecution) |
@@ -210,11 +210,10 @@ After `get_case_workspace`, when `capability.capabilityType` is Pipeline Remedia
 ```markdown
 **Pipeline:** {pipelineRemediation.pipelineFailureStatus}; PR/branch from evidence
 **Brief:** latest v{n}; approved v{m or none}; freeze={materialCodeChangesFrozen}; deliveryAllowed={deliveryMechanicsAllowed}
-**Directive:** phase={interactionDirective.phase}; continuation={interactionDirective.continuation}; requiresHarness={interactionDirective.requiresHarness}
 **Evidence:** short failure summary + whether PR source branch is resolvable
 ```
 
-If `assignment.assignmentStatus` is `AwaitingAcceptance`, present Accept/Reject and stop.
+If `assignment.assignmentStatus` is `AwaitingAcceptance`, present Accept/Reject and stop. Do **not** echo `interactionDirective` into the engineer-facing reply.
 
 ## Terminals
 

@@ -27,14 +27,15 @@ Workspace and settled submit responses include **`interactionDirective`** — a 
 **Rules:**
 
 1. **First-touch** — When the engineer pastes a Case ID / "Work on Loop CASE-…": call **`get_case_workspace` first**, then **trust `interactionDirective`** (see **First-touch continuation** below). Pasting a Case ID is not consent to cross `RequiresHumanConfirmation` / RHC=true actions.
-2. **`RequiresHumanConfirmation`** — Authoritative stop. Present options (`humanConfirmationActions` / `availableActions`), wait for explicit engineer intent. Do **not** submit. Honor `stopReason`.
-3. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation`, `AwaitingPlatform`, or terminal `None`. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
-4. **Execute intent exception** — One explicit engineer intent such as **"Execute this plan"** may drive **two sequential durable actions** when both are valid: `ApprovePlan` → settle → `ApproveExecution` → settle → Execution. Do **not** merge backend semantics. Fail closed if either action is invalid or settlement fails. Never infer the second authorization from an unrelated earlier utterance.
-5. **Gate B** — After successful implementation/validation, when `ApproveImplementation` is in `autonomousActions` (RHC=false), Cursor may autonomously submit it (durable freeze checkpoint), then commit/push, then `CompleteExecution`. Stop on failed validation, material plan deviation, destructive/unexpected repo ops, or other safety conditions — never silently cross the boundary.
-6. **Loop wins over Harness** — Loop authorization always overrides Harness `approvalMode` / autopilot. Do not let harness autopilot bypass Loop gates.
-7. **PendingSettlement** — Observational only via `get_transition_status`. Never re-signal; never invent a refresh loop. After **AcceptAssignment**, settlement stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation so investigation continues without another human action.
-8. **`AwaitingPlatform`** — Platform work is still progressing (empty Cursor actions). Do **not** invent actions; do **not** ask the engineer to refresh or type "continue". Observe via PendingSettlement / `get_transition_status` when applicable.
-9. **`None`** — Terminal / no further progression expected. Present status; do not invent actions.
+2. **Engineer-facing replies** — Consume `interactionDirective` for continuation control only. **Do not echo** Directive / phase / continuation / requiresHarness / stopReason / permittedActions machinery into chat. Speak in plain Case/stage/options language.
+3. **`RequiresHumanConfirmation`** — Authoritative stop. Present options (`humanConfirmationActions` / `availableActions`), wait for explicit engineer intent. Do **not** submit. Honor `stopReason` internally (do not dump the field name/value unless it helps the engineer decide).
+4. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation`, `AwaitingPlatform`, or terminal `None`. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
+5. **Execute intent exception** — One explicit engineer intent such as **"Execute this plan"** may drive **two sequential durable actions** when both are valid: `ApprovePlan` → settle → `ApproveExecution` → settle → Execution. Do **not** merge backend semantics. Fail closed if either action is invalid or settlement fails. Never infer the second authorization from an unrelated earlier utterance.
+6. **Gate B** — After successful implementation/validation, when `ApproveImplementation` is in `autonomousActions` (RHC=false), Cursor may autonomously submit it (durable freeze checkpoint), then commit/push, then `CompleteExecution`. Stop on failed validation, material plan deviation, destructive/unexpected repo ops, or other safety conditions — never silently cross the boundary.
+7. **Loop wins over Harness** — Loop authorization always overrides Harness `approvalMode` / autopilot. Do not let harness autopilot bypass Loop gates.
+8. **PendingSettlement** — Observational only via `get_transition_status`. Never re-signal; never invent a refresh loop. After **AcceptAssignment**, settlement stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation so investigation continues without another human action.
+9. **`AwaitingPlatform`** — Platform work is still progressing (empty Cursor actions). Do **not** invent actions; do **not** ask the engineer to refresh or type "continue". Observe via PendingSettlement / `get_transition_status` when applicable.
+10. **`None`** — Terminal / no further progression expected. Present status; do not invent actions.
 
 ### First-touch continuation (authoritative)
 
@@ -662,7 +663,6 @@ Respond with this template (plus capability-specific evidence blocks below), pre
 ```markdown
 **Case:** CASE-XXXXXXXX — {title}
 **Stage:** {capability.currentStage} (expected: {capability.expectedStage}, {capability.status})
-**Directive:** phase={interactionDirective.phase}; continuation={interactionDirective.continuation}; requiresHarness={interactionDirective.requiresHarness}
 **Objective:** {currentStageContract.objective}
 **Available actions:** {comma-separated action names from currentStageContract}
 **Assignment:** {assignment.engineerEmail} — {assignment.assignmentStatus}
@@ -670,12 +670,11 @@ Respond with this template (plus capability-specific evidence blocks below), pre
 **Planning:** {remediationPlanning.session.status + latestPlan.revision when remediationPlanning present, else "n/a"}
 **Execution:** {executionContext.phase + approved plan rev when executionContext present, else "n/a"}
 **Pipeline:** {pipelineRemediation.pipelineFailureStatus + approved brief version + freeze/delivery flags when pipelineRemediation present, else "n/a"}
-**Stop reason:** {interactionDirective.stopReason}
 
 I have not submitted any Loop actions yet.
 ```
 
-Prefer **AskQuestion** for each action in **Available actions** / `humanConfirmationActions` plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** named action (Medium bar).
+Prefer **AskQuestion** for each action in **Available actions** / `humanConfirmationActions` plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** named action (Medium bar). Do **not** echo `interactionDirective` fields (phase / continuation / requiresHarness / stopReason) into this reply.
 
 ### When `continuation` = `Autonomous`
 
