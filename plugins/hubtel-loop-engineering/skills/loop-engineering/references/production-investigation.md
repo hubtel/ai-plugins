@@ -12,7 +12,7 @@ Durable stage names (from Loop/Temporal) differ from agent-friendly objectives i
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
 | `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
 
-Preserve disposition (`AwaitingHumanDecision`) — all Plan* / AcceptNoAction / Escalate / Defer / Cancel options remain intact. **Plan* dispositions authorize Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B is durable and autonomous after successful validation (RHC=false). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`.
+Preserve disposition (`AwaitingHumanDecision`) — all Plan* / AcceptNoAction / Escalate / Defer / Cancel options remain intact. **Plan* dispositions authorize Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B (`ApproveImplementation`) is durable and **requires human confirmation of the implementation before push** (RHC=true). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`. Cursor tool Run/Always Run is not Gate B.
 
 ### Hide incidental machine stages from chat
 
@@ -30,9 +30,9 @@ Preserve disposition (`AwaitingHumanDecision`) — all Plan* / AcceptNoAction / 
 Accept → PendingSettlement until InvestigationBrief (platform stages) → Autonomous
 AUTONOMOUS Brief → Diagnosis → Recommendation
 → Human: disposition (AwaitingHumanDecision — options intact)
-→ (Plan*): HARNESS ensure/resume → AUTONOMOUS RemediationPlanning → PlanReview
+→ (Plan*): HARNESS scaffold/plan via hbtl-harness-creator → engineer approves breakdown → CompleteRemediationPlan → PlanReview
 → Human: Execute this plan (ApprovePlan → ApproveExecution)
-→ HARNESS-backed Execution → autonomous Gate B → commit/push → CompleteExecution
+→ HARNESS-backed local implementation → Human: review implementation (ApproveImplementation) → commit/push → CompleteExecution
 ```
 
 
@@ -42,10 +42,10 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 
 **Instructions (from contract):**
 
-1. Review available production evidence.
-2. Inspect relevant repository implementation.
-3. Correlate errors with recent changes where appropriate.
-4. Separate observed facts from hypotheses.
+1. Write a thorough investigationSummary — symptom timeline, exception verbatim, systems, code paths, facts vs ranked hypotheses.
+2. Inspect repository implementation in enough depth to name throwing/handling code, flags, and auth gates.
+3. Correlate production evidence with code. If a trace id is missing, say so.
+4. Separate observed facts from hypotheses. Do not collapse a simulator/drill into a product-bug story without proving the path.
 
 **Required outputs for completion:**
 
@@ -83,14 +83,14 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 
 ## ProductionDiagnosis
 
-**Objective:** Determine the most likely root cause and candidate remediation path.
+**Objective:** Determine the most likely root cause in enough detail that a later planner can act without re-deriving the investigation.
 
 **Instructions (from contract):**
 
-1. Review the investigation summary and referenced evidence.
-2. Form a diagnosis grounded in observed facts.
-3. Propose a candidate remediation when code or configuration change is indicated.
-4. State confidence and assumptions explicitly.
+1. Ground the diagnosis in the investigation summary and cited evidence — owning type/method, flags/environment, auth.
+2. Explain why this is (or is not) a product defect versus expected/controlled behavior.
+3. Propose a candidate remediation only when code or configuration change is indicated.
+4. State confidence, assumptions, and remaining unknowns. Do not submit a one-sentence diagnosis.
 
 **Required outputs for completion:**
 
@@ -175,13 +175,12 @@ Submit via `submit_stage_output` with the disposition as `action` (not the legac
 
 **Instructions (from contract):**
 
-1. Planning is already authorized by the Plan* HumanDecision — ensure/resume the Engineering Harness when `requiresHarness` is true.
-2. Autonomously develop a reviewable remediation plan from Case Workspace artifacts, investigation evidence, and repository context.
-3. Do not ask the engineer for planning confirmation or collaborative drafting on the happy path; stop only when genuinely blocked (exceptional durable `RequestHumanInput` when needed).
-4. Loop does not persist conversational drafting — only submit the durable completed plan via `CompleteRemediationPlan`, then stop at PlanReview for the engineer decision.
-5. Reference the active diagnosis, recommendation, and evidence from the Case Workspace.
-6. Include validation steps, risks, rollback considerations, and affected components.
-7. Address `revisionContext.requestedReason` when revising after `RequestRevision`.
+1. Planning is already authorized by the Plan* HumanDecision. When `requiresHarness` is true, invoke `hbtl-harness-creator` (`scaffold` if needed) and plan through that skill.
+2. Stop for engineer approval of the harness breakdown before Azure tasks or `CompleteRemediationPlan`. Cursor Always Run is not breakdown approval.
+3. After breakdown approval, submit the durable completed plan via `CompleteRemediationPlan`, then stop at PlanReview.
+4. Reference the active diagnosis, recommendation, and evidence from the Case Workspace.
+5. Include validation steps, risks, rollback considerations, and affected components.
+6. Address `revisionContext.requestedReason` when revising after `RequestRevision`.
 
 **Required outputs for `CompleteRemediationPlan`:**
 
@@ -258,15 +257,15 @@ After **ApproveExecution** settles → expect `currentStage` at or past Executio
 - `executionContext.implementationApproved` — Gate B state
 - `executionContext.phase` — `Implementation` · `ImplementationApproved` · `Completed`
 
-**Pre Gate B** (`implementationApproved = false`): implement, validate, present diff — no Loop transitions for ordinary coding.
+**Pre Gate B** (`implementationApproved = false`): implement and validate locally; present the diff. No Loop transitions for ordinary coding. **Do not push.**
 
-**Gate B** — `ApproveImplementation` (no outputs; **RHC=false** / in `autonomousActions` on happy path):
+**Gate B** — `ApproveImplementation` (no outputs; **RHC=true** / in `humanConfirmationActions`):
 
 ```json
 { "caseId": "CASE-…", "action": "ApproveImplementation" }
 ```
 
-Stage stays `Execution`; from settled context verify `implementationApproved = true`, `phase = ImplementationApproved`. Do **not** ask the engineer for a normal Gate B confirmation when it is autonomous. Stop on validation failure / material deviation / safety conditions.
+Submit only after the engineer reviews the implementation **in chat**. Cursor Run/Always Run is not that review. Stage stays `Execution`; from settled context verify `implementationApproved = true`, `phase = ImplementationApproved`. Stop on validation failure / material deviation / safety conditions.
 
 **Post Gate B**: commit/push in Cursor; then **CompleteExecution** with full output:
 
@@ -289,7 +288,7 @@ Do **not** submit **CompleteExecution** until push has succeeded. Loop rejects `
 
 | Action | Notes |
 | ------ | ----- |
-| `ApproveImplementation` | Gate B — durable freeze; autonomous after successful validation |
+| `ApproveImplementation` | Gate B — durable freeze; **RHC**; required before push |
 | `CompleteExecution` | Requires full outputs + successful push (`pushed: true`); autonomous on happy path |
 | `RequestRevision` | Returns to planning — requires `reason` + RHC |
 | `RejectImplementation` / `CancelRemediation` | Terminal hold actions — require `reason` + RHC |

@@ -31,7 +31,7 @@ Workspace and settled submit responses include **`interactionDirective`** — a 
 3. **`RequiresHumanConfirmation`** — Authoritative stop. Present options (`humanConfirmationActions` / `availableActions`), wait for explicit engineer intent. Do **not** submit. Honor `stopReason` internally (do not dump the field name/value unless it helps the engineer decide).
 4. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation`, `AwaitingPlatform`, or terminal `None`. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
 5. **Execute intent exception** — One explicit engineer intent such as **"Execute this plan"** may drive **two sequential durable actions** when both are valid: `ApprovePlan` → settle → `ApproveExecution` → settle → Execution. Do **not** merge backend semantics. Fail closed if either action is invalid or settlement fails. Never infer the second authorization from an unrelated earlier utterance.
-6. **Gate B** — After successful implementation/validation, when `ApproveImplementation` is in `autonomousActions` (RHC=false), Cursor may autonomously submit it (durable freeze checkpoint), then commit/push, then `CompleteExecution`. Stop on failed validation, material plan deviation, destructive/unexpected repo ops, or other safety conditions — never silently cross the boundary.
+6. **Gate B** — After successful local implementation/validation, **stop**. Present the diff and ask the engineer to review. Submit `ApproveImplementation` only after **explicit chat confirmation** (it is RHC=true / in `humanConfirmationActions`). Then commit/push, then `CompleteExecution`. Cursor tool **Run / Always Run is not implementation review** — do not call the MCP or `git push` until the engineer confirms in chat. Stop without asking only on failed validation, material plan deviation, or safety conditions.
 7. **Loop wins over Harness** — Loop authorization always overrides Harness `approvalMode` / autopilot. Do not let harness autopilot bypass Loop gates.
 8. **PendingSettlement** — Observational only via `get_transition_status`. Never re-signal; never invent a refresh loop. After **AcceptAssignment**, settlement stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation so investigation continues without another human action.
 9. **`AwaitingPlatform`** — Platform work is still progressing (empty Cursor actions). Do **not** invent actions; do **not** ask the engineer to refresh or type "continue". Observe via PendingSettlement / `get_transition_status` when applicable.
@@ -80,7 +80,7 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 7. If the stage is `Recommendation`, formulate an evidence-backed disposition recommendation. Submit **CompleteRecommendation** when autonomous; never auto-select a human disposition.
 8. If the stage is `AwaitingHumanDecision` / RA `HumanDecision`, present dispositions — never auto-select even when confidence is high.
 8b. If RA `ReleaseReview` and `continuation` is Autonomous: produce the review and submit `CompleteReleaseReview` without asking the engineer to authorize the submit; then stop at HumanDecision.
-9. If `requiresHarness` is true (Planning/Execution): resolve target repo; resume existing Engineering Harness or invoke `hbtl-harness-creator` / create-harness once; never invoke the legacy Worker coding harness; reuse the same harness for Planning and Execution unless evidence requires otherwise.
+9. If `requiresHarness` is true (**Planning or Execution on any code-change capability** — Production Investigation and Pipeline Remediation): resolve the target repo; resume the Engineering Harness or invoke `hbtl-harness-creator` (skill command **scaffold** if missing). **Planning:** follow that skill (overall plan, breakdown, **engineer approval of the breakdown**, Azure/task rows) then submit Loop `CompletePlanning` / `CompleteRemediationPlan`. **Execution:** implement through the same harness, stop for chat review, then Gate B / push. Never use the legacy Worker coding harness. Reuse one harness for Planning and Execution unless evidence requires otherwise. Release Assurance has no code Planning/Execution and does not set `requiresHarness`.
 10. Treat Loop evidence as production facts, not automatically as conclusions.
 11. Use repository/internal tooling to satisfy the current stage objective.
 12. Do not transition merely because work was attempted or a draft exists in chat.
@@ -93,7 +93,7 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 19. Never perform destructive actions outside governed Loop actions.
 20. After settled success, continue from settled context — observational `get_transition_status` only for `PendingSettlement`.
 21. For execution stages, read `executionContext` — never reconstruct execution state from chat history.
-22. Git commit/push is Cursor agent work — never invoke Loop MCP for Git operations. Commit/push only after execution authorization and required validation (and Gate B freeze when required).
+22. Git commit/push is Cursor agent work — never invoke Loop MCP for Git operations. **Do not push until Gate B (`ApproveImplementation`) is recorded after explicit engineer review of the implementation.** Cursor Always Run is not that review. After authorization + Gate B, validate then push, then `CompleteExecution`.
 
 ## Human confirmation
 
@@ -170,7 +170,7 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 | After rejection or stage mismatch | Refresh + retry / different action from settled contract / Other |
 | Stage-retry park (transient failure, post-delivery hold) | Retry / Replan via `submit_stage_retry` + Other — requires explicit confirmation; not a capability action |
 
-Do **not** AskQuestion for normal Autonomous progress (investigation completion, planning completion, Gate B after successful validation, CompleteExecution after push) when those actions are in `autonomousActions`.
+Do **not** AskQuestion for normal Autonomous progress (investigation completion, planning completion after harness breakdown approval, CompleteExecution after a successful push and Gate B) when those actions are in `autonomousActions`. **Do** stop after local implementation for Gate B (`ApproveImplementation`) even when Execution continuation is Autonomous — that action is RHC.
 
 ### Stage retry (recovery, not capability actions)
 
@@ -193,9 +193,9 @@ When proposing **ApprovePlanning** (planning authorization):
 
 > Investigation is complete. Planning has **not** been authorized yet. Approving planning authorizes Harness ensure/scaffold and remediation planning.
 
-When **ApproveImplementation** (Gate B) is autonomous after successful validation:
+When **ApproveImplementation** (Gate B) is in `humanConfirmationActions` after local implementation:
 
-> Durable freeze checkpoint — no second human approval on the happy path. Stop instead if validation failed or the change materially diverges from the approved plan.
+> Implementation is done locally. Review the diff before freeze and push. Cursor **Run / Always Run** is not that review. Approving submits **ApproveImplementation**, then the agent may commit/push and **CompleteExecution**.
 
 When proposing **CompleteExecution** after successful push and Gate B freeze, submit when it is in `autonomousActions` — do not ask for a redundant confirmation on the happy path.
 
@@ -266,7 +266,7 @@ Prefer `submit_stage_output`. The MCP resolves `expectedStage` from `capability.
   "caseId": "CASE-3FA85F64",
   "action": "CompleteInvestigation",
   "output": {
-    "investigationSummary": "Concise narrative: facts, systems involved, hypotheses with confidence.",
+    "investigationSummary": "Detailed narrative: symptom/timeline, exception verbatim, systems, code paths inspected, facts vs ranked hypotheses with confidence, what was ruled out.",
     "evidenceReferences": ["src/...", "trace:abc123", "commit:deadbeef"]
   }
 }
@@ -279,7 +279,7 @@ Prefer `submit_stage_output`. The MCP resolves `expectedStage` from `capability.
   "caseId": "CASE-3FA85F64",
   "action": "CompleteDiagnosis",
   "output": {
-    "diagnosis": "Most likely root cause grounded in investigation facts.",
+    "diagnosis": "Most likely root cause grounded in investigation facts: owning type/method, flags/environment, why this is or is not a product defect.",
     "candidateRemediation": "Proposed fix or mitigation path."
   }
 }
@@ -428,13 +428,13 @@ When `capability.currentStage = RemediationPlanning`:
 1. Inspect `previousStageOutputs.latestDiagnosis` and production evidence.
 2. Inspect relevant repository code.
 3. Read `remediationPlanning.priorPlans` and `remediationPlanning.latestPlan` if present.
-4. If `remediationPlanning.revisionContext.isRevision` is true, **explicitly address** `revisionContext.requestedReason` — this is a revision cycle, not fresh planning.
-5. Discuss and refine the plan with the engineer in Cursor conversation.
-6. **Remain in RemediationPlanning** while the plan is still being drafted — chat output alone does not transition the Case.
-7. Submit **CompleteRemediationPlan** only when a reviewable plan exists and all required outputs are present.
-8. Summarize the proposed durable plan and ask for explicit confirmation before submitting.
+4. If `remediationPlanning.revisionContext.isRevision` is true, **explicitly address** `revisionContext.requestedReason`.
+5. When `requiresHarness` is true: invoke **`hbtl-harness-creator`** (`scaffold` if the target repo has no harness). Produce the overall plan and feature breakdown through that skill. **Stop for engineer approval of the breakdown** — do not create Azure tasks or submit `CompleteRemediationPlan` until that approval.
+6. After breakdown approval, finish harness triage rows, then submit **CompleteRemediationPlan** with all required outputs.
+7. **Remain in RemediationPlanning** while the plan is still being drafted — chat output alone does not transition the Case.
+8. Summarize the durable plan at PlanReview; Loop workflow then proceeds Execute → ApproveExecution → local implementation.
 
-Use durable history from `priorPlans` / `latestPlan` — do not reconstruct revision history from Cursor chat. A new chat must resume solely from `get_case_workspace`.
+Cursor **Always Run** is not harness breakdown approval.
 
 ### Plan revision cycles
 
@@ -505,14 +505,15 @@ When `capability.currentStage = Execution` and `executionContext.implementationA
 2. Implement **`executionContext.approvedPlan`** / frozen EngineeringBrief — not the latest plan from chat history.
 3. Inspect repository; verify Git base/branch against `attempt.baseCommitSha` / approval constraints.
 4. Run build/tests; inspect diff; compare against approved plan.
-5. On **successful validation with no material deviation**: when `ApproveImplementation` is in `interactionDirective.autonomousActions`, submit Gate B autonomously, then commit/push, then CompleteExecution.
-6. On **failed validation, material deviation, destructive/unexpected repo ops, or safety conditions**: **stop** — present the issue and `humanConfirmationActions`; do **not** silently cross Gate B.
+5. On **successful local validation with no material deviation**: **stop**. Present the implementation (files, tests, residual risk). Do **not** `git push` and do **not** submit `ApproveImplementation` until the engineer confirms in **chat**. Cursor **Run / Always Run** is not that review.
+6. After explicit confirmation: submit **ApproveImplementation**, then commit/push, then **CompleteExecution**.
+7. On **failed validation, material deviation, destructive/unexpected repo ops, or safety conditions**: **stop** — present the issue and `humanConfirmationActions`; do **not** silently cross Gate B.
 
 **Do not invoke Loop transitions for:** file edits, test failures, debugging, engineer questions, minor corrections, diff review.
 
 ### Gate B — ApproveImplementation (same stage)
 
-Happy path after successful implementation/validation (no second human approval):
+After local implementation/validation, **wait for chat confirmation**, then:
 
 ```json
 {
@@ -521,7 +522,7 @@ Happy path after successful implementation/validation (no second human approval)
 }
 ```
 
-Then continue from the **settled** response (same stage expected).
+Then continue from the **settled** response (same stage expected): commit/push, then CompleteExecution.
 
 Expected durable state (stage unchanged):
 
@@ -531,7 +532,7 @@ implementationApproved = true
 phase = ImplementationApproved
 ```
 
-Do **not** interpret unchanged `currentStage` as failure — verify `implementationApproved`, `phase`, and `implementationReview` from settled/workspace context. Gate B remains a **durable** freeze checkpoint even when submitted autonomously.
+Do **not** interpret unchanged `currentStage` as failure — verify `implementationApproved`, `phase`, and `implementationReview` from settled/workspace context. Do **not** submit Gate B because a Cursor MCP dialog offered Run/Always Run.
 
 ### Execution — post Gate B (`implementationApproved = true`)
 
@@ -634,11 +635,13 @@ Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **no
 | Assignment offer (Case `AwaitingAcceptance`, CE still `EvidenceCollection`) | `AcceptAssignment` / `RejectAssignment` | none (`RejectAssignment` requires reason) |
 | `EvidenceCollection` (after accept; automatic) | none | platform evidence |
 | `InvestigationPlanning` | `CompleteInvestigationPlanning` | EngineeringBrief fields (`IssueSummary`, `RootCauseHypothesis`, `RecommendedChanges`, `SuspectedAffectedFiles`, `RecommendedValidationCommands`, `ShouldProceedToExecution`) |
+| `AwaitingPlanningAuthorization` | `ApprovePlanning`, `MarkNoRemediation` | none |
+| `Planning` | `CompletePlanning`, `MarkNoRemediation` | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
 | `PlanReview` | `ApprovePlan`, `RequestPlanRevision`, `RejectPlan`, `MarkNoRemediation` | none (revision/reject/no-remediation require reason) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `CancelRemediation` | none (`CancelRemediation` requires reason) |
 | `Execution` | `ApproveImplementation`, `CompleteExecution`, `CancelRemediation` | `CompleteExecution` requires push-success delivery evidence |
 
-After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Happy-path chain after Execute intent: implement → validate → autonomous Gate B → commit/push → CompleteExecution. Stop on exceptions. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
+After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Happy-path after Execute intent: harness-backed implement → validate locally → **stop for chat review** → `ApproveImplementation` (RHC Gate B) → commit/push → CompleteExecution. Cursor Always Run is not Gate B. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
 
 Execution approval and delivery use `pipelineRemediation` (+ workspace stage contract) — do not bypass with invented actions.
 

@@ -7,7 +7,7 @@ Pipeline Remediation remediates Azure Pipeline / CI failures on an existing PR s
 ```text
 Temporal / Loop = durable Case / CapabilityExecution / decisions
 Cursor Agent   = investigation, EngineeringBrief, implementation, commit/push
-Engineer       = confirms consequential gates (Accept, ApprovePlanning, Execute this plan)
+Engineer       = confirms Accept, ApprovePlanning, harness breakdown, Execute this plan, and Gate B (ApproveImplementation)
 Engineer Worker = orchestration / assignment endpoint — not the coding harness on Cursor-native Cases
 Harness        = AGENTS.md / feature_list / create-harness scaffold in the target repo
 ```
@@ -39,8 +39,8 @@ AUTONOMOUS INVESTIGATION
 Cursor presents Investigation Result
 → Human: Proceed with planning (ApprovePlanning)
 
-HARNESS ENSURED/SCAFFOLDED (mandatory)
-AUTONOMOUS PLANNING
+HARNESS SCAFFOLD / RESUME via hbtl-harness-creator (mandatory)
+HARNESS BREAKDOWN → engineer approval (Always Run is not approval)
 → CompletePlanning → PlanReview
 
 Cursor presents Plan
@@ -48,14 +48,15 @@ Cursor presents Plan
 
 ApprovePlan → ApproveExecution (separate durable records)
 → HARNESS-BACKED EXECUTION (same repo harness)
-→ implementation → validation
-→ autonomous durable Gate B (ApproveImplementation)
+→ implement locally → validate
+→ stop for chat review (Always Run is not review)
+→ human Gate B (ApproveImplementation)
 → commit/push → CompleteExecution
 
 Cursor presents Execution Result
 ```
 
-No normal additional human confirmations on the happy path. Stop on exceptional conditions (validation failure, material deviation, destructive ops).
+Stop for harness-breakdown approval, Execute intent, and Gate B. Also stop on validation failure, material deviation, or destructive ops.
 
 ## Engineering Harness (mandatory for Planning and Execution)
 
@@ -77,7 +78,7 @@ When `interactionDirective.requiresHarness` is true (Planning / Execution after 
 | Cursor | Coordinates both |
 | Temporal | Durable capability state machine |
 
-**Loop authorization always overrides Harness `approvalMode` / autopilot.** Never let harness autopilot bypass ApprovePlanning, ApprovePlan, ApproveExecution, or safety stops.
+**Loop authorization always overrides Harness `approvalMode` / autopilot.** Never let harness autopilot bypass ApprovePlanning, breakdown approval, ApprovePlan, ApproveExecution, ApproveImplementation, or safety stops. Cursor Always Run is not any of those gates.
 
 ### Machine stages to hide from chat
 
@@ -88,7 +89,7 @@ When `interactionDirective.requiresHarness` is true (Planning / Execution after 
 
 **ApprovePlan ≠ ApproveExecution.** One Execute intent may submit both sequentially; they remain separate durable records.
 
-**Gate B** remains a durable freeze checkpoint; on the happy path after successful validation it does **not** require a second human response.
+**Gate B** (`ApproveImplementation`) is a durable freeze checkpoint **and** requires explicit engineer confirmation in chat after local implementation — before `git push`. Cursor Always Run is not that confirmation.
 
 ## Full machine lifecycle (reference)
 
@@ -98,12 +99,12 @@ EvidenceCollection [automatic on Control Plane — before worker offers]
 → InvestigationPlanning [Cursor autonomous — uses persisted evidence + local PR branch]
 → CompleteInvestigationPlanning
 → AwaitingPlanningAuthorization [human — ApprovePlanning]
-→ Planning [Harness ensure + Cursor autonomous]
+→ Planning [hbtl-harness-creator + breakdown approval, then CompletePlanning]
 → CompletePlanning
 → PlanReview [human — Execute this plan → ApprovePlan then ApproveExecution]
 → AwaitingExecutionApproval
-→ Execution [Harness-backed; autonomous Gate B after validation]
-→ ApproveImplementation [durable freeze; autonomous on happy path]
+→ Execution [Harness-backed; local implement → chat review → human Gate B → push]
+→ ApproveImplementation [durable freeze; RHC — not Always Run]
 → commit/push in Cursor
 → CompleteExecution
 → Complete [RemediationDelivered]
@@ -123,10 +124,10 @@ Teams (`Work on Loop CASE-XXXX`) is discovery only. Evidence is gathered **befor
 | EvidenceCollection | Automatic (Control Plane) | **Before** worker offers — hide from chat |
 | InvestigationPlanning | Cursor autonomous | Uses persisted evidence + local repo on PR branch |
 | AwaitingPlanningAuthorization | Human via Cursor | ApprovePlanning before Harness-backed planning |
-| Planning | Cursor + Harness | Ensure/resume harness (`AGENTS.md` / create-harness); CompletePlanning |
+| Planning | Cursor + Harness | `hbtl-harness-creator` scaffold/resume + breakdown approval; then CompletePlanning |
 | PlanReview | Human via Cursor | Execute intent → ApprovePlan (+ ApproveExecution) |
 | AwaitingExecutionApproval | Human / chained | Gate A — authorize work on approved snapshot |
-| Execution | Cursor + Harness | Implement, autonomous Gate B after validation, push, CompleteExecution |
+| Execution | Cursor + Harness | Implement locally, human Gate B, push, CompleteExecution |
 | Complete | Terminal | Delivery or truthful non-delivery |
 
 ## Workspace — read `pipelineRemediation`
@@ -165,7 +166,7 @@ Lands on **AwaitingPlanningAuthorization**. Not a ProductionInvestigation remedi
 
 ## AwaitingPlanningAuthorization — ApprovePlanning
 
-Human gate. After ApprovePlanning settles → **Planning** (Harness ensure mandatory before autonomous planning).
+Human gate. After ApprovePlanning settles → **Planning** (`hbtl-harness-creator` scaffold/resume + breakdown approval before CompletePlanning).
 
 ## Planning — CompletePlanning
 
@@ -190,9 +191,10 @@ One intent **"Execute this plan"** may submit `ApprovePlan` then `ApproveExecuti
 
 ## Execution + Gate B — ApproveImplementation
 
-- Remain in Execution while editing/validating under the **same Engineering Harness**.
+- Remain in Execution while editing/validating under the **same Engineering Harness** (`hbtl-harness-creator` / `AGENTS.md`).
 - Work on the **existing PR source branch**.
-- After successful validation with no material deviation: submit `ApproveImplementation` autonomously (durable freeze), then commit/push, then `CompleteExecution`.
+- Implement and validate locally. Stop for engineer review in chat. Cursor Always Run is not review.
+- After explicit confirmation: submit `ApproveImplementation` (RHC durable freeze), then commit/push, then `CompleteExecution`.
 - Stop on validation failure, material deviation, or unexpected destructive repo ops.
 
 ## CompleteExecution
