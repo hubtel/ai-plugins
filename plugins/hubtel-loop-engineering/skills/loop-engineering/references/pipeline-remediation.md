@@ -174,12 +174,13 @@ Same EngineeringBrief output shape as investigation completion. Lands on **PlanR
 
 ## PlanReview
 
-| Action | Effect |
-|--------|--------|
-| `ApprovePlan` | Freeze approved snapshot → AwaitingExecutionApproval |
-| `RequestPlanRevision` | Return to **Planning** (reason required) |
-| `RejectPlan` | Terminal no-delivery disposition |
-| `MarkNoRemediation` | Terminal; reason category required |
+| Action | Label (approx.) | Effect |
+|--------|-----------------|--------|
+| `ApprovePlan` | Approve plan | Freeze approved snapshot → AwaitingExecutionApproval |
+| `RequestPlanRevision` | Change plan | Return to **Planning** (reason required) |
+| `MarkNoRemediation` | No fix needed | Terminal; reason category required |
+
+`RejectPlan` is **not offered** — use MarkNoRemediation / CancelRemediation instead.
 
 One intent **"Execute this plan"** may submit `ApprovePlan` then `ApproveExecution` when both are valid (fail closed).
 
@@ -223,6 +224,5 @@ If `assignment.assignmentStatus` is `AwaitingAcceptance`, present Accept/Reject 
 |--------|------|
 | `MarkNoRemediation` | InvestigationPlanning / AwaitingPlanningAuthorization / Planning / PlanReview |
 | `CancelRemediation` | AwaitingExecutionApproval or Execution |
-| `RejectPlan` | PlanReview reject |
 
 Known reason categories include `UnsupportedNonPrFailure`, `InfrastructureIssue`, `NoCodeChangeRequired`, `Superseded`, `Other`.

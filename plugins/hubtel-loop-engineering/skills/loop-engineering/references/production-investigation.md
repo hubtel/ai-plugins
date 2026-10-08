@@ -215,12 +215,13 @@ Submit via `submit_stage_output` with the disposition as `action` (not the legac
 
 **Available actions:**
 
-| Action | Target / outcome | Notes |
-| ------ | ---------------- | ----- |
-| `ApprovePlan` | `AwaitingExecutionApproval` | Does not execute remediation |
-| `RequestRevision` | `RemediationPlanning` | Requires `reason`; populates `revisionContext` |
-| `RejectPlan` | Planning session rejected; Case stays open | Requires confirmation |
-| `CancelPlanning` | Planning cancelled; Case stays open | Requires `reason` |
+| Action | Label (approx.) | Target / outcome | Notes |
+| ------ | ---------------- | ---------------- | ----- |
+| `ApprovePlan` | Approve plan | `AwaitingExecutionApproval` | Does not execute remediation |
+| `RequestRevision` | Change plan | `RemediationPlanning` | Requires `reason`; populates `revisionContext` |
+| `CancelPlanning` | Cancel | Planning cancelled; Case stays open | Requires `reason` |
+
+`RejectPlan` is **not offered** — use CancelPlanning to stop without delivering.
 
 Submit with `expectedStage = PlanReview` (resolved automatically from workspace).
 

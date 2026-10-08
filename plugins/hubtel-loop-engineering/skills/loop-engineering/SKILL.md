@@ -153,8 +153,9 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 
 **Always include (picker or prose):**
 
-- One selectable option per **permitted** action from `currentStageContract.availableActions` (use the action `name` as the label; add a one-line consequence in the label when helpful)
-- **Other** — free-text so the engineer can describe a different intent (e.g. partial plan revision, pause for evidence, custom next step)
+- One selectable option per **primary** permitted action from `currentStageContract.availableActions` where `showInPrimaryOptions` is not `false` — use **`displayLabel`** as the AskQuestion / prose label (fall back to `actionName` only if `displayLabel` is missing). Keep `actionName` for submits.
+- Do **not** list actions with `showInPrimaryOptions: false` (e.g. `RequestMoreInvestigation`) as primary picks — mention that path under **Other** when relevant (e.g. “want to dig further”).
+- **Other** — free-text so the engineer can describe a different intent (e.g. dig further / re-investigate, partial plan revision, pause for evidence)
 
 **Use AskQuestion (or prose fallback) at these Loop gates (non-exhaustive):**
 
@@ -163,9 +164,9 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 | After first `get_case_workspace` when `continuation` is RHC | All `humanConfirmationActions` / `availableActions` + Other |
 | `AwaitingPlanningAuthorization` | ApprovePlanning / decline paths per contract + Other |
 | `AwaitingHumanDecision` | Disposition actions from contract + Other |
-| `PlanReview` (when not covered by Execute intent) | ApprovePlan / RequestRevision or RequestPlanRevision / RejectPlan / CancelPlanning or MarkNoRemediation (per contract) + Other |
-| Presenting completed plan for execution | **"Execute this plan"** (ApprovePlan→ApproveExecution) / revise / reject + Other |
-| `AwaitingExecutionApproval` alone | ApproveExecution / RequestRevision / Cancel (per contract) + Other |
+| `PlanReview` (when not covered by Execute intent) | Approve plan / Change plan / Cancel or No fix needed (per contract `displayLabel`s) + Other — **RejectPlan is not offered** |
+| Presenting completed plan for execution | **"Execute this plan"** (ApprovePlan→ApproveExecution) / Change plan / Cancel + Other |
+| `AwaitingExecutionApproval` alone | Start fix / Change plan / Cancel (per contract `displayLabel`s) + Other |
 | Exceptional Execution stops (validation fail, deviation) | Gate B / Cancel / revise paths per contract + Other |
 | After rejection or stage mismatch | Refresh + retry / different action from settled contract / Other |
 | Stage-retry park (transient failure, post-delivery hold) | Retry / Replan via `submit_stage_retry` + Other — requires explicit confirmation; not a capability action |
@@ -348,17 +349,7 @@ Confirm every field in `currentStageContract.requiredOutputArtifactTypes` is pop
 }
 ```
 
-**PlanReview** (`RejectPlan` — requires confirmation; explain outcome first):
-
-```json
-{
-  "caseId": "CASE-3FA85F64",
-  "action": "RejectPlan",
-  "reason": "Plan scope is too risky for current incident window."
-}
-```
-
-RejectPlan closes the planning session as **Rejected**. The Production Investigation Case **remains open** under current legacy-compatible behavior — it is not Case closure.
+**PlanReview** — `RejectPlan` is **not offered**. To stop without delivering, use **Cancel** (`CancelPlanning`) or **No fix needed** (`MarkNoRemediation`) per the Case type contract.
 
 **PlanReview** (`CancelPlanning` — requires `reason`):
 
@@ -451,7 +442,7 @@ When `capability.currentStage = PlanReview`:
 - Summarize `remediationPlanning.latestPlan` for the engineer.
 - Compare against diagnosis; highlight risks and validation strategy.
 - Point out prior revisions when `priorPlans` is non-empty.
-- Present actions from `currentStageContract.availableActions`: **ApprovePlan**, **RequestRevision**, **RejectPlan**, **CancelPlanning**.
+- Present **primary** actions via `displayLabel` (e.g. Approve plan, Change plan, Cancel). Do not offer RejectPlan.
 - **Do not choose** the disposition — wait for explicit engineer confirmation.
 - The agent must not infer this gate from raw workflow status; `PlanReview` in the workspace means human review is required.
 
@@ -614,9 +605,9 @@ Prototype external interaction is the **default** for new Production Investigati
 | `InvestigationBrief` | `CompleteInvestigation` | `InvestigationSummary`, `EvidenceReferences` |
 | `ProductionDiagnosis` | `CompleteDiagnosis` | `Diagnosis`, `CandidateRemediation` |
 | `Recommendation` | `CompleteRecommendation` | recommendation artifact set (disposition, summary, action, rationale, urgency, confidence, evidence, risks, verification) |
-| `AwaitingHumanDecision` | `RequestMoreInvestigation`, `AcceptNoAction`, `PlanCodeRemediation` | none (`RequestMoreInvestigation` requires `reason`) |
+| `AwaitingHumanDecision` | Primary: `AcceptNoAction` (No action), `PlanCodeRemediation` (Plan & fix). `RequestMoreInvestigation` via Other + reason | none (`RequestMoreInvestigation` requires `reason`) |
 | `RemediationPlanning` | `CompleteRemediationPlan` | full remediation plan artifact set (see contract) |
-| `PlanReview` | `ApprovePlan`, `RequestRevision`, `RejectPlan`, `CancelPlanning` | none (`RequestRevision`, `CancelPlanning`, `RejectPlan` benefit from `reason`) |
+| `PlanReview` | `ApprovePlan`, `RequestRevision`, `CancelPlanning` (`RejectPlan` not offered) | none (`RequestRevision`, `CancelPlanning` benefit from `reason`) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `RequestRevision`, `Cancel` | none (`RequestRevision`, `Cancel` require `reason`) |
 | `Execution` | `ApproveImplementation`, `CompleteExecution`, `RequestRevision`, `CancelRemediation` | `CompleteExecution` requires full execution artifact set |
 
@@ -637,7 +628,7 @@ Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **no
 | `InvestigationPlanning` | `CompleteInvestigationPlanning` | EngineeringBrief fields (`IssueSummary`, `RootCauseHypothesis`, `RecommendedChanges`, `SuspectedAffectedFiles`, `RecommendedValidationCommands`, `ShouldProceedToExecution`) |
 | `AwaitingPlanningAuthorization` | `ApprovePlanning`, `MarkNoRemediation` | none |
 | `Planning` | `CompletePlanning`, `MarkNoRemediation` | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
-| `PlanReview` | `ApprovePlan`, `RequestPlanRevision`, `RejectPlan`, `MarkNoRemediation` | none (revision/reject/no-remediation require reason) |
+| `PlanReview` | `ApprovePlan`, `RequestPlanRevision`, `MarkNoRemediation` (`RejectPlan` not offered) | none (revision/no-remediation require reason) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `CancelRemediation` | none (`CancelRemediation` requires reason) |
 | `Execution` | `ApproveImplementation`, `CompleteExecution`, `CancelRemediation` | `CompleteExecution` requires push-success delivery evidence |
 
