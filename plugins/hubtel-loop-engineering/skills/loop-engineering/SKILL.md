@@ -7,7 +7,7 @@ description: Operates Hubtel Loop Engineering Cases through governed capability 
 
 Loop owns Case state, stage contracts, and allowed transitions. The agent investigates and submits **semantic actions** — it never mutates workflow state directly.
 
-**Prerequisite:** `loop-engineering` MCP must be connected. Build and register per `docs/architecture/cursor-native-capability-prototype.md` §27 (`tools/loop-engineering-mcp`).
+**Prerequisite:** `loop-engineering` MCP must be connected. DeviceCredential-gated Case APIs go through the **Hubtel Loop Agent** desktop app, which publishes `~/.loop-engineering/loop-local-ops.sockpath`. MCP rediscovers that file on every tool call — engineers do **not** need the LoopEngineering or UI git workspaces. Start (or restart) the Agent if MCP returns 401. DeviceCredential never lives in MCP config.
 
 ## Interaction directive (authoritative continuation)
 
@@ -165,7 +165,7 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 | `AwaitingHumanDecision` | Disposition actions from contract + Other |
 | `PlanReview` (when not covered by Execute intent) | ApprovePlan / RequestRevision or RequestPlanRevision / RejectPlan / CancelPlanning or MarkNoRemediation (per contract) + Other |
 | Presenting completed plan for execution | **"Execute this plan"** (ApprovePlan→ApproveExecution) / revise / reject + Other |
-| `AwaitingExecutionApproval` alone | ApproveExecution / CancelRemediation or PI revision/reject/cancel/defer (per contract) + Other |
+| `AwaitingExecutionApproval` alone | ApproveExecution / RequestRevision / Cancel (per contract) + Other |
 | Exceptional Execution stops (validation fail, deviation) | Gate B / Cancel / revise paths per contract + Other |
 | After rejection or stage mismatch | Refresh + retry / different action from settled contract / Other |
 | Stage-retry park (transient failure, post-delivery hold) | Retry / Replan via `submit_stage_retry` + Other — requires explicit confirmation; not a capability action |
@@ -491,7 +491,7 @@ When `capability.currentStage = AwaitingExecutionApproval`:
 
 1. Read `executionContext.approval` and `executionContext.approvedPlan` (or pipeline approved EngineeringBrief).
 2. If the engineer just said **"Execute this plan"** and `ApprovePlan` already settled into this stage, submit **`ApproveExecution`** next in the same turn (fail closed if invalid).
-3. If arriving here without that Execute intent, summarize authorization scope and require explicit confirmation for ApproveExecution / CancelRemediation.
+3. If arriving here without that Execute intent, summarize authorization scope and require explicit confirmation for ApproveExecution / RequestRevision / Cancel.
 4. For **ApproveExecution**, remember: *This authorizes implementation of the approved remediation plan. It does not approve the resulting code.*
 5. After accepted Gate A action → continue from **settled** response immediately into harness-backed Execution when Autonomous.
 
@@ -587,12 +587,12 @@ On the happy path, when `CompleteExecution` is in `interactionDirective.autonomo
 
 After accepted **CompleteExecution** → continue from settled context. Expect **`RemediationDelivered`** / Case **Closed** (close-at-push). Do **not** expect `link-pull-request`, `PartiallyDelivered` → PR linkage, `AwaitingPullRequestOutcome`, `AwaitingDeploymentConfirmation`, or `AwaitingProductionVerification` for new Cursor-native PI. Those specialty gates are **legacy drain only** for in-flight parks; recover incomplete delivery with **stage-retry**, not link-PR or specialty delivery-retry.
 
-### RequestRevision / RejectImplementation / CancelRemediation from Execution
+### RequestRevision / CancelRemediation from Execution
 
 When available in `currentStageContract.availableActions`:
 
 - **RequestRevision** — plan materially wrong; requires `reason` and explicit confirmation; after accept settles → expect `RemediationPlanning`; stop execution work.
-- **RejectImplementation** / **CancelRemediation** — consequential; require reason + confirmation; do not continue delivery after Case leaves Execution.
+- **CancelRemediation** — consequential; require reason + confirmation; do not continue delivery after Case leaves Execution.
 
 ## No Human Guidance fallback
 
@@ -614,11 +614,11 @@ Prototype external interaction is the **default** for new Production Investigati
 | `InvestigationBrief` | `CompleteInvestigation` | `InvestigationSummary`, `EvidenceReferences` |
 | `ProductionDiagnosis` | `CompleteDiagnosis` | `Diagnosis`, `CandidateRemediation` |
 | `Recommendation` | `CompleteRecommendation` | recommendation artifact set (disposition, summary, action, rationale, urgency, confidence, evidence, risks, verification) |
-| `AwaitingHumanDecision` | disposition actions | none (`Escalate` requires `output.confirmExternalHandoff`) |
+| `AwaitingHumanDecision` | `RequestMoreInvestigation`, `AcceptNoAction`, `PlanCodeRemediation` | none (`RequestMoreInvestigation` requires `reason`) |
 | `RemediationPlanning` | `CompleteRemediationPlan` | full remediation plan artifact set (see contract) |
 | `PlanReview` | `ApprovePlan`, `RequestRevision`, `RejectPlan`, `CancelPlanning` | none (`RequestRevision`, `CancelPlanning`, `RejectPlan` benefit from `reason`) |
-| `AwaitingExecutionApproval` | `ApproveExecution`, `RequestRevision`, `Reject`, `Cancel`, `Defer` | none (`RequestRevision`, `Reject`, `Cancel`, `Defer` require `reason`) |
-| `Execution` | `ApproveImplementation`, `CompleteExecution`, `RequestRevision`, `RejectImplementation`, `CancelRemediation` | `CompleteExecution` requires full execution artifact set |
+| `AwaitingExecutionApproval` | `ApproveExecution`, `RequestRevision`, `Cancel` | none (`RequestRevision`, `Cancel` require `reason`) |
+| `Execution` | `ApproveImplementation`, `CompleteExecution`, `RequestRevision`, `CancelRemediation` | `CompleteExecution` requires full execution artifact set |
 
 Full PI stage reference: [references/production-investigation.md](references/production-investigation.md)
 

@@ -12,7 +12,7 @@ Durable stage names (from Loop/Temporal) differ from agent-friendly objectives i
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
 | `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
 
-Preserve disposition (`AwaitingHumanDecision`) — all Plan* / AcceptNoAction / Escalate / Defer / Cancel options remain intact. **Plan* dispositions authorize Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B (`ApproveImplementation`) is durable and **requires human confirmation of the implementation before push** (RHC=true). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`. Cursor tool Run/Always Run is not Gate B.
+Preserve disposition (`AwaitingHumanDecision`) — offered set is `RequestMoreInvestigation` / `AcceptNoAction` / `PlanCodeRemediation` only. **PlanCodeRemediation authorizes Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B (`ApproveImplementation`) is durable and **requires human confirmation of the implementation before push** (RHC=true). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`. Cursor tool Run/Always Run is not Gate B.
 
 ### Hide incidental machine stages from chat
 
@@ -146,15 +146,15 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 
 **Workspace fields:** read `humanDecision.activeRecommendation` (summary, recommended disposition, confidence) and confirm `humanDecision.awaitingDecision` is true before submitting.
 
-**Available actions:** all fixed human dispositions — action names match enum values exactly:
+**Available actions:** offered human dispositions only — action names match enum values exactly:
 
 | Action | Notes |
 | ------ | ----- |
-| `AcceptNoAction` | Close without remediation planning |
-| `PlanCodeRemediation` | Authorize planning only (does not execute). Ops/config/data plan dispositions are no longer offered at the Human Decision Gate. |
+| `AcceptNoAction` | Closes the Case as NoActionRequired (no remediation planning) |
+| `PlanCodeRemediation` | Authorize planning only (does not execute). Ops/config/data plan dispositions are no longer offered. |
 | `RequestMoreInvestigation` | Requires `reason` |
-| `Escalate` | Requires `output.confirmExternalHandoff: true` when handed off outside Loop |
-| `Defer` / `Cancel` | Requires `reason` |
+
+Escalate / Defer / Cancel are **not** offered on new decisions (legacy enum values may still appear on recorded history).
 
 Submit via `submit_stage_output` with the disposition as `action` (not the legacy `/production-investigation/decision` API from Cursor).
 
@@ -241,7 +241,7 @@ Submit with `expectedStage = PlanReview` (resolved automatically from workspace)
 | ------ | ------ | ----- |
 | `ApproveExecution` | `Execution` | Authorizes implementation — **does not approve code**; `requiresHumanConfirmation` |
 | `RequestRevision` | `RemediationPlanning` | Requires `reason` |
-| `Reject` / `Cancel` / `Defer` | — | Requires `reason` |
+| `Cancel` | — | Requires `reason`; Case stays open without authorizing execution |
 
 After **ApproveExecution** settles → expect `currentStage` at or past Execution (may briefly show `ReadyForExecution` — collapse candidate; do not invent a separate gate). `executionApproved = true`, `phase = Implementation` when those fields are present on settled/workspace context.
 
@@ -291,7 +291,7 @@ Do **not** submit **CompleteExecution** until push has succeeded. Loop rejects `
 | `ApproveImplementation` | Gate B — durable freeze; **RHC**; required before push |
 | `CompleteExecution` | Requires full outputs + successful push (`pushed: true`); autonomous on happy path |
 | `RequestRevision` | Returns to planning — requires `reason` + RHC |
-| `RejectImplementation` / `CancelRemediation` | Terminal hold actions — require `reason` + RHC |
+| `CancelRemediation` | Terminal hold — requires `reason` + RHC |
 
 ## ImplementationApproved
 
