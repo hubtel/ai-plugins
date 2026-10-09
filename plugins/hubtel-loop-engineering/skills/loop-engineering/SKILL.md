@@ -27,7 +27,7 @@ Workspace and settled submit responses include **`interactionDirective`** — a 
 **Rules:**
 
 1. **First-touch** — When the engineer pastes a Case ID / "Work on Loop CASE-…": call **`get_case_workspace` first**, then **trust `interactionDirective`** (see **First-touch continuation** below). Pasting a Case ID is not consent to cross `RequiresHumanConfirmation` / RHC=true actions.
-2. **Engineer-facing replies** — Consume `interactionDirective` for continuation control only. **Do not echo** Directive / phase / continuation / requiresHarness / stopReason / permittedActions machinery into chat. Speak in plain Case/stage/options language.
+2. **Engineer-facing replies** — Consume `interactionDirective` for continuation control only. **Do not echo** Directive / phase / continuation / requiresHarness / stopReason / permittedActions machinery into chat. Speak in plain English about the Case, what was found, and the choices — see **Plain-English replies** below.
 3. **`RequiresHumanConfirmation`** — Authoritative stop. Present options (`humanConfirmationActions` / `availableActions`), wait for explicit engineer intent. Do **not** submit. Honor `stopReason` internally (do not dump the field name/value unless it helps the engineer decide).
 4. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation`, `AwaitingPlatform`, or terminal `None`. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
 5. **Execute intent exception** — One explicit engineer intent such as **"Execute this plan"** may drive **two sequential durable actions** when both are valid: `ApprovePlan` → settle → `ApproveExecution` → settle → Execution. Do **not** merge backend semantics. Fail closed if either action is invalid or settlement fails. Never infer the second authorization from an unrelated earlier utterance.
@@ -36,6 +36,15 @@ Workspace and settled submit responses include **`interactionDirective`** — a 
 8. **PendingSettlement** — Observational only via `get_transition_status`. Never re-signal; never invent a refresh loop. After **AcceptAssignment**, settlement stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation so investigation continues without another human action.
 9. **`AwaitingPlatform`** — Platform work is still progressing (empty Cursor actions). Do **not** invent actions; do **not** ask the engineer to refresh or type "continue". Observe via PendingSettlement / `get_transition_status` when applicable.
 10. **`None`** — Terminal / no further progression expected. Present status; do not invent actions.
+
+### Plain-English replies
+
+The engineer reading the chat cares about the Case — what went wrong, what you found, and what they can decide. Write for them, not for the platform.
+
+- **Say what it means, not how it works.** "I couldn't send your decision to Loop" — not "POST `/capabilities/{id}/actions` returned HTTP 401". "The Loop Agent isn't reachable" — not socket paths, sockpath files, or process lists.
+- **Never surface internals:** HTTP status codes, API routes, DeviceCredential / tokens / auth headers, socket or file paths, environment variables, process IDs, MCP tool names, raw JSON, stack traces, or shell/tool output. Use stage objectives and action `displayLabel`s, not durable stage enums or `actionName`s.
+- **Failures follow the same rule.** Investigate quietly; then report in one or two sentences: what is blocked, whether the engineer's work is safe, and the one thing they can do (e.g. "Open the Hubtel Loop Agent app, then say continue"). Do not narrate the diagnosis step by step or paste what you ran.
+- Keep updates short. Technical detail belongs to the Case content itself (root cause, affected files, proposed changes), where the engineer needs it to decide.
 
 ### First-touch continuation (authoritative)
 
@@ -153,9 +162,10 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 
 **Always include (picker or prose):**
 
-- One selectable option per **primary** permitted action from `currentStageContract.availableActions` where `showInPrimaryOptions` is not `false` — use **`displayLabel`** as the AskQuestion / prose label (fall back to `actionName` only if `displayLabel` is missing). Keep `actionName` for submits.
-- Do **not** list actions with `showInPrimaryOptions: false` (e.g. `RequestMoreInvestigation`) as primary picks — mention that path under **Other** when relevant (e.g. “want to dig further”).
-- **Other** — free-text so the engineer can describe a different intent (e.g. dig further / re-investigate, partial plan revision, pause for evidence)
+- **Every** permitted human action from `currentStageContract.availableActions` (and `humanConfirmationActions`) as its own selectable option — including actions with `showInPrimaryOptions: false` (e.g. `RequestMoreInvestigation`) and options Loop or you do not recommend. Never hide a valid choice behind **Other** or drop it because it is not the recommendation. Use **`displayLabel`** as the label (fall back to `actionName` only if `displayLabel` is missing). Keep `actionName` for submits.
+- **Mark the recommendation, don't filter by it.** When Loop (e.g. `humanDecision.activeRecommendation`) or your own analysis favours one option, list it first with **(Recommended)** and a one-line reason; list the rest after it with a short plain-English note on what each does. `showInPrimaryOptions: false` actions go last.
+- An option that needs extra input (e.g. a reason) is still listed — ask for the input after the engineer picks it.
+- **Other** — free-text so the engineer can describe a different intent (e.g. partial plan revision, pause for evidence)
 
 **Use AskQuestion (or prose fallback) at these Loop gates (non-exhaustive):**
 
@@ -614,7 +624,7 @@ Prototype external interaction is the **default** for new Production Investigati
 | `InvestigationBrief` | `CompleteInvestigation` | `InvestigationSummary`, `EvidenceReferences` |
 | `ProductionDiagnosis` | `CompleteDiagnosis` | `Diagnosis`, `CandidateRemediation` |
 | `Recommendation` | `CompleteRecommendation` | recommendation artifact set (disposition, summary, action, rationale, urgency, confidence, evidence, risks, verification) |
-| `AwaitingHumanDecision` | Primary: `ApproveFix` (Fix it — only with a complete proposed fix plan; → Execution, no Harness), `PlanCodeRemediation` (Plan in detail), `AcceptNoAction` (No action). `RequestMoreInvestigation` via Other + reason | none (`RequestMoreInvestigation` requires `reason`) |
+| `AwaitingHumanDecision` | Primary: `ApproveFix` (Fix it — only with a complete proposed fix plan; → Execution, no Harness), `PlanCodeRemediation` (Plan in detail), `AcceptNoAction` (No action), `RequestMoreInvestigation` (Investigate further — ask for the reason after it is picked). List all four; mark the recommended one | none (`RequestMoreInvestigation` requires `reason`) |
 | `RemediationPlanning` | `CompleteRemediationPlan` | full remediation plan artifact set (see contract) |
 | `PlanReview` | `ApprovePlan`, `RequestRevision`, `CancelPlanning` (`RejectPlan` not offered) | none (`RequestRevision`, `CancelPlanning` benefit from `reason`) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `RequestRevision`, `Cancel` | none (`RequestRevision`, `Cancel` require `reason`) |
@@ -664,20 +674,24 @@ After the initial `get_case_workspace`, follow **First-touch continuation**:
 Respond with this template (plus capability-specific evidence blocks below), present options, and **STOP** — no submit until explicit engineer intent:
 
 ```markdown
-**Case:** CASE-XXXXXXXX — {title}
-**Stage:** {capability.currentStage} (expected: {capability.expectedStage}, {capability.status})
-**Objective:** {currentStageContract.objective}
-**Available actions:** {comma-separated action names from currentStageContract}
-**Assignment:** {assignment.engineerEmail} — {assignment.assignmentStatus}
-**Recommendation / decision:** {humanDecision.activeRecommendation.summary or humanDecision.recordedDisposition when present, else "n/a"}
-**Planning:** {remediationPlanning.session.status + latestPlan.revision when remediationPlanning present, else "n/a"}
-**Execution:** {executionContext.phase + approved plan rev when executionContext present, else "n/a"}
-**Pipeline:** {pipelineRemediation.pipelineFailureStatus + approved brief version + freeze/delivery flags when pipelineRemediation present, else "n/a"}
+**CASE-XXXXXXXX — {title}**
+**Where it is:** {currentStageContract.objective, in plain words}
+**Assigned to:** {assignment.engineerName or engineerEmail}
+**Loop's recommendation:** {humanDecision.activeRecommendation.summary — omit the line when there is none}
 
-I have not submitted any Loop actions yet.
+{One or two sentences on what has been found so far or what this step needs from the engineer.}
+
+**Your options:**
+- **{Recommended displayLabel}** (Recommended) — {what it does, one line}
+- **{displayLabel}** — {what it does, one line}
+- … every other available option …
+
+Nothing has been sent to Loop yet.
 ```
 
-Prefer **AskQuestion** for each action in **Available actions** / `humanConfirmationActions` plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** named action (Medium bar). Do **not** echo `interactionDirective` fields (phase / continuation / requiresHarness / stopReason) into this reply.
+Omit lines that do not apply instead of writing "n/a". Do not print stage enums, statuses, versions, flags, or field names. Read `remediationPlanning.session` / `latestPlan`, `executionContext`, and `pipelineRemediation` to work out where the Case really is (e.g. "a fix plan is waiting for your review", "the fix is pushed and checks are running"), then say that in plain words.
+
+Prefer **AskQuestion** with one option per entry in **Your options** (every available action / `humanConfirmationActions`, recommended first) plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** named action (Medium bar). Do **not** echo `interactionDirective` fields (phase / continuation / requiresHarness / stopReason) into this reply.
 
 ### When `continuation` = `Autonomous`
 
@@ -700,11 +714,10 @@ Present result/status; do not act.
 After each accepted transition:
 
 ```markdown
-**Case:** CASE-XXXXXXXX — {title}
-**Stage:** {capability.currentStage} (expected: {capability.expectedStage})
-**Action submitted:** {action}
-**Next objective:** {objective from refreshed contract}
-**Available actions:** {comma-separated action names}
+**CASE-XXXXXXXX — {title}**
+**Done:** {displayLabel of the action you submitted, in plain words}
+**Next:** {objective from refreshed contract, in plain words}
+**Your options:** {displayLabels of every available option, recommended one first — omit when Loop continues on its own}
 ```
 
 ## Trigger phrases

@@ -149,14 +149,14 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 
 **Workspace fields:** read `humanDecision.activeRecommendation` (summary, recommended disposition, confidence) and confirm `humanDecision.awaitingDecision` is true before submitting.
 
-**Available actions:** offered human dispositions only — action names match enum values exactly:
+**Available actions:** offered human dispositions only — action names match enum values exactly. Present **every** offered action to the engineer (including Investigate further), recommended one first and marked **(Recommended)**:
 
 | Action | Notes |
 | ------ | ----- |
 | `ApproveFix` | **Fix it.** Offered only for a `CodeRemediation` recommendation whose `proposedFixPlan.complete` is true. Approves that plan and authorizes execution in one decision → **Execution** (`requiresHarness: false`). Gate B still applies. Present the plan with the option. |
 | `AcceptNoAction` | Closes the Case as NoActionRequired (no remediation planning) |
 | `PlanCodeRemediation` | **Plan in detail.** Authorize Harness-backed planning only (does not execute). Ops/config/data plan dispositions are no longer offered. |
-| `RequestMoreInvestigation` | Requires `reason` |
+| `RequestMoreInvestigation` | **Investigate further.** Always listed as its own option. Requires `reason` — ask for it after the engineer picks this. |
 
 Escalate / Defer / Cancel are **not** offered on new decisions (legacy enum values may still appear on recorded history).
 
