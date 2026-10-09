@@ -1,6 +1,6 @@
 {
   "name": "hubtel-loop-engineering",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Operate Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP.",
   "author": {
     "name": "Hubtel Enablement Team",

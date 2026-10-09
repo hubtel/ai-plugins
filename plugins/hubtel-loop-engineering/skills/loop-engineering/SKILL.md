@@ -1,6 +1,6 @@
 ---
 name: loop-capability-operation
-description: Operates Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP. Use when the user mentions Loop, a Case ID (CASE-XXXXXXXX or GUID), Production Investigation, Release Assurance, Pipeline Remediation, PipelineFailure, CompleteInvestigationPlanning, MarkNoRemediation, CancelRemediation, InvestigationPlanning, ApprovePlanning, AwaitingPlanningAuthorization, ReleaseReview, CompleteReleaseReview, RequestRollback, AcceptReleaseRisk, RequestEvidenceRecollection, CreateProductionInvestigation, capability stage, AcceptAssignment, RejectAssignment, CompleteInvestigation, CompleteDiagnosis, CompleteRecommendation, ReturnToInvestigation, AcceptNoAction, PlanCodeRemediation, CompleteRemediationPlan, ApprovePlan, RequestPlanRevision, ApproveExecution, ApproveImplementation, CompleteExecution, RequestRevision, Recommendation, RemediationPlanning, PlanReview, Execution, AwaitingExecutionApproval, human decision, AwaitingHumanDecision, assignment acceptance, RequestHumanInput, ProvideHumanInput, AwaitingHumanInput, RequestMoreEvidence, interactionDirective, or asks to work on an engineering case. Drive continuation from interactionDirective — Autonomous may chain RHC=false actions; RequiresHumanConfirmation is the stop signal (except approved Execute→ApprovePlan+ApproveExecution).
+description: Operates Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP. Use when the user mentions Loop, a Case ID (CASE-XXXXXXXX or GUID), Production Investigation, Release Assurance, Pipeline Remediation, PipelineFailure, CompleteInvestigationPlanning, MarkNoRemediation, CancelRemediation, InvestigationPlanning, Fix review, ApproveFix, ApprovePlanning, AwaitingPlanningAuthorization, ReleaseReview, CompleteReleaseReview, RequestRollback, AcceptReleaseRisk, RequestEvidenceRecollection, CreateProductionInvestigation, capability stage, AcceptAssignment, RejectAssignment, CompleteInvestigation, CompleteDiagnosis, CompleteRecommendation, ReturnToInvestigation, AcceptNoAction, PlanCodeRemediation, CompleteRemediationPlan, ApprovePlan, RequestPlanRevision, ApproveExecution, ApproveImplementation, CompleteExecution, RequestRevision, Recommendation, RemediationPlanning, PlanReview, Execution, AwaitingExecutionApproval, human decision, AwaitingHumanDecision, assignment acceptance, RequestHumanInput, ProvideHumanInput, AwaitingHumanInput, RequestMoreEvidence, interactionDirective, or asks to work on an engineering case. Drive continuation from interactionDirective — Autonomous may chain RHC=false actions; RequiresHumanConfirmation is the stop signal (except approved Execute→ApprovePlan+ApproveExecution).
 ---
 
 # Loop Capability Operation
@@ -76,11 +76,11 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 3. **Stop when `continuation` is `RequiresHumanConfirmation`** — report phase, `stopReason`, and options. When **two or more** actions apply, use **AskQuestion** when available (see **Structured option prompts**).
 4. **Submit without a new confirm only for `autonomousActions`** when `continuation` is `Autonomous` (including first-touch when Loop projected Autonomous). Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except approved Execute dual-chain).
 5. If assignment offer is active (`phase` Assignment), only discuss **AcceptAssignment** or **RejectAssignment** until the engineer chooses.
-6. After Accept settles into Investigation (`continuation` Autonomous): run investigation and submit completion actions autonomously; then **stop** when planning authorization / HumanDecision / PlanReview is required. For **Pipeline**, stop at `AwaitingPlanningAuthorization` for ApprovePlanning. For **PI**, after Plan* disposition proceed directly to Harness-backed RemediationPlanning (no second ApprovePlanning ask).
+6. After Accept settles into Investigation (`continuation` Autonomous): run investigation and submit completion actions autonomously; then **stop** when planning authorization / HumanDecision / PlanReview is required. For **Pipeline**, stop at `AwaitingPlanningAuthorization` (**Fix review**) and offer Fix it (`ApproveFix`), Change plan (`RequestPlanRevision`), Plan in detail (`ApprovePlanning`) or No fix needed (`MarkNoRemediation`). For **PI**, after Plan* disposition proceed directly to Harness-backed RemediationPlanning (no second ApprovePlanning ask).
 7. If the stage is `Recommendation`, formulate an evidence-backed disposition recommendation. Submit **CompleteRecommendation** when autonomous; never auto-select a human disposition.
-8. If the stage is `AwaitingHumanDecision` / RA `HumanDecision`, present dispositions — never auto-select even when confidence is high.
+8. If the stage is `AwaitingHumanDecision` / RA `HumanDecision`, present dispositions — never auto-select even when confidence is high. For PI, when `ApproveFix` (**Fix it**) is offered, show `humanDecision.activeRecommendation.proposedFixPlan` with it; it appears only when that plan is `complete`.
 8b. If RA `ReleaseReview` and `continuation` is Autonomous: produce the review and submit `CompleteReleaseReview` without asking the engineer to authorize the submit; then stop at HumanDecision.
-9. If `requiresHarness` is true (**Planning or Execution on any code-change capability** — Production Investigation and Pipeline Remediation): resolve the target repo; resume the Engineering Harness or invoke `hbtl-harness-creator` (skill command **scaffold** if missing). **Planning:** follow that skill (overall plan, breakdown, **engineer approval of the breakdown**, Azure/task rows) then submit Loop `CompletePlanning` / `CompleteRemediationPlan`. **Execution:** implement through the same harness, stop for chat review, then Gate B / push. Never use the legacy Worker coding harness. Reuse one harness for Planning and Execution unless evidence requires otherwise. Release Assurance has no code Planning/Execution and does not set `requiresHarness`.
+9. If `requiresHarness` is true (**Planning or Execution on a code-change capability** — Production Investigation, and Pipeline Remediation after Plan in detail; Pipeline Execution reached through Fix it projects `requiresHarness: false`, so implement directly without scaffolding a Harness): resolve the target repo; resume the Engineering Harness or invoke `hbtl-harness-creator` (skill command **scaffold** if missing). **Planning:** follow that skill (overall plan, breakdown, **engineer approval of the breakdown**, Azure/task rows) then submit Loop `CompletePlanning` / `CompleteRemediationPlan`. **Execution:** implement through the same harness, stop for chat review, then Gate B / push. Never use the legacy Worker coding harness. Reuse one harness for Planning and Execution unless evidence requires otherwise. Release Assurance has no code Planning/Execution and does not set `requiresHarness`.
 10. Treat Loop evidence as production facts, not automatically as conclusions.
 11. Use repository/internal tooling to satisfy the current stage objective.
 12. Do not transition merely because work was attempted or a draft exists in chat.
@@ -162,7 +162,7 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 | Moment | Options source |
 | ------ | ---------------- |
 | After first `get_case_workspace` when `continuation` is RHC | All `humanConfirmationActions` / `availableActions` + Other |
-| `AwaitingPlanningAuthorization` | ApprovePlanning / decline paths per contract + Other |
+| `AwaitingPlanningAuthorization` (Pipeline **Fix review**) | Fix it / Change plan / Plan in detail / No fix needed (per contract `displayLabel`s) + Other |
 | `AwaitingHumanDecision` | Disposition actions from contract + Other |
 | `PlanReview` (when not covered by Execute intent) | Approve plan / Change plan / Cancel or No fix needed (per contract `displayLabel`s) + Other — **RejectPlan is not offered** |
 | Presenting completed plan for execution | **"Execute this plan"** (ApprovePlan→ApproveExecution) / Change plan / Cancel + Other |
@@ -190,9 +190,11 @@ When proposing **ApprovePlan** as part of **"Execute this plan"**:
 
 > One intent freezes the plan (**ApprovePlan**) then authorizes repository modification (**ApproveExecution**). Both remain separate durable records.
 
-When proposing **ApprovePlanning** (planning authorization):
+When presenting Pipeline **Fix review** (`AwaitingPlanningAuthorization`), show the proposed fix from the brief (root cause, files, changes, validation) and explain the options:
 
-> Investigation is complete. Planning has **not** been authorized yet. Approving planning authorizes Harness ensure/scaffold and remediation planning.
+> **Fix it** (`ApproveFix`) approves this brief as the plan and authorizes the change in one decision — two durable records, no Harness planning. **Change plan** (`RequestPlanRevision`, reason required) sends it back to investigation. **Plan in detail** (`ApprovePlanning`) opts into Harness scaffold/breakdown and full remediation planning. **No fix needed** (`MarkNoRemediation`) ends the Case.
+
+`ApproveFix` is rejected up front when the Case has no PR ID — offer No fix needed with `UnsupportedNonPrFailure` instead. After `ApproveFix` settles at `Execution`, continue straight into implementation (Gate B still applies).
 
 When **ApproveImplementation** (Gate B) is in `humanConfirmationActions` after local implementation:
 
@@ -301,12 +303,19 @@ Prefer `submit_stage_output`. The MCP resolves `expectedStage` from `capability.
     "confidence": 0.82,
     "supportingEvidence": ["diagnosis:root-cause", "trace:abc"],
     "recommendationRisks": ["Adjacent alert filtering may regress"],
-    "verificationBeforeAction": ["Reproduce with fixture payload"]
+    "verificationBeforeAction": ["Reproduce with fixture payload"],
+    "summary": "Guard missing alert metadata in the intake adapter.",
+    "proposedApproach": "Add a null guard and default the severity.",
+    "proposedChanges": ["IntakeAdapter.cs: guard AlertMetadata"],
+    "affectedComponents": ["src/Intake/IntakeAdapter.cs"],
+    "validationPlan": ["dotnet test Intake.Tests"],
+    "risks": ["Alerts without metadata now default to Medium"],
+    "rollbackConsiderations": ["Revert the commit"]
   }
 }
 ```
 
-Do **not** submit a human disposition from Recommendation. After accept settles, expect `AwaitingHumanDecision`.
+For a `CodeRemediation` recommendation, include the **proposed fix plan** fields (`summary`, `proposedApproach`, `proposedChanges`, `affectedComponents`, `validationPlan`, `risks`, `rollbackConsiderations`) — the same shape `CompleteRemediationPlan` requires. With a complete plan the decision gate offers **Fix it**. Do **not** submit a human disposition from Recommendation. After accept settles, expect `AwaitingHumanDecision`.
 
 **RemediationPlanning** (`CompleteRemediationPlan` — requires full plan output):
 
@@ -605,7 +614,7 @@ Prototype external interaction is the **default** for new Production Investigati
 | `InvestigationBrief` | `CompleteInvestigation` | `InvestigationSummary`, `EvidenceReferences` |
 | `ProductionDiagnosis` | `CompleteDiagnosis` | `Diagnosis`, `CandidateRemediation` |
 | `Recommendation` | `CompleteRecommendation` | recommendation artifact set (disposition, summary, action, rationale, urgency, confidence, evidence, risks, verification) |
-| `AwaitingHumanDecision` | Primary: `AcceptNoAction` (No action), `PlanCodeRemediation` (Plan & fix). `RequestMoreInvestigation` via Other + reason | none (`RequestMoreInvestigation` requires `reason`) |
+| `AwaitingHumanDecision` | Primary: `ApproveFix` (Fix it — only with a complete proposed fix plan; → Execution, no Harness), `PlanCodeRemediation` (Plan in detail), `AcceptNoAction` (No action). `RequestMoreInvestigation` via Other + reason | none (`RequestMoreInvestigation` requires `reason`) |
 | `RemediationPlanning` | `CompleteRemediationPlan` | full remediation plan artifact set (see contract) |
 | `PlanReview` | `ApprovePlan`, `RequestRevision`, `CancelPlanning` (`RejectPlan` not offered) | none (`RequestRevision`, `CancelPlanning` benefit from `reason`) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `RequestRevision`, `Cancel` | none (`RequestRevision`, `Cancel` require `reason`) |
@@ -626,13 +635,13 @@ Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **no
 | Assignment offer (Case `AwaitingAcceptance`, CE still `EvidenceCollection`) | `AcceptAssignment` / `RejectAssignment` | none (`RejectAssignment` requires reason) |
 | `EvidenceCollection` (after accept; automatic) | none | platform evidence |
 | `InvestigationPlanning` | `CompleteInvestigationPlanning` | EngineeringBrief fields (`IssueSummary`, `RootCauseHypothesis`, `RecommendedChanges`, `SuspectedAffectedFiles`, `RecommendedValidationCommands`, `ShouldProceedToExecution`) |
-| `AwaitingPlanningAuthorization` | `ApprovePlanning`, `MarkNoRemediation` | none |
-| `Planning` | `CompletePlanning`, `MarkNoRemediation` | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
+| `AwaitingPlanningAuthorization` (Fix review) | `ApproveFix` (→ Execution), `RequestPlanRevision` (→ InvestigationPlanning), `ApprovePlanning` (→ Planning), `MarkNoRemediation` | none (revision/no-remediation require reason) |
+| `Planning` (only after Plan in detail) | `CompletePlanning`, `MarkNoRemediation` | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
 | `PlanReview` | `ApprovePlan`, `RequestPlanRevision`, `MarkNoRemediation` (`RejectPlan` not offered) | none (revision/no-remediation require reason) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `CancelRemediation` | none (`CancelRemediation` requires reason) |
 | `Execution` | `ApproveImplementation`, `CompleteExecution`, `CancelRemediation` | `CompleteExecution` requires push-success delivery evidence |
 
-After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Happy-path after Execute intent: harness-backed implement → validate locally → **stop for chat review** → `ApproveImplementation` (RHC Gate B) → commit/push → CompleteExecution. Cursor Always Run is not Gate B. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
+After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Happy-path after Fix it: implement → validate locally → **stop for chat review** → `ApproveImplementation` → commit/push → CompleteExecution. Happy-path after Plan in detail and Execute intent: harness-backed implement → validate locally → **stop for chat review** → `ApproveImplementation` (RHC Gate B) → commit/push → CompleteExecution. Cursor Always Run is not Gate B. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
 
 Execution approval and delivery use `pipelineRemediation` (+ workspace stage contract) — do not bypass with invented actions.
 

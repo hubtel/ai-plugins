@@ -102,7 +102,7 @@
       "displayName": "Hubtel Loop Engineering",
       "source": "./plugins/hubtel-loop-engineering",
       "description": "Operate Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "Hubtel Enablement Team",
         "email": "engineering@hubtel.com"

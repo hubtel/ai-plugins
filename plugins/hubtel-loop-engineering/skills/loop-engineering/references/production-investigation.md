@@ -12,7 +12,7 @@ Durable stage names (from Loop/Temporal) differ from agent-friendly objectives i
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
 | `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
 
-Preserve disposition (`AwaitingHumanDecision`) — offered set is `RequestMoreInvestigation` / `AcceptNoAction` / `PlanCodeRemediation` only. **PlanCodeRemediation authorizes Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B (`ApproveImplementation`) is durable and **requires human confirmation of the implementation before push** (RHC=true). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`. Cursor tool Run/Always Run is not Gate B.
+Preserve disposition (`AwaitingHumanDecision`) — offered set is `ApproveFix` (Fix it, only with a complete proposed fix plan) / `RequestMoreInvestigation` / `AcceptNoAction` / `PlanCodeRemediation` only. **ApproveFix** records the recommendation's plan as revision 1, its approval and Gate A execution approval in one decision, then enters Execution without Harness planning. **PlanCodeRemediation authorizes Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B (`ApproveImplementation`) is durable and **requires human confirmation of the implementation before push** (RHC=true). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`. Cursor tool Run/Always Run is not Gate B.
 
 ### Hide incidental machine stages from chat
 
@@ -30,7 +30,8 @@ Preserve disposition (`AwaitingHumanDecision`) — offered set is `RequestMoreIn
 Accept → PendingSettlement until InvestigationBrief (platform stages) → Autonomous
 AUTONOMOUS Brief → Diagnosis → Recommendation
 → Human: disposition (AwaitingHumanDecision — options intact)
-→ (Plan*): HARNESS scaffold/plan via hbtl-harness-creator → engineer approves breakdown → CompleteRemediationPlan → PlanReview
+→ (Fix it / ApproveFix): plan + approval + Gate A recorded → local implementation (no Harness) → Human: review implementation (ApproveImplementation) → commit/push → CompleteExecution
+→ (Plan in detail / PlanCodeRemediation): HARNESS scaffold/plan via hbtl-harness-creator → engineer approves breakdown → CompleteRemediationPlan → PlanReview
 → Human: Execute this plan (ApprovePlan → ApproveExecution)
 → HARNESS-backed local implementation → Human: review implementation (ApproveImplementation) → commit/push → CompleteExecution
 ```
@@ -134,6 +135,8 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 | RecommendationRisks | `output.recommendationRisks` | Risks of acting / not acting |
 | VerificationBeforeAction | `output.verificationBeforeAction` | Checks before acting |
 
+**Proposed fix plan (for Fix it):** for `CodeRemediation`, also send `summary`, `proposedApproach`, `proposedChanges`, `affectedComponents`, `validationPlan`, `risks`, `rollbackConsiderations` (same shape as `CompleteRemediationPlan`). Loop stores it on the recommendation (`humanDecision.activeRecommendation.proposedFixPlan`, with `complete`). Omit it when the right fix is not yet clear — the engineer can still choose Plan in detail.
+
 **Available actions:**
 
 | Action | Target stage | Notes |
@@ -150,8 +153,9 @@ AUTONOMOUS Brief → Diagnosis → Recommendation
 
 | Action | Notes |
 | ------ | ----- |
+| `ApproveFix` | **Fix it.** Offered only for a `CodeRemediation` recommendation whose `proposedFixPlan.complete` is true. Approves that plan and authorizes execution in one decision → **Execution** (`requiresHarness: false`). Gate B still applies. Present the plan with the option. |
 | `AcceptNoAction` | Closes the Case as NoActionRequired (no remediation planning) |
-| `PlanCodeRemediation` | Authorize planning only (does not execute). Ops/config/data plan dispositions are no longer offered. |
+| `PlanCodeRemediation` | **Plan in detail.** Authorize Harness-backed planning only (does not execute). Ops/config/data plan dispositions are no longer offered. |
 | `RequestMoreInvestigation` | Requires `reason` |
 
 Escalate / Defer / Cancel are **not** offered on new decisions (legacy enum values may still appear on recorded history).

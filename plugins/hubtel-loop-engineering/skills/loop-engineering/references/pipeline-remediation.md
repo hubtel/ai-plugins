@@ -7,7 +7,7 @@ Pipeline Remediation remediates Azure Pipeline / CI failures on an existing PR s
 ```text
 Temporal / Loop = durable Case / CapabilityExecution / decisions
 Cursor Agent   = investigation, EngineeringBrief, implementation, commit/push
-Engineer       = confirms Accept, ApprovePlanning, harness breakdown, Execute this plan, and Gate B (ApproveImplementation)
+Engineer       = confirms Accept, the Fix review decision, and Gate B (ApproveImplementation); after Plan in detail also harness breakdown and Execute this plan
 Engineer Worker = orchestration / assignment endpoint — not the coding harness on Cursor-native Cases
 Harness        = AGENTS.md / feature_list / create-harness scaffold in the target repo
 ```
@@ -36,10 +36,21 @@ AUTONOMOUS INVESTIGATION
 → evidence/workspace/branch/repository investigation
 → CompleteInvestigationPlanning → AwaitingPlanningAuthorization
 
-Cursor presents Investigation Result
-→ Human: Proceed with planning (ApprovePlanning)
+Cursor presents the proposed fix (FIX REVIEW)
+→ Human picks one:
+   Fix it (ApproveFix)            → plan freeze + execution authorization → EXECUTION below (no Harness)
+   Change plan (RequestPlanRevision, reason) → back to AUTONOMOUS INVESTIGATION
+   No fix needed (MarkNoRemediation)         → Complete
+   Plan in detail (ApprovePlanning)          → continue below
 
-HARNESS SCAFFOLD / RESUME via hbtl-harness-creator (mandatory)
+FIX IT PATH
+→ implement locally → validate
+→ stop for chat review (Always Run is not review)
+→ human Gate B (ApproveImplementation)
+→ commit/push → CompleteExecution
+
+PLAN IN DETAIL PATH
+HARNESS SCAFFOLD / RESUME via hbtl-harness-creator (mandatory on this path)
 HARNESS BREAKDOWN → engineer approval (Always Run is not approval)
 → CompletePlanning → PlanReview
 
@@ -56,11 +67,11 @@ ApprovePlan → ApproveExecution (separate durable records)
 Cursor presents Execution Result
 ```
 
-Stop for harness-breakdown approval, Execute intent, and Gate B. Also stop on validation failure, material deviation, or destructive ops.
+Stop for the Fix review decision and Gate B; on the Plan in detail path also for harness-breakdown approval and Execute intent. Also stop on validation failure, material deviation, or destructive ops.
 
-## Engineering Harness (mandatory for Planning and Execution)
+## Engineering Harness (Plan in detail path only)
 
-When `interactionDirective.requiresHarness` is true (Planning / Execution after authorization):
+When `interactionDirective.requiresHarness` is true (Planning, and Execution after Plan in detail). Execution reached through **Fix it** projects `requiresHarness: false` — implement the approved brief directly:
 
 1. Resolve the **target repository** from Case Workspace / pipeline evidence (PR source branch repo).
 2. Detect whether the governed **Engineering Harness** already exists (`AGENTS.md`, `feature_list.json`, harness scaffold markers).
@@ -98,7 +109,7 @@ EvidenceCollection [automatic on Control Plane — before worker offers]
 → Assignment offer [Case AwaitingAcceptance; Accept/Reject]
 → InvestigationPlanning [Cursor autonomous — uses persisted evidence + local PR branch]
 → CompleteInvestigationPlanning
-→ AwaitingPlanningAuthorization [human — ApprovePlanning]
+→ AwaitingPlanningAuthorization [human — Fix review: ApproveFix → Execution | RequestPlanRevision → InvestigationPlanning | ApprovePlanning → Planning | MarkNoRemediation]
 → Planning [hbtl-harness-creator + breakdown approval, then CompletePlanning]
 → CompletePlanning
 → PlanReview [human — Execute this plan → ApprovePlan then ApproveExecution]
@@ -123,11 +134,11 @@ Teams (`Work on Loop CASE-XXXX`) is discovery only. Evidence is gathered **befor
 | Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection` (evidence already on Case) |
 | EvidenceCollection | Automatic (Control Plane) | **Before** worker offers — hide from chat |
 | InvestigationPlanning | Cursor autonomous | Uses persisted evidence + local repo on PR branch |
-| AwaitingPlanningAuthorization | Human via Cursor | ApprovePlanning before Harness-backed planning |
-| Planning | Cursor + Harness | `hbtl-harness-creator` scaffold/resume + breakdown approval; then CompletePlanning |
+| AwaitingPlanningAuthorization | Human via Cursor | Fix review: Fix it / Change plan / Plan in detail / No fix needed |
+| Planning | Cursor + Harness | Only after Plan in detail: `hbtl-harness-creator` scaffold/resume + breakdown approval; then CompletePlanning |
 | PlanReview | Human via Cursor | Execute intent → ApprovePlan (+ ApproveExecution) |
 | AwaitingExecutionApproval | Human / chained | Gate A — authorize work on approved snapshot |
-| Execution | Cursor + Harness | Implement locally, human Gate B, push, CompleteExecution |
+| Execution | Cursor (+ Harness after Plan in detail) | Implement locally, human Gate B, push, CompleteExecution |
 | Complete | Terminal | Delivery or truthful non-delivery |
 
 ## Workspace — read `pipelineRemediation`
@@ -164,9 +175,18 @@ Submit EngineeringBrief fields (camelCase MCP `output`):
 
 Lands on **AwaitingPlanningAuthorization**. Not a ProductionInvestigation remediation plan.
 
-## AwaitingPlanningAuthorization — ApprovePlanning
+## AwaitingPlanningAuthorization — Fix review
 
-Human gate. After ApprovePlanning settles → **Planning** (`hbtl-harness-creator` scaffold/resume + breakdown approval before CompletePlanning).
+Human gate. Present the brief as the proposed fix and offer (labels from `displayLabel`):
+
+| Option | Action | Settles at |
+|--------|--------|-----------|
+| Fix it | `ApproveFix` | **Execution** — the brief is frozen as plan v{n} and execution is authorized (two durable records, one decision). `requiresHarness` is false. |
+| Change plan | `RequestPlanRevision` + `reason` | **InvestigationPlanning** — re-investigate and submit `CompleteInvestigationPlanning` again; the brief carries the revision reason. |
+| Plan in detail | `ApprovePlanning` | **Planning** — `hbtl-harness-creator` scaffold/resume + breakdown approval before CompletePlanning. |
+| No fix needed | `MarkNoRemediation` + known reason | **Complete** |
+
+`ApproveFix` is rejected (`TransitionNotAllowed`) when the Case has no PR ID; use No fix needed with `UnsupportedNonPrFailure`.
 
 ## Planning — CompletePlanning
 

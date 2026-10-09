@@ -44,7 +44,7 @@
       },
       "category": "Engineering",
       "description": "Operate Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     }
   ]
 }
