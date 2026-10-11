@@ -95,7 +95,7 @@ When `interactionDirective.requiresHarness` is true (Planning, and Execution aft
 
 | Machine stage | Cursor treatment |
 |---------------|------------------|
-| **EvidenceCollection** | Automatic after Accept. **Hide** — continuation `AwaitingPlatform` while platform collects. **AcceptAssignment** settles as **PendingSettlement** until `InvestigationPlanning` is actionable, then Succeeded + Autonomous — continue investigation without asking the engineer to refresh. |
+| **EvidenceCollection** | Automatic **before** worker offers. **Hide** — continuation `AwaitingPlatform` while platform collects. After Accept, **AcceptAssignment** settles as **PendingSettlement** until `InvestigationPlanning` is actionable, then Succeeded + Autonomous — continue investigation without asking the engineer to refresh. |
 | Assignment offer | Keep — human Accept/Reject |
 
 **ApprovePlan ≠ ApproveExecution.** One Execute intent may submit both sequentially; they remain separate durable records.
@@ -105,25 +105,29 @@ When `interactionDirective.requiresHarness` is true (Planning, and Execution aft
 ## Full machine lifecycle (reference)
 
 ```text
-EvidenceCollection [automatic on Control Plane — before worker offers]
-→ Assignment offer [Case AwaitingAcceptance; Accept/Reject]
+Platform EvidenceCollection [automatic on Control Plane — before worker offers]
+→ Competitive Offers [Case AwaitingAcceptance; Accept/Reject]
+→ Accept [human — once]
+→ Assignment Reconciliation / PendingSettlement [Postgres authoritative; follow interactionDirective]
 → InvestigationPlanning [Cursor autonomous — uses persisted evidence + local PR branch]
 → CompleteInvestigationPlanning
-→ AwaitingPlanningAuthorization [human — Fix review: ApproveFix → Execution | RequestPlanRevision → InvestigationPlanning | ApprovePlanning → Planning | MarkNoRemediation]
-→ Planning [hbtl-harness-creator + breakdown approval, then CompletePlanning]
+→ Plan Review (AwaitingPlanningAuthorization) [human — Fix review: ApproveFix → Execution | RequestPlanRevision → InvestigationPlanning | ApprovePlanning → Planning | MarkNoRemediation]
+→ Planning [hbtl-harness-creator + breakdown approval, then CompletePlanning] (Plan in detail path only)
 → CompletePlanning
 → PlanReview [human — Execute this plan → ApprovePlan then ApproveExecution]
 → AwaitingExecutionApproval
-→ Execution [Harness-backed; local implement → chat review → human Gate B → push]
+→ Execution [local implement → chat review → human Gate B → push; Harness-backed after Plan in detail]
 → ApproveImplementation [durable freeze; RHC — not Always Run]
 → commit/push in Cursor
 → CompleteExecution
-→ Complete [RemediationDelivered]
+→ Resolution / Complete [RemediationDelivered or truthful non-delivery]
 ```
 
 Assignment acceptance is **not** a CapabilityExecution stage. CE stays on `EvidenceCollection` while the Case assignment is offered (evidence already persisted).
 
 While `assignment.assignmentStatus` is `AwaitingAcceptance`, the workspace **overlays** `AcceptAssignment` / `RejectAssignment` on the EvidenceCollection contract. Submit those via MCP like any other governed action.
+
+If `assignment.assignmentStatus` is already `Accepted`, do **not** submit `AcceptAssignment` again — continue from the authoritative `interactionDirective` (PendingSettlement observation or Autonomous `InvestigationPlanning`).
 
 Teams (`Work on Loop CASE-XXXX`) is discovery only. Evidence is gathered **before** offers; after Accept do **not** narrate EvidenceCollection as a stage the engineer must wait through.
 
@@ -131,8 +135,9 @@ Teams (`Work on Loop CASE-XXXX`) is discovery only. Evidence is gathered **befor
 
 | Stage | Owner | Notes |
 |-------|--------|------|
-| Assignment offer | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection` (evidence already on Case) |
 | EvidenceCollection | Automatic (Control Plane) | **Before** worker offers — hide from chat |
+| Competitive offers / Accept | Human via Cursor | Case `AwaitingAcceptance`; CE still `EvidenceCollection` (evidence already on Case). Accept once; never repeat when already `Accepted`. |
+| Assignment Reconciliation | Platform | PendingSettlement until InvestigationPlanning; follow `interactionDirective` |
 | InvestigationPlanning | Cursor autonomous | Uses persisted evidence + local repo on PR branch |
 | AwaitingPlanningAuthorization | Human via Cursor | Fix review: Fix it / Change plan / Plan in detail / No fix needed |
 | Planning | Cursor + Harness | Only after Plan in detail: `hbtl-harness-creator` scaffold/resume + breakdown approval; then CompletePlanning |

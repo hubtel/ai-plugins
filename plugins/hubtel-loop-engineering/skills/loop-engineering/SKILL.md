@@ -642,8 +642,8 @@ Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **no
 
 | Stage / gate | Completion / review actions | Required outputs |
 | ----- | --------------------------- | ---------------- |
+| `EvidenceCollection` (platform; **before** offers — hide) | none | platform evidence |
 | Assignment offer (Case `AwaitingAcceptance`, CE still `EvidenceCollection`) | `AcceptAssignment` / `RejectAssignment` | none (`RejectAssignment` requires reason) |
-| `EvidenceCollection` (after accept; automatic) | none | platform evidence |
 | `InvestigationPlanning` | `CompleteInvestigationPlanning` | EngineeringBrief fields (`IssueSummary`, `RootCauseHypothesis`, `RecommendedChanges`, `SuspectedAffectedFiles`, `RecommendedValidationCommands`, `ShouldProceedToExecution`) |
 | `AwaitingPlanningAuthorization` (Fix review) | `ApproveFix` (→ Execution), `RequestPlanRevision` (→ InvestigationPlanning), `ApprovePlanning` (→ Planning), `MarkNoRemediation` | none (revision/no-remediation require reason) |
 | `Planning` (only after Plan in detail) | `CompletePlanning`, `MarkNoRemediation` | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
@@ -707,7 +707,7 @@ Present result/status; do not act.
 
 **Release Assurance `ReleaseReview`:** when opening at ReleaseReview with Autonomous continuation, surface `releaseAssurance.deterministicAssessment` + `hostEvidence`, then **in the same turn** produce and submit `CompleteReleaseReview`, then stop at HumanDecision. See `references/release-assurance.md`. Healthy RA needs no engineer assignment. When engineering involvement is required, competitive Offers + explicit `AcceptAssignment` / `RejectAssignment` apply first (Selected* stays null until Accept wins).
 
-**Pipeline Remediation:** when assignment offer is active (`continuation` RHC), surface `pipelineRemediation.evidence` as needed and offer only `AcceptAssignment` / `RejectAssignment` from `availableActions` (projected onto EvidenceCollection — not a separate CE stage). See `references/pipeline-remediation.md`.
+**Pipeline Remediation:** documented lifecycle is Platform EvidenceCollection → Competitive Offers → Accept → Assignment Reconciliation/PendingSettlement → InvestigationPlanning → Plan Review → Execution → Resolution. When assignment offer is active (`continuation` RHC), surface `pipelineRemediation.evidence` as needed and offer only `AcceptAssignment` / `RejectAssignment` from `availableActions` (projected onto EvidenceCollection — not a separate CE stage). After Accept, follow `interactionDirective` — do **not** repeat `AcceptAssignment`. See `references/pipeline-remediation.md`.
 
 ## Engineer-facing summary template
 
