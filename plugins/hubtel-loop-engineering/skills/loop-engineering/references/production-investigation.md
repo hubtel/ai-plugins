@@ -10,15 +10,30 @@ Durable stage names (from Loop/Temporal) differ from agent-friendly objectives i
 |-----------|-----------------|
 | `Succeeded` | Consume settled `currentStage` / `availableActions` / capability state. **Do not** call `get_case_workspace` as a normal follow-up. |
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
-| `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
+| `PendingSettlement` | Same-turn observation via `get_transition_status` by `submissionId` / `idempotencyKey` until Succeeded / Failed / observation-budget exhaustion. Never re-signal. Do **not** end the turn merely because settlement is pending. |
 
 Preserve disposition (`AwaitingHumanDecision`) — offered set is `ApproveFix` (Fix it, only with a complete proposed fix plan) / `RequestMoreInvestigation` / `AcceptNoAction` / `PlanCodeRemediation` only. **ApproveFix** records the recommendation's plan as revision 1, its approval and Gate A execution approval in one decision, then enters Execution without Harness planning. **PlanCodeRemediation authorizes Harness-backed RemediationPlanning directly** — there is no second ApprovePlanning ask (Pipeline retains ApprovePlanning because it has no HumanDecision disposition). Dual approvals remain separate (PlanReview ≠ Gate A). Gate B (`ApproveImplementation`) is durable and **requires human confirmation of the implementation before push** (RHC=true). Settlement does not replace human confirmation at RHC gates. Honor `interactionDirective`. Cursor tool Run/Always Run is not Gate B.
+
+**`AwaitingPlatform` is not a stop** — observe and resume in the same turn (shared Skill **Platform-wait continuation**). Do **not** import Pipeline Fix review into PI. Do **not** invent an extra ApprovePlanning step after Plan in detail.
+
+### Accept → platform wait → autonomous investigation → disposition (same turn)
+
+```text
+Human: Accept (or already Accepted)
+→ PendingSettlement and/or AwaitingPlatform while platform investigation/evidence runs
+→ Observe: get_transition_status when a submission key exists; else bounded get_case_workspace
+→ When Autonomous at InvestigationBrief: Brief → Diagnosis → Recommendation without another engineer message
+→ Stop at AwaitingHumanDecision — present authoritative disposition displayLabels
+→ Do not auto-select; do not resubmit Accept while observing; no PF-style Fix review gate
+```
+
+Multiple pending observations before Succeeded are expected. Budget exhaustion → report factual state and that another invocation is required — never "I'll continue when Loop advances" while ending the turn with budget remaining.
 
 ### Hide incidental machine stages from chat
 
 | Machine stage | Cursor treatment |
 |---------------|------------------|
-| Pre-Cursor platform stages (evidence collection → enrichment) | **Hide** — continuation `AwaitingPlatform`; observe via Accept PendingSettlement / `get_transition_status` |
+| Pre-Cursor platform stages (evidence collection → enrichment) | **Hide** — continuation `AwaitingPlatform`; same-turn observe via Accept PendingSettlement / `get_transition_status` (or bounded workspace when no submission key) |
 | `RepositoryWorkspacePreparation` / `RepositoryInvestigation` | **Hide** — soft “starting investigation” |
 | `ReadyForExecution` | **Collapse candidate** — treat as transitional toward Execution |
 | PlanReview / AwaitingExecutionApproval / Execution | **Keep** — distinct durable boundaries |
@@ -315,7 +330,7 @@ After successful **CompleteExecution**, workspace retains `executionContext` wit
 | `ImplementationApprovalMissing` | CompleteExecution before Gate B |
 | `ExecutionApprovalMissing` | Execution action before Gate A |
 | `SignalDeliveryFailed` | Temporal signal failed — do not auto-retry; report and wait for engineer direction |
-| `PendingSettlement` | Bounded settle timed out — use observational `get_transition_status` only |
+| `PendingSettlement` | Bounded settle timed out — same-turn observational `get_transition_status` until Succeeded / Failed / budget exhaustion; never re-submit |
 | `CaseNotFound` | Invalid Case ID |
 | `ExecutionNotFound` | Wrong or inactive execution |
 

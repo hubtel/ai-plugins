@@ -29,13 +29,13 @@ Workspace and settled submit responses include **`interactionDirective`** — a 
 1. **First-touch** — When the engineer pastes a Case ID / "Work on Loop CASE-…": call **`get_case_workspace` first**, then **trust `interactionDirective`** (see **First-touch continuation** below). Pasting a Case ID is not consent to cross `RequiresHumanConfirmation` / RHC=true actions.
 2. **Engineer-facing replies** — Consume `interactionDirective` for continuation control only. **Do not echo** Directive / phase / continuation / requiresHarness / stopReason / permittedActions machinery into chat. Speak in plain English about the Case, what was found, and the choices — see **Plain-English replies** below.
 3. **`RequiresHumanConfirmation`** — Authoritative stop. Present options (`humanConfirmationActions` / `availableActions`), wait for explicit engineer intent. Do **not** submit. Honor `stopReason` internally (do not dump the field name/value unless it helps the engineer decide).
-4. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation`, `AwaitingPlatform`, or terminal `None`. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
+4. **`Autonomous`** — Cursor **may** perform stage work and submit **`autonomousActions`** in the **same turn** (including first-touch when Loop projected Autonomous), chaining from each **settled** response until `continuation` becomes `RequiresHumanConfirmation` or terminal `None`. **`AwaitingPlatform` is not a turn-ending stop** — follow **Platform-wait continuation** below, then resume from the authoritative directive. Stop on exceptions. Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except the approved Execute→ApprovePlan+ApproveExecution sequence).
 5. **Execute intent exception** — One explicit engineer intent such as **"Execute this plan"** may drive **two sequential durable actions** when both are valid: `ApprovePlan` → settle → `ApproveExecution` → settle → Execution. Do **not** merge backend semantics. Fail closed if either action is invalid or settlement fails. Never infer the second authorization from an unrelated earlier utterance.
 6. **Gate B** — After successful local implementation/validation, **stop**. Present the diff and ask the engineer to review. Submit `ApproveImplementation` only after **explicit chat confirmation** (it is RHC=true / in `humanConfirmationActions`). Then commit/push, then `CompleteExecution`. Cursor tool **Run / Always Run is not implementation review** — do not call the MCP or `git push` until the engineer confirms in chat. Stop without asking only on failed validation, material plan deviation, or safety conditions.
 7. **Loop wins over Harness** — Loop authorization always overrides Harness `approvalMode` / autopilot. Do not let harness autopilot bypass Loop gates.
-8. **PendingSettlement** — Observational only via `get_transition_status`. Never re-signal; never invent a refresh loop. After **AcceptAssignment**, settlement stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation so investigation continues without another human action.
-9. **`AwaitingPlatform`** — Platform work is still progressing (empty Cursor actions). Do **not** invent actions; do **not** ask the engineer to refresh or type "continue". Observe via PendingSettlement / `get_transition_status` when applicable.
-10. **`None`** — Terminal / no further progression expected. Present status; do not invent actions.
+8. **PendingSettlement** — Observational only via **`get_transition_status`** (keyed by `submissionId` / `idempotencyKey`). Never re-signal; never invent a background poller. After **AcceptAssignment**, settlement often stays **PendingSettlement** until the first Cursor-actionable investigation stage (Pipeline `InvestigationPlanning` / PI `InvestigationBrief`) — then Succeeded with Autonomous continuation. **Stay in the same agent turn** and observe until Succeeded / Failed / budget exhaustion (see **Platform-wait continuation**).
+9. **`AwaitingPlatform`** — Platform-owned work is still progressing (empty Cursor actions). This is a **wait-and-resume** state, **not** a human gate and **not** a reason to end the turn. Do **not** invent actions; do **not** ask the engineer to refresh or type "continue"; do **not** claim you will resume later unless an automatic resume mechanism actually exists in this session. Observe in the same turn (see **Platform-wait continuation**), then continue when the directive becomes Autonomous or stop at a genuine RHC / terminal / budget limit.
+10. **`None`** — Inspect the actual Case/capability state. Often terminal / no further Cursor progression — present status and do not invent actions. Do **not** blindly assume success; if the Case is not terminal but actions are empty, report the factual state.
 
 ### Plain-English replies
 
@@ -54,9 +54,9 @@ On first touch always:
 1. Call **`get_case_workspace`**.
 2. Trust the returned **`interactionDirective`**.
 3. If **`continuation` = `RequiresHumanConfirmation`**: present decision/context (first-touch summary + options); **STOP**; do not submit without human intent.
-4. If **`continuation` = `Autonomous`**: Cursor **MAY** continue the authorized autonomous phase **in the same turn** — perform permitted work, submit RHC=false / `autonomousActions`, follow settled autonomous continuation; **stop** only at the next genuine human boundary, error, or block. Do **not** invent a "continue" / "submit review" human message.
-5. If **`continuation` = `AwaitingPlatform`**: use observational/settlement behavior; do **not** ask the engineer to refresh or continue.
-6. If terminal (`None` / Terminal phase): present result/status; do not act.
+4. If **`continuation` = `Autonomous`**: Cursor **MAY** continue the authorized autonomous phase **in the same turn** — perform permitted work, submit RHC=false / `autonomousActions`, follow settled autonomous continuation; **stop** only at the next genuine human boundary (RHC), terminal `None`, error, or observation-budget exhaustion. Do **not** invent a "continue" / "submit review" human message. Do **not** treat temporary `AwaitingPlatform` as that boundary — observe and resume (see **Platform-wait continuation**).
+5. If **`continuation` = `AwaitingPlatform`**: observe in the **same turn** per **Platform-wait continuation**; do **not** end the turn with "I'll continue when Loop advances" / "No action needed from you right now" unless the observation budget is exhausted or settlement failed. After the Case becomes actionable, continue Autonomous work without requiring another engineer message.
+6. If terminal (`None` / Terminal phase): present the factual result/status; do not invent actions.
 
 First-touch protects against **unauthorized** mutation (RHC=true). It must **not** invent a human gate when Loop already projected **Autonomous**.
 
@@ -74,10 +74,10 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 2. **Read `interactionDirective` + stage contract** — phase, continuation, harness need, actions.
 3. **If RHC** — summarize, present options, **stop**.
 4. **If Autonomous** — perform only the current stage objective; build durable outputs; submit autonomous actions; continue from settled `interactionDirective`.
-4b. **If AwaitingPlatform** — do not invent actions; observe PendingSettlement / `get_transition_status` when applicable.
+4b. **If AwaitingPlatform or PendingSettlement** — observe in the same turn (**Platform-wait continuation**); do not invent actions; do not end the turn merely because platform work is temporary.
 5. **Keep conversational work in Cursor** — Loop persists only submitted artifacts.
-6. **Consume settled context** — `outcome` / `currentStage` / `availableActions` / `interactionDirective`. Do **not** refresh via `get_case_workspace` as normal UX after success.
-7. **Observational PendingSettlement** — `get_transition_status` only.
+6. **Consume settled context** — `outcome` / `currentStage` / `availableActions` / `interactionDirective`. After **Succeeded**, prefer that settled directive — do **not** call `get_case_workspace` as normal UX. Exception: when observing `AwaitingPlatform` **without** a pending submission key, bounded re-`get_case_workspace` is the allowed observation mechanism (not a post-success refresh).
+7. **Observational PendingSettlement** — when a `submissionId` / `idempotencyKey` exists, use `get_transition_status` only (never re-submit).
 
 ## Operating rules
 
@@ -101,9 +101,62 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 17. If new evidence invalidates prior work, use a permitted backward transition.
 18. Never invent Case state.
 19. Never perform destructive actions outside governed Loop actions.
-20. After settled success, continue from settled context — observational `get_transition_status` only for `PendingSettlement`.
+20. After settled success, continue from settled context. For `PendingSettlement`, observe with `get_transition_status` (never re-submit). For `AwaitingPlatform` without a submission key, use bounded `get_case_workspace` observation.
 21. For execution stages, read `executionContext` — never reconstruct execution state from chat history.
 22. Git commit/push is Cursor agent work — never invoke Loop MCP for Git operations. **Do not push until Gate B (`ApproveImplementation`) is recorded after explicit engineer review of the implementation.** Cursor Always Run is not that review. After authorization + Gate B, validate then push, then `CompleteExecution`.
+
+## Platform-wait continuation (same-turn observation)
+
+Temporary platform work is **not** a human gate. After an accepted assignment or any submitted capability action, **stay in the active agent turn**, observe until the Case is actionable again (or a real stop condition), then resume Autonomous work **without** requiring another engineer message.
+
+### Distinguish waiting from stopping
+
+| Signal | Meaning | Agent behaviour |
+|--------|---------|-----------------|
+| `AwaitingPlatform` | Platform-owned work in progress; no Cursor actions yet | **Observe and resume** in the same turn — not a stop |
+| `outcome: PendingSettlement` | Submitted action has not finished settling | **Observe** with `get_transition_status` — never re-submit |
+| `continuation: Autonomous` | Cursor may perform authorized stage work | **Continue** stage work / submit `autonomousActions` |
+| `continuation: RequiresHumanConfirmation` | Genuine human decision / authorization gate | **Stop**; present options; wait for explicit engineer intent |
+| `continuation: None` | Inspect actual Case/capability state | Report factual terminal or non-actionable state; do **not** invent success |
+
+### Observation mechanism
+
+1. After every submit, inspect the authoritative transition result (`outcome`, settled `interactionDirective` when present).
+2. If **`PendingSettlement`** (or you hold a live `submissionId` / `idempotencyKey` from a just-submitted action): call **`get_transition_status`** with that key. Repeat while settlement is still pending. **Do not** resubmit the action merely because settlement is pending.
+3. If **`AwaitingPlatform`** and **no** submission key exists (e.g. first-touch after Accept already recorded, platform still collecting): use **bounded `get_case_workspace`** reloads to observe progress. This is platform-wait observation — **not** the forbidden post-Succeeded refresh.
+4. After settlement **Succeeded**, prefer the settled transition response's `interactionDirective` / stage contract. Avoid redundant `get_case_workspace` when that settled context is already sufficient.
+5. If the settled (or refreshed) directive is **`Autonomous`**, continue authorized work immediately in the same turn.
+6. Chain through subsequent Autonomous stages until a genuine RHC gate, terminal `None`, failure, or observation-budget exhaustion.
+7. Use the **current** authoritative directive — do **not** assume a fixed next stage from the action you just submitted.
+
+### Observation budget (defaults, not absolutes)
+
+- Default ceiling: up to **12** observation calls **or** about **90 seconds** wall clock — **whichever limit is reached first**.
+- Also stop early if the MCP/tool reports a timeout or hard execution limit.
+- Prefer a modest interval between observations when the runtime supports waiting (e.g. brief shell `sleep` between calls). **Do not** invent a dedicated sleep/poller tool, background job, or Temporal workflow. **Do not** hammer the API with near-zero-interval retries.
+- **Budget exhausted while still waiting:** report the **actual** Case state (plain English), say that **another invocation is required** to keep watching, and stop. Do **not** promise automatic resume outside this session.
+- **Terminal settlement failure:** stop with an accurate failure explanation; do not re-submit the same intent without engineer direction.
+- Distinguish **PendingSettlement** (still observing) from **Failed** (stop).
+
+### Engineer-facing language while observing
+
+Allowed (and then you **must** keep observing):
+
+> Loop is finishing evidence collection. I'm checking for the next actionable stage.
+
+**Forbidden** unless the observation budget is exhausted or there is a real automatic-resume mechanism in this session:
+
+- "I'll pick up investigation as soon as Loop advances"
+- "I'll continue when Loop advances"
+- "No action needed from you right now" (when you are ending the turn while platform work is still temporary and the budget remains)
+
+### Capability-specific human stops (unchanged)
+
+After platform wait clears, continue Autonomous work until **that capability's** real human gate:
+
+- **Pipeline Remediation** — stop at **Fix review** (`AwaitingPlanningAuthorization`); present Fix it / Change plan / Plan in detail / No fix needed. Do **not** auto-select.
+- **Production Investigation** — continue Brief → Diagnosis → Recommendation; stop at **AwaitingHumanDecision** disposition. Do **not** import PF Fix review or an extra ApprovePlanning step; Plan in detail (`PlanCodeRemediation`) already authorizes planning under PI's contract.
+- **Release Assurance** — may use this same observation protocol after Accept / PendingSettlement; **Finish review** and **HumanDecision** contracts remain unchanged (never auto-pick dispositions).
 
 ## Human confirmation
 
@@ -114,7 +167,7 @@ Explicit engineer confirmation is required before submitting any action in **`hu
 - Trust **`interactionDirective`** — it controls whether Cursor may continue.
 - **`Autonomous`** — may perform stage work and submit **`autonomousActions`** (RHC=false) without a new human confirm, including first-touch when Loop already projected Autonomous.
 - **`RequiresHumanConfirmation`** — stop; require explicit engineer intent before any submit (except the approved Execute→ApprovePlan+ApproveExecution sequence).
-- **`AwaitingPlatform`** — observe only; do not invent actions or ask the engineer to refresh.
+- **`AwaitingPlatform` / `PendingSettlement`** — observe and resume in the same turn (**Platform-wait continuation**); do not invent actions; do not ask the engineer to refresh; do not end the turn merely because platform work is temporary.
 - Never autonomously submit **`humanConfirmationActions`** / RHC=true actions.
 
 ### When a single path was proposed (N = 1)
@@ -227,12 +280,17 @@ flowchart TD
   E --> F[Engineer intent]
   F --> G[submit confirmed / Execute sequence]
   D -->|Autonomous| H[Do stage work + submit autonomousActions]
-  D -->|None| I[Platform or terminal — no Cursor action]
+  D -->|AwaitingPlatform| W[Same-turn platform-wait observation]
+  D -->|None| I[Inspect terminal / non-actionable state]
   G --> J{settled outcome?}
   H --> J
-  J -->|Failed| K[Surface reason — stop or retry per contract]
-  J -->|PendingSettlement| P[get_transition_status observational]
+  W --> W2{submission key?}
+  W2 -->|yes| P[get_transition_status bounded]
+  W2 -->|no| R[bounded get_case_workspace]
   P --> J
+  R --> C
+  J -->|Failed| K[Surface reason — stop]
+  J -->|PendingSettlement| P
   J -->|Succeeded| C
 ```
 
@@ -406,7 +464,7 @@ The MCP resolves the acting engineer from `assignment.engineerEmail` on the case
 | -------- | ------- | -------------- |
 | `accepted: true`, `outcome: Succeeded` | Settled — authoritative stage applied | Continue from settled `currentStage` / `availableActions`. **No refresh.** |
 | `accepted: true`, `outcome: Failed` | Signal delivered but settlement observed failure | Surface `settlementReason`; do not auto-retry |
-| `accepted: true`, `outcome: PendingSettlement` | Bounded settle timed out | Observational `get_transition_status` with `submissionId` / `idempotencyKey` — **never re-submit** |
+| `accepted: true`, `outcome: PendingSettlement` | Bounded settle timed out | Same-turn observational `get_transition_status` with `submissionId` / `idempotencyKey` until Succeeded / Failed / budget exhaustion (**Platform-wait continuation**) — **never re-submit** |
 | `accepted: false`, `code: TransitionNotAllowed` | Action not valid now | Re-read `availableActions`; do not retry the same action |
 | `accepted: false`, `code: StageMismatch` | Stale expected stage | Realign from workspace/`expectedStage` — "The Case moved while we were working." Do not guess a retry stage |
 | `accepted: false`, `code: MissingRequiredOutputs` | Plan or stage output incomplete | List missing fields; remain in planning and complete the output |
@@ -699,15 +757,15 @@ Prefer **AskQuestion** with one option per primary `displayLabel` (recommended f
 
 ### When `continuation` = `Autonomous`
 
-Do **not** stop for a fake "continue" / "submit review" confirm. Perform the stage objective, submit `autonomousActions`, chain settled Autonomous responses, and stop at the next RHC / AwaitingPlatform / Terminal boundary. You may briefly acknowledge the Case while working; do not ask the engineer to authorize autonomous work Loop already projected.
+Do **not** stop for a fake "continue" / "submit review" confirm. Perform the stage objective, submit `autonomousActions`, chain settled Autonomous responses, and stop at the next **RequiresHumanConfirmation** or Terminal (`None`) boundary — or when observation budget is exhausted after a platform wait. Temporary **`AwaitingPlatform`** mid-chain: observe and resume (**Platform-wait continuation**); do **not** treat it as the human stop. You may briefly acknowledge the Case while working; do not ask the engineer to authorize autonomous work Loop already projected.
 
 ### When `continuation` = `AwaitingPlatform`
 
-Report that platform work is in progress (without narrating internal stage names when skill says hide them). Observe via settlement / `get_transition_status` when applicable. Do **not** ask the engineer to refresh or continue.
+Briefly report that platform work is in progress (without narrating internal stage names when the skill says to hide them), e.g. "Loop is finishing evidence collection. I'm checking for the next actionable stage." Then **keep observing in this turn** per **Platform-wait continuation**. Do **not** ask the engineer to refresh or continue. Do **not** end with "I'll continue when Loop advances" unless the observation budget is exhausted.
 
 ### When terminal (`None`)
 
-Present result/status; do not act.
+Inspect and present the factual result/status; do not invent actions or assume success.
 
 **Release Assurance:** see `references/release-assurance.md`. Healthy RA needs no engineer assignment. When an offer is active, first-touch is RHC — present **Accept** / **Decline** only (Finish review hidden). After Accept, when `continuation` is Autonomous at ReleaseReview: surface evidence, **Finish review** in the same turn, then stop at HumanDecision with disposition `displayLabel`s. Never imply Accept restarts host evidence collection or finishes the review by itself.
 
@@ -732,7 +790,7 @@ Do **not** list raw `actionName`s in this summary. Resolve any engineer reply to
 
 | Phrase | First turn behavior |
 | ------ | ------------------- |
-| `Work on Loop CASE-XXXX` | `get_case_workspace` → follow `interactionDirective` (RHC → stop; Autonomous → may act same turn; AwaitingPlatform → observe; Terminal → report) |
+| `Work on Loop CASE-XXXX` | `get_case_workspace` → follow `interactionDirective` (RHC → stop; Autonomous → may act same turn; AwaitingPlatform → same-turn observe-and-resume; Terminal → report) |
 | `Investigate Loop case …` / `What's the current stage for CASE-…?` | Load and report only unless directive is Autonomous and work is in scope |
 | `Submit CompleteRemediationPlan for …` / `approve the plan` | Prior workspace load required; RHC=true submits **only** after confirmation |
 

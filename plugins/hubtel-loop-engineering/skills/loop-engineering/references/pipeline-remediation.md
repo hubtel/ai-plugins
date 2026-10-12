@@ -22,9 +22,22 @@ Mutations settle in Control Plane before the MCP tool returns:
 |-----------|-----------------|
 | `Succeeded` | Consume `currentStage`, `availableActions`, **`interactionDirective`**, and capability state from the submit response. **Do not** call `get_case_workspace` as a normal follow-up. Continue per `interactionDirective.continuation`. |
 | `Failed` | Surface `settlementReason` / `message`. Do not re-submit the same intent without engineer direction. |
-| `PendingSettlement` | Exceptional only. Call observational `get_transition_status` with the same `submissionId` / `idempotencyKey` — **never** re-signal. Do **not** narrate "Temporal is processing" or invent a refresh loop. |
+| `PendingSettlement` | Same-turn observation via `get_transition_status` with the same `submissionId` / `idempotencyKey` until Succeeded / Failed / observation-budget exhaustion — **never** re-signal. Do **not** narrate "Temporal is processing" or invent a background poller. Do **not** end the turn merely because settlement is pending. |
 
-`RequiresHumanConfirmation` on the directive is the stop signal. Settlement does not replace human authorization at those gates. RHC=false `autonomousActions` may chain in the same turn.
+`RequiresHumanConfirmation` on the directive is the stop signal (e.g. Fix review). **`AwaitingPlatform` is not a stop** — observe and resume in the same turn (shared Skill **Platform-wait continuation**). Settlement does not replace human authorization at RHC gates. RHC=false `autonomousActions` may chain in the same turn after the Case becomes actionable.
+
+### Accept → platform wait → investigation → Fix review (same turn)
+
+```text
+Human: Accept
+→ outcome may be PendingSettlement (or Succeeded into InvestigationPlanning)
+→ If PendingSettlement / AwaitingPlatform: observe (get_transition_status when keyed; else bounded get_case_workspace)
+→ When Succeeded / Autonomous at InvestigationPlanning: investigate + CompleteInvestigationPlanning without another engineer message
+→ Stop at AwaitingPlanningAuthorization (Fix review) — present Fix it / Change plan / Plan in detail / No fix needed
+→ Do not auto-select; do not resubmit Accept while observing
+```
+
+Multiple pending observations before Succeeded are expected. Budget exhaustion → report factual state and that another invocation is required — never "I'll continue when Loop advances" while ending the turn with budget remaining.
 
 ## Lifecycle (engineer-facing target)
 
@@ -95,7 +108,7 @@ When `interactionDirective.requiresHarness` is true (Planning, and Execution aft
 
 | Machine stage | Cursor treatment |
 |---------------|------------------|
-| **EvidenceCollection** | Automatic **before** worker offers. **Hide** — continuation `AwaitingPlatform` while platform collects. After Accept, **AcceptAssignment** settles as **PendingSettlement** until `InvestigationPlanning` is actionable, then Succeeded + Autonomous — continue investigation without asking the engineer to refresh. |
+| **EvidenceCollection** | Automatic **before** worker offers. **Hide** — continuation `AwaitingPlatform` while platform collects. After Accept, **AcceptAssignment** often settles as **PendingSettlement** until `InvestigationPlanning` is actionable; observe in the same turn, then Succeeded + Autonomous — continue investigation without another engineer message and without asking the engineer to refresh. |
 | Assignment offer | Keep — human Accept/Reject |
 
 **ApprovePlan ≠ ApproveExecution.** One Execute intent may submit both sequentially; they remain separate durable records.
@@ -127,7 +140,7 @@ Assignment acceptance is **not** a CapabilityExecution stage. CE stays on `Evide
 
 While `assignment.assignmentStatus` is `AwaitingAcceptance`, the workspace **overlays** `AcceptAssignment` / `RejectAssignment` on the EvidenceCollection contract. Submit those via MCP like any other governed action.
 
-If `assignment.assignmentStatus` is already `Accepted`, do **not** submit `AcceptAssignment` again — continue from the authoritative `interactionDirective` (PendingSettlement observation or Autonomous `InvestigationPlanning`).
+If `assignment.assignmentStatus` is already `Accepted`, do **not** submit `AcceptAssignment` again — continue from the authoritative `interactionDirective` (same-turn PendingSettlement / AwaitingPlatform observation, then Autonomous `InvestigationPlanning`).
 
 Teams (`Work on Loop CASE-XXXX`) is discovery only. Evidence is gathered **before** offers; after Accept do **not** narrate EvidenceCollection as a stage the engineer must wait through.
 

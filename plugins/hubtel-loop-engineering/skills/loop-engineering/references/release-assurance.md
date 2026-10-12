@@ -17,7 +17,7 @@ Unhealthy | Inconclusive → Cursor autonomous ReleaseReview (CompleteReleaseRev
 |-----------|-----------------|
 | `Succeeded` | Consume settled stage/actions from the submit response. **Do not** call `get_case_workspace` as a normal follow-up. |
 | `Failed` | Surface settlement reason; do not re-submit without engineer direction. |
-| `PendingSettlement` | Exceptional only — observational `get_transition_status` by `submissionId` / `idempotencyKey`. Never re-signal. |
+| `PendingSettlement` | Same-turn observational `get_transition_status` by `submissionId` / `idempotencyKey` (shared Skill **Platform-wait continuation**). Never re-signal. HumanDecision / Finish-review contracts unchanged. |
 
 Preserve HumanDecision confirmation gates. Honor `interactionDirective` — RA uses **Review** / **Decision** / **Platform** / **Terminal** phases only. **ReleaseReview is autonomous agent work** (`CompleteReleaseReview` RHC=false) — do not ask the engineer to authorize submitting the review. Do **not** invent fake Planning or Execution phases for Release Assurance.
 
