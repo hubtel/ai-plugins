@@ -92,6 +92,19 @@ Evidence block contents:
 3. **Reasons** — bullet the assessment `reasons` / `failedRules` (cite host evidence; do not invent)
 4. **Host evidence** — for each item in `releaseAssurance.hostEvidence` (or `evidence.engineeringEvidence`): type, status, summary (and evidence id when recommending SupportingEvidence)
 
+### On-demand host evidence detail (journal lines)
+
+Workspace host evidence stays **concise** (e.g. `journal: 80 line(s)`). That summary is **not** the full journal.
+
+When the engineer asks to inspect collected logs / journal / health body / host diagnostics:
+
+1. Prefer the `evidenceId` from `releaseAssurance.hostEvidence` for the journal (or other) row.
+2. Call MCP **`get_release_assurance_evidence`** with that `caseId` + `evidenceId` (optional `evidenceType` / `collectionWaveId` for multi-wave Cases).
+3. Present the persisted `MetadataJson.observation` fidelity: collected entries, empty journal, unavailable, or collection error — **never** invent lines or treat Summary as complete.
+4. Stay at the current gate (usually **HumanDecision**). Reading evidence is **not** a disposition — do **not** submit `RequestRollback` / `AcceptReleaseRisk` / `RequestEvidenceRecollection` unless the engineer explicitly chooses that option.
+
+Auth failures must surface without dumping evidence. Prefer one `evidenceId` when inspecting a single journal.
+
 Healthy releases must not be in this stage. Never invent a "continue" / "submit review" human message when Loop projected Autonomous.
 
 ## HumanDecision first-touch (Plain-English)

@@ -316,7 +316,7 @@ From the response, note:
 - `pipelineRemediation` — Pipeline Cases: evidence, latest/approved EngineeringBrief, freeze/delivery flags, pipeline failure status
 - `assignment` — assigned engineer when relevant
 
-Use `get_case_evidence` or `get_available_actions` only when you need a focused slice without re-fetching everything.
+Use `get_case_evidence` or `get_available_actions` only when you need a focused slice without re-fetching everything. For Release Assurance **journal lines / host diagnostic detail**, use **`get_release_assurance_evidence`** (prefer `evidenceId` from `releaseAssurance.hostEvidence`) — workspace summaries like `journal: N line(s)` are not the full observation.
 
 For Pipeline Remediation, prefer `pipelineRemediation.approvedEngineeringBrief` after ApprovePlan — never replace it with a newer mutable `latestEngineeringBrief` without revision/approval. Full reference: [references/pipeline-remediation.md](references/pipeline-remediation.md).
 
