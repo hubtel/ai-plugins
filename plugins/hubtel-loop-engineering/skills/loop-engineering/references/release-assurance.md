@@ -51,19 +51,39 @@ When engineering involvement is required (Unhealthy / Inconclusive escalated pat
 1. Resolve repository + evaluate eligible Workers — **do not** designate an owner (`SelectedEngineerWorkerId` stays null).
 2. Open competitive `CaseAssignmentOffer` rows (Offered) for eligible Workers.
 3. Case stays `AwaitingAcceptance` while Offers are open.
-4. Engineer Accept / Reject is a genuine RHC boundary (`AcceptAssignment` / `RejectAssignment`).
-5. First valid Accept wins atomically in Postgres; only then populate `SelectedEngineer*` and continue post-Accept RA lifecycle.
-6. Sibling Offers close as `WonByOther`; Rejected engineers are excluded for that Case (not re-offered).
+4. Platform may already be at `ReleaseReview` (evidence prepared) while Offers remain open — Accept/Reject are projected via the competitive assignment overlay (same mechanism as Pipeline), **not** as static ReleaseReview stage actions. While the caller's Offered row is active, workspace/`interactionDirective` show only Accept/Decline (Finish review is hidden).
+5. Engineer Accept / Reject is a genuine RHC boundary (`AcceptAssignment` / `RejectAssignment`); eligibility + first-wins stay in the assignment coordinator.
+6. First valid Accept wins atomically in Postgres; only then populate `SelectedEngineer*` — Accept does not rewind evidence collection or auto-complete the review.
+7. Sibling Offers close as `WonByOther`; Rejected engineers are excluded for that Case (not re-offered).
+8. `CompleteReleaseReview` requires the accepted DeviceCredential worker identity (server-side ownership gate).
 
 Silent auto-accept of an arbitrary first Worker is **disabled**.
 
-## ReleaseReview first-touch (evidence + autonomous submit)
+## Assignment offer first-touch (Plain-English)
 
-When `currentStage` is `ReleaseReview` and `interactionDirective.continuation` is `Autonomous`:
+When assignment offer is active (`phase` Assignment / Accept & Decline in `humanConfirmationActions`):
 
-1. Surface a short evidence block from `workspace.releaseAssurance` (deployment, `deterministicAssessment`, reasons, host evidence).
-2. **In the same turn**, produce the durable ReleaseReview and submit `CompleteReleaseReview` — do **not** ask the engineer to continue, refresh, or authorize submitting the review.
-3. After settlement → `HumanDecision` / RequiresHumanConfirmation: present disposition options and **stop**.
+```markdown
+**CASE-XXXXXXXX — {title}**
+**Where it is:** Host evidence is ready (or finishing). This release needs an engineer-owned review.
+**What you decide:** Accept assigns you responsibility for finishing the review. It does not restart host evidence collection or finish the review by itself.
+
+**Your options:**
+- **Accept** — take ownership and continue to the release review
+- **Decline** — decline with a short reason
+
+Nothing has been sent to Loop yet.
+```
+
+Prefer **AskQuestion** with Accept / Decline + Other. Submit as `AcceptAssignment` / `RejectAssignment`. Do **not** show or submit **Finish review** until after Accept.
+
+## ReleaseReview first-touch (evidence + autonomous Finish review)
+
+When `currentStage` is `ReleaseReview`, ownership is Accepted, and `interactionDirective.continuation` is `Autonomous`:
+
+1. Surface a short evidence block from `workspace.releaseAssurance` (deployment, `deterministicAssessment`, reasons, host evidence) in plain words.
+2. **In the same turn**, produce the durable review and submit **Finish review** (`CompleteReleaseReview`) — do **not** ask the engineer to continue, refresh, or authorize submitting the review.
+3. After settlement → HumanDecision / RequiresHumanConfirmation: present disposition options by **`displayLabel`** and **stop**.
 
 Evidence block contents:
 
@@ -73,6 +93,24 @@ Evidence block contents:
 4. **Host evidence** — for each item in `releaseAssurance.hostEvidence` (or `evidence.engineeringEvidence`): type, status, summary (and evidence id when recommending SupportingEvidence)
 
 Healthy releases must not be in this stage. Never invent a "continue" / "submit review" human message when Loop projected Autonomous.
+
+## HumanDecision first-touch (Plain-English)
+
+After Finish review settles:
+
+```markdown
+**CASE-XXXXXXXX — {title}**
+**Done:** Finish review
+**Next:** Choose what happens to this release.
+**Your options:**
+- **Roll back** — start the governed rollback path (Case stays open)
+- **Accept risk** — close as release risk accepted
+- **Re-collect evidence** — run another host evidence wave
+
+Nothing further has been sent to Loop yet.
+```
+
+Present only options from `availableActions` / `displayLabel`. Submit using the authoritative `actionName` (`RequestRollback` / `AcceptReleaseRisk` / `RequestEvidenceRecollection`).
 
 ## CompleteReleaseReview
 
@@ -108,13 +146,13 @@ Never auto-submit `RequestRollback`. Incomplete submissions are rejected (`Missi
 
 ## HumanDecision actions (current scope)
 
-All require explicit engineer confirmation + reason:
+All require explicit engineer confirmation + reason. Engineer-facing text uses **`displayLabel`**; submit with `actionName`:
 
-| Action | Effect |
-|--------|--------|
-| `RequestRollback` | Starts Rollback CE; **RA CE → Completed / RollbackRequested**; Case stays **Open** |
-| `AcceptReleaseRisk` | Persists `ReleaseRiskAccepted` outcome; RA CE Completed; **Case Closed**. On a **rollback verification** Case, also auto-completes the **linked originating** Case with `ReleaseRiskAccepted` when A↔B linkage exists. |
-| `RequestEvidenceRecollection` | RA CE stays **Running**; returns to host evidence collection (wave N+1) |
+| `displayLabel` | `actionName` | Effect |
+|----------------|--------------|--------|
+| Roll back | `RequestRollback` | Starts Rollback CE; **RA CE → Completed / RollbackRequested**; Case stays **Open** |
+| Accept risk | `AcceptReleaseRisk` | Persists `ReleaseRiskAccepted` outcome; RA CE Completed; **Case Closed**. On a **rollback verification** Case, also auto-completes the **linked originating** Case with `ReleaseRiskAccepted` when A↔B linkage exists. |
+| Re-collect evidence | `RequestEvidenceRecollection` | RA CE stays **Running**; returns to host evidence collection (wave N+1) |
 
 ## Deferred / not exposed
 
