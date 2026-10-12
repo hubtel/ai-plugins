@@ -45,6 +45,7 @@ The engineer reading the chat cares about the Case — what went wrong, what you
 - **Never surface internals:** HTTP status codes, API routes, DeviceCredential / tokens / auth headers, socket or file paths, environment variables, process IDs, MCP tool names, raw JSON, stack traces, or shell/tool output. Use stage objectives and action `displayLabel`s, not durable stage enums or `actionName`s.
 - **Failures follow the same rule.** Investigate quietly; then report in one or two sentences: what is blocked, whether the engineer's work is safe, and the one thing they can do (e.g. "Open the Hubtel Loop Agent app, then say continue"). Do not narrate the diagnosis step by step or paste what you ran.
 - Keep updates short. Technical detail belongs to the Case content itself (root cause, affected files, proposed changes), where the engineer needs it to decide.
+- **Do not invent a second label dictionary** in this skill. Always take option text from `currentStageContract.availableActions[].displayLabel` (fallback to `actionName` only when `displayLabel` is missing).
 
 ### First-touch continuation (authoritative)
 
@@ -82,7 +83,7 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 
 1. When given a Loop Case ID, call `get_case_workspace`.
 2. Read `capability.currentStage`, `capability.expectedStage`, `currentStageContract`, and **`interactionDirective`** before acting.
-3. **Stop when `continuation` is `RequiresHumanConfirmation`** — report phase, `stopReason`, and options. When **two or more** actions apply, use **AskQuestion** when available (see **Structured option prompts**).
+3. **Stop when `continuation` is `RequiresHumanConfirmation`** — summarize the objective in plain words and present options by `displayLabel`. Honor `stopReason` internally. When **two or more** actions apply, use **AskQuestion** when available (see **Structured option prompts**).
 4. **Submit without a new confirm only for `autonomousActions`** when `continuation` is `Autonomous` (including first-touch when Loop projected Autonomous). Never submit RHC=true / `humanConfirmationActions` without explicit engineer intent (except approved Execute dual-chain).
 5. If assignment offer is active (`phase` Assignment), only discuss **AcceptAssignment** or **RejectAssignment** until the engineer chooses.
 6. After Accept settles into Investigation (`continuation` Autonomous): run investigation and submit completion actions autonomously; then **stop** when planning authorization / HumanDecision / PlanReview is required. For **Pipeline**, stop at `AwaitingPlanningAuthorization` (**Fix review**) and offer Fix it (`ApproveFix`), Change plan (`RequestPlanRevision`), Plan in detail (`ApprovePlanning`) or No fix needed (`MarkNoRemediation`). For **PI**, after Plan* disposition proceed directly to Harness-backed RemediationPlanning (no second ApprovePlanning ask).
@@ -121,12 +122,12 @@ Explicit engineer confirmation is required before submitting any action in **`hu
 Valid confirmations are clear directives such as:
 
 - "accept" / "reject" (+ reason when required)
-- "proceed with planning" / "approve planning"
-- "Execute this plan" (maps to ApprovePlan then ApproveExecution when both valid)
+- "Fix it" / "Plan in detail" / "No fix needed" / "Change plan" (or the equivalent `displayLabel`)
+- "proceed with planning" / "approve planning" / "Execute this plan" (maps to ApprovePlan then ApproveExecution when both valid)
 - "yes, submit the plan" / "yes, complete investigation" / "approve the plan"
-- a named disposition: "AcceptNoAction", "PlanCodeRemediation", "RequestRevision", …
+- a machine `actionName` when the engineer prefers it (e.g. `ApproveFix`, `PlanCodeRemediation`) — resolve to that `actionName` before submit
 
-**Not sufficient on their own:** "looks good", "sounds fine", thumbs-up, or general enthusiasm without naming the action.
+**Not sufficient on their own:** "looks good", "sounds fine", thumbs-up, or general enthusiasm without naming the option.
 
 ### Medium bar — when N ≥ 2 options were offered (structured option prompts)
 
@@ -135,13 +136,15 @@ After you presented **two or more** choices (AskQuestion picker or prose list of
 **Sufficient (any one):**
 
 - An **AskQuestion** selection of one listed option (including **Other**, when Other text states a clear next intent)
-- Naming the action explicitly (capability `name` or unambiguous label), e.g. `AcceptAssignment`, `ApprovePlan`, `RequestRevision`, "reject the assignment"
+- Naming the option by **`displayLabel` or `actionName`** (unambiguous), e.g. "Fix it", "Plan in detail", `ApproveFix`, `ApprovePlan`, "reject the assignment"
 - **Other** free-text that clearly maps to one allowed path or an explicit non-submit intent (pause, refresh only, gather more evidence)
+
+After a valid selection, **resolve to the authoritative `actionName`** from `currentStageContract.availableActions` before calling MCP. Engineers are **not** required to type PascalCase.
 
 **Not sufficient when N ≥ 2 — do not submit:**
 
 - Bare "yes" / "ok" / "go ahead" / "lgtm" / "looks good" / "sounds fine" / "do it" / emoji / silence
-- Affirming the *recommendation* without naming which action ("that sounds right", "I agree with the recommendation")
+- Affirming the *recommendation* without naming which option ("that sounds right", "I agree with the recommendation")
 - Selecting multiple actions in one message (except the approved Execute intent → ApprovePlan + ApproveExecution sequence)
 
 **On insufficient reply:** do **not** call `submit_stage_output`, `request_capability_transition`, `submit_stage_retry`, or `close_engineering_case`. Re-present the **same** options (AskQuestion if available, else the same prose list) and ask the engineer to pick **one** named option or Other. One short re-ask — do not drip new questions.
@@ -162,10 +165,11 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 
 **Always include (picker or prose):**
 
-- **Every** permitted human action from `currentStageContract.availableActions` (and `humanConfirmationActions`) as its own selectable option — including actions with `showInPrimaryOptions: false` (e.g. `RequestMoreInvestigation`) and options Loop or you do not recommend. Never hide a valid choice behind **Other** or drop it because it is not the recommendation. Use **`displayLabel`** as the label (fall back to `actionName` only if `displayLabel` is missing). Keep `actionName` for submits.
-- **Mark the recommendation, don't filter by it.** When Loop (e.g. `humanDecision.activeRecommendation`) or your own analysis favours one option, list it first with **(Recommended)** and a one-line reason; list the rest after it with a short plain-English note on what each does. `showInPrimaryOptions: false` actions go last.
+- One selectable option per **primary** permitted action from `currentStageContract.availableActions` where `showInPrimaryOptions` is not `false` — use **`displayLabel`** as the AskQuestion / prose label (fall back to `actionName` only if `displayLabel` is missing). Keep `actionName` for submits only.
+- **Mark the recommendation, don't filter by it.** When Loop (e.g. `humanDecision.activeRecommendation`) or established skill guidance favours one option, list it first with **(Recommended)** and a one-line reason; list the rest after it with a short plain-English note on what each does. Never invent a recommendation that contradicts `interactionDirective.permittedActions`.
+- Do **not** list actions with `showInPrimaryOptions: false` (e.g. `RequestMoreInvestigation`) as primary picks — mention that path under **Other** when relevant (e.g. “want to dig further”).
 - An option that needs extra input (e.g. a reason) is still listed — ask for the input after the engineer picks it.
-- **Other** — free-text so the engineer can describe a different intent (e.g. partial plan revision, pause for evidence)
+- **Other** — free-text so the engineer can describe a different intent (e.g. dig further / re-investigate, partial plan revision, pause for evidence)
 
 **Use AskQuestion (or prose fallback) at these Loop gates (non-exhaustive):**
 
@@ -624,7 +628,7 @@ Prototype external interaction is the **default** for new Production Investigati
 | `InvestigationBrief` | `CompleteInvestigation` | `InvestigationSummary`, `EvidenceReferences` |
 | `ProductionDiagnosis` | `CompleteDiagnosis` | `Diagnosis`, `CandidateRemediation` |
 | `Recommendation` | `CompleteRecommendation` | recommendation artifact set (disposition, summary, action, rationale, urgency, confidence, evidence, risks, verification) |
-| `AwaitingHumanDecision` | Primary: `ApproveFix` (Fix it — only with a complete proposed fix plan; → Execution, no Harness), `PlanCodeRemediation` (Plan in detail), `AcceptNoAction` (No action), `RequestMoreInvestigation` (Investigate further — ask for the reason after it is picked). List all four; mark the recommended one | none (`RequestMoreInvestigation` requires `reason`) |
+| `AwaitingHumanDecision` | Primary: `ApproveFix` (Fix it — only with a complete proposed fix plan; → Execution, no Harness), `PlanCodeRemediation` (Plan in detail), `AcceptNoAction` (No action). `RequestMoreInvestigation` via Other + reason | none (`RequestMoreInvestigation` requires `reason`) |
 | `RemediationPlanning` | `CompleteRemediationPlan` | full remediation plan artifact set (see contract) |
 | `PlanReview` | `ApprovePlan`, `RequestRevision`, `CancelPlanning` (`RejectPlan` not offered) | none (`RequestRevision`, `CancelPlanning` benefit from `reason`) |
 | `AwaitingExecutionApproval` | `ApproveExecution`, `RequestRevision`, `Cancel` | none (`RequestRevision`, `Cancel` require `reason`) |
@@ -645,11 +649,11 @@ Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **no
 | `EvidenceCollection` (platform; **before** offers — hide) | none | platform evidence |
 | Assignment offer (Case `AwaitingAcceptance`, CE still `EvidenceCollection`) | `AcceptAssignment` / `RejectAssignment` | none (`RejectAssignment` requires reason) |
 | `InvestigationPlanning` | `CompleteInvestigationPlanning` | EngineeringBrief fields (`IssueSummary`, `RootCauseHypothesis`, `RecommendedChanges`, `SuspectedAffectedFiles`, `RecommendedValidationCommands`, `ShouldProceedToExecution`) |
-| `AwaitingPlanningAuthorization` (Fix review) | `ApproveFix` (→ Execution), `RequestPlanRevision` (→ InvestigationPlanning), `ApprovePlanning` (→ Planning), `MarkNoRemediation` | none (revision/no-remediation require reason) |
-| `Planning` (only after Plan in detail) | `CompletePlanning`, `MarkNoRemediation` | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
-| `PlanReview` | `ApprovePlan`, `RequestPlanRevision`, `MarkNoRemediation` (`RejectPlan` not offered) | none (revision/no-remediation require reason) |
-| `AwaitingExecutionApproval` | `ApproveExecution`, `CancelRemediation` | none (`CancelRemediation` requires reason) |
-| `Execution` | `ApproveImplementation`, `CompleteExecution`, `CancelRemediation` | `CompleteExecution` requires push-success delivery evidence |
+| `AwaitingPlanningAuthorization` (Fix review) | Fix it / Change plan / Plan in detail / No fix needed (`ApproveFix`, `RequestPlanRevision`, `ApprovePlanning`, `MarkNoRemediation`) | none (revision/no-remediation require reason) |
+| `Planning` (only after Plan in detail) | Finish plan / No fix needed (`CompletePlanning`, `MarkNoRemediation`) | EngineeringBrief (via `hbtl-harness-creator` breakdown approval first) |
+| `PlanReview` | Approve plan / Change plan / No fix needed (`ApprovePlan`, `RequestPlanRevision`, `MarkNoRemediation`; `RejectPlan` not offered) | none (revision/no-remediation require reason) |
+| `AwaitingExecutionApproval` | Start fix / Cancel (`ApproveExecution`, `CancelRemediation`) | none (`CancelRemediation` requires reason) |
+| `Execution` | Approve changes / Finish delivery / Cancel (`ApproveImplementation`, `CompleteExecution`, `CancelRemediation`) | `CompleteExecution` requires push-success delivery evidence |
 
 After `ApproveImplementation`: commit/push allowed; material code changes require governed revision. Happy-path after Fix it: implement → validate locally → **stop for chat review** → `ApproveImplementation` → commit/push → CompleteExecution. Happy-path after Plan in detail and Execute intent: harness-backed implement → validate locally → **stop for chat review** → `ApproveImplementation` (RHC Gate B) → commit/push → CompleteExecution. Cursor Always Run is not Gate B. Non-PR cases cannot authorize delivery — use `CancelRemediation` / `MarkNoRemediation` with `UnsupportedNonPrFailure`.
 
@@ -684,14 +688,14 @@ Respond with this template (plus capability-specific evidence blocks below), pre
 **Your options:**
 - **{Recommended displayLabel}** (Recommended) — {what it does, one line}
 - **{displayLabel}** — {what it does, one line}
-- … every other available option …
+- … every other primary available option …
 
 Nothing has been sent to Loop yet.
 ```
 
-Omit lines that do not apply instead of writing "n/a". Do not print stage enums, statuses, versions, flags, or field names. Read `remediationPlanning.session` / `latestPlan`, `executionContext`, and `pipelineRemediation` to work out where the Case really is (e.g. "a fix plan is waiting for your review", "the fix is pushed and checks are running"), then say that in plain words.
+Omit lines that do not apply instead of writing "n/a". Do **not** print stage enums, statuses, versions, flags, field names, or comma-separated machine `actionName` lists. Read `remediationPlanning.session` / `latestPlan`, `executionContext`, and `pipelineRemediation` to work out where the Case really is (e.g. "a fix plan is waiting for your review"), then say that in plain words.
 
-Prefer **AskQuestion** with one option per entry in **Your options** (every available action / `humanConfirmationActions`, recommended first) plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** named action (Medium bar). Do **not** echo `interactionDirective` fields (phase / continuation / requiresHarness / stopReason) into this reply.
+Prefer **AskQuestion** with one option per primary `displayLabel` (recommended first when supported) plus **Other**. If AskQuestion is not available, ask the same choices in short prose. Wait for the engineer to pick **one** option by displayLabel or actionName (Medium bar). Do **not** echo `interactionDirective` fields (phase / continuation / requiresHarness / stopReason) into this reply.
 
 ### When `continuation` = `Autonomous`
 
@@ -717,8 +721,10 @@ After each accepted transition:
 **CASE-XXXXXXXX — {title}**
 **Done:** {displayLabel of the action you submitted, in plain words}
 **Next:** {objective from refreshed contract, in plain words}
-**Your options:** {displayLabels of every available option, recommended one first — omit when Loop continues on its own}
+**Your options:** {displayLabels of every primary available option, recommended one first — omit when Loop continues on its own}
 ```
+
+Do **not** list raw `actionName`s in this summary. Resolve any engineer reply to `actionName` only at submit time.
 
 ## Trigger phrases
 

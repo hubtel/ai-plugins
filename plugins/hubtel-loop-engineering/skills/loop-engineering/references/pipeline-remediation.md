@@ -182,16 +182,16 @@ Lands on **AwaitingPlanningAuthorization**. Not a ProductionInvestigation remedi
 
 ## AwaitingPlanningAuthorization — Fix review
 
-Human gate. Present the brief as the proposed fix and offer (labels from `displayLabel`):
+Human gate. Investigation is done; the engineer decides what happens to the proposed fix. Present the brief in plain words, then offer options using workspace **`displayLabel`** (never a raw action-name list in chat):
 
-| Option | Action | Settles at |
-|--------|--------|-----------|
+| Option (`displayLabel`) | Submit as | Settles at |
+|-------------------------|-----------|-----------|
 | Fix it | `ApproveFix` | **Execution** — the brief is frozen as plan v{n} and execution is authorized (two durable records, one decision). `requiresHarness` is false. |
 | Change plan | `RequestPlanRevision` + `reason` | **InvestigationPlanning** — re-investigate and submit `CompleteInvestigationPlanning` again; the brief carries the revision reason. |
 | Plan in detail | `ApprovePlanning` | **Planning** — `hbtl-harness-creator` scaffold/resume + breakdown approval before CompletePlanning. |
 | No fix needed | `MarkNoRemediation` + known reason | **Complete** |
 
-`ApproveFix` is rejected (`TransitionNotAllowed`) when the Case has no PR ID; use No fix needed with `UnsupportedNonPrFailure`.
+Explain what the engineer is deciding (approve this fix now, revise it, plan in more detail, or stop), not the internal command names. `ApproveFix` is rejected (`TransitionNotAllowed`) when the Case has no PR ID; use No fix needed with `UnsupportedNonPrFailure`.
 
 ## Planning — CompletePlanning
 
