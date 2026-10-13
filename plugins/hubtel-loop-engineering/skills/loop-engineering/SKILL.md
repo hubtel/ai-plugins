@@ -235,7 +235,8 @@ When AskQuestion **is** available, do **not** list options only as prose bullets
 | Presenting completed plan for execution | **"Execute this plan"** (ApprovePlan→ApproveExecution) / Change plan / Cancel + Other |
 | `AwaitingExecutionApproval` alone | Start fix / Change plan / Cancel (per contract `displayLabel`s) + Other |
 | Exceptional Execution stops (validation fail, deviation) | Gate B / Cancel / revise paths per contract + Other |
-| After rejection or stage mismatch | Refresh + retry / different action from settled contract / Other |
+| After rejection or stage mismatch | Different action from settled contract / Other — **except** `Unauthorized`: do not offer retry of the same action with unchanged credentials; offer other permitted actions + Other |
+| After `Unauthorized` rejection | Other permitted actions from authoritative contract (if any) + Other — never “retry same action” with the same identity |
 | Stage-retry park (transient failure, post-delivery hold) | Retry / Replan via `submit_stage_retry` + Other — requires explicit confirmation; not a capability action |
 
 Do **not** AskQuestion for normal Autonomous progress (investigation completion, planning completion after harness breakdown approval, CompleteExecution after a successful push and Gate B) when those actions are in `autonomousActions`. **Do** stop after local implementation for Gate B (`ApproveImplementation`) even when Execution continuation is Autonomous — that action is RHC.
@@ -466,6 +467,7 @@ The MCP resolves the acting engineer from `assignment.engineerEmail` on the case
 | `accepted: true`, `outcome: Failed` | Signal delivered but settlement observed failure | Surface `settlementReason`; do not auto-retry |
 | `accepted: true`, `outcome: PendingSettlement` | Bounded settle timed out | Same-turn observational `get_transition_status` with `submissionId` / `idempotencyKey` until Succeeded / Failed / budget exhaustion (**Platform-wait continuation**) — **never re-submit** |
 | `accepted: false`, `code: TransitionNotAllowed` | Action not valid now | Re-read `availableActions`; do not retry the same action |
+| `accepted: false`, `code: Unauthorized` | Caller lacks permission for this action | Explain the permission failure in plain words. **Do not** suggest retrying the **same** action with unchanged credentials/identity. Case state is unchanged. You may still present **other** currently permitted actions from the authoritative `availableActions` / settled contract — do **not** invent Case state changes or silently drop actions from that contract |
 | `accepted: false`, `code: StageMismatch` | Stale expected stage | Realign from workspace/`expectedStage` — "The Case moved while we were working." Do not guess a retry stage |
 | `accepted: false`, `code: MissingRequiredOutputs` | Plan or stage output incomplete | List missing fields; remain in planning and complete the output |
 | `accepted: false`, `code: MissingRequiredReason` | Reason required | Collect reason from engineer and retry |

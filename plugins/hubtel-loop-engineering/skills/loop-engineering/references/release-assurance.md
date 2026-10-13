@@ -163,7 +163,7 @@ All require explicit engineer confirmation + reason. Engineer-facing text uses *
 
 | `displayLabel` | `actionName` | Effect |
 |----------------|--------------|--------|
-| Roll back | `RequestRollback` | Starts Rollback CE; **RA CE → Completed / RollbackRequested**; Case stays **Open** |
+| Roll back | `RequestRollback` | Starts Rollback CE; **RA CE → Completed / RollbackRequested**; Case stays **Open**. Authorized for the **accepted assigned engineer** DeviceCredential (LoopAdmin override exists; does **not** confirm/execute Azure rollback — that is `ConfirmRollback`). |
 | Accept risk | `AcceptReleaseRisk` | Persists `ReleaseRiskAccepted` outcome; RA CE Completed; **Case Closed**. On a **rollback verification** Case, also auto-completes the **linked originating** Case with `ReleaseRiskAccepted` when A↔B linkage exists. |
 | Re-collect evidence | `RequestEvidenceRecollection` | RA CE stays **Running**; returns to host evidence collection (wave N+1) |
 
