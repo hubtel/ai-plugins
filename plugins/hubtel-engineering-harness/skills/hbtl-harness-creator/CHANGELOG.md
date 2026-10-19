@@ -5,6 +5,18 @@ All notable changes to `hbtl-harness-creator` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [2.8.0] - 2026-10-15
+
+### Changed
+
+- **Push once per run, not once per feature.** A multi-feature autopilot run used to run the whole push gate after every feature — docs subagent, quality gate (build + full tests + Sonar upload), Sonar MCP review, push and PR link — so N features cost N of each plus N CI builds, all but the last on intermediate states nobody merges. Each feature is still verified, reviewed (step 3.8) and **committed on its own**; the push gate and PR now run once per **push-gate invocation**: when the queue is empty, when the human says "stop after this one", at a **checkpoint** every `BATCH_CHECKPOINT_FEATURES` (4) features, or at session end. The PR is opened at the run's first push (linking every feature committed so far); later pushes use P.12b. A single-feature request behaves exactly as before.
+- **State model: `committed` vs `delivered`.** The queue now runs off **`committed`** (commit + rows `done` + `evidence` + `reviewVerdict`; `feature-done` still fires at commit). **`delivered`** is reached only when a successful push carries the feature, and is reported once per feature per invocation. `Feature <featId>: committed — evidence: commit <hash>` is a legitimate per-feature close. Every rule that continued the queue only after `delivered` was rekeyed — the approval-mode table, Where to start, *Autopilot extends the turn*, triage step 10, the Post-done autopilot variant, Closing report, P.12 and SKILL.md — and the self-test fails if any comes back.
+- **Documentation once per run.** P.0 runs only at the run's final push, never at a checkpoint, so docs are written with every feature known. The Documentation Gate's promise is restated as **"the PR ends documented"**; a checkpoint may carry undocumented code temporarily. If a checkpoint pushed code and nothing new follows, P.0 runs alone and pushes its `docs:` commit.
+- **Stops report instead of pushing.** A blocked feature or a hard rail raised during implementation **stops, reports the committed-but-unpushed features, and asks** whether to push them (both modes); a session ending while that question is open does not push. "Stop after this one" still finishes and delivers. A push-gate failure reports `push blocked` and is never re-run on the agent's own.
+- **Cycle feedback and P.13 once per run** — never at a checkpoint. Supervised asks `Push now?` / `Open a pull request?` once per invocation; a `not yet` at a checkpoint is recorded and the queue continues.
+- **Late failures are attributed, not guessed** — a failing test or file is traced through `git log` past docs and fix commits to the first `Closed: #…` trailer and its `featId`; ambiguous or combined-feature failures report the candidates.
+- **Startup names unpushed features** from commit trailers and resumes accordingly; the at-will Reviewer now defaults to the **most recently committed** feature. Gotcha #55.
+
 ## [2.7.0] - 2026-09-28
 
 ### Added

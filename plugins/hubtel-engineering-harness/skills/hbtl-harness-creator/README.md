@@ -76,6 +76,7 @@ Tier-1 structural checks (exit code 1) include: duplicate feature IDs, missing v
 - [x] Azure status sync (`update_task_status` moves a row's task to Active when it goes `in-progress`)
 - [x] Task-context recovery on resume (`get_task_details` fetches the full Azure spec — batched `taskId`s, read-only — for rows a fresh session didn't author, so lean one-line rows stay resumable)
 - [x] Post-PR CI monitor (P.13 — opt-in soft-ask once the queue is empty; watches the newest PR build per pipeline for HEAD, offers a fix + push on code-related failures)
+- [x] Batched push (multi-feature runs commit each feature, then push and open the PR once per invocation — queue end, checkpoint every 4 features, or stop)
 - [x] On-demand Reviewer subagent (engineer-invoked; acceptance criteria + Hubtel guidelines vs the delivered feature; read-only, capped, never a gate)
 - [x] HTML assessment report
 - [x] Structural benchmark report

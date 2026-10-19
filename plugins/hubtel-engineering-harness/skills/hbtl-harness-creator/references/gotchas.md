@@ -587,6 +587,16 @@ Same turn; both modes. No skip command — dismissed form, silence, or no clear 
 
 ---
 
+## 55. Pushed After Every Feature — or Stranded Committed Work
+
+**Symptom**: Two opposite failures. **(a)** In a multi-feature autopilot run the agent ran the full push gate after every feature — docs subagent, quality gate, Sonar review, push, PR link — so a four-feature run paid for four of each plus four CI builds, all but the last on states nobody merges. **(b)** Once pushing moved to the end of the run, an agent skipped the push after `committed` because "the batch comes later", the session ended, and finished features were left on one machine; or it pushed after a **blocked** feature without asking, opening a PR with half a delivery.
+
+**Cause**: The queue was keyed off `delivered` in six places and `committed` was declared a transient line, so the only way to start the next feature was to push the current one. Batching without a state model swaps one failure for the other.
+
+**Fix**: **The queue runs off `committed`** (commit + rows `done` + evidence + `reviewVerdict`); **`delivered`** is reached only when a successful push carries the feature. Pushes happen at **push-gate invocations**: queue empty, "stop after this one", a checkpoint every `BATCH_CHECKPOINT_FEATURES` (4) features, or session end with no stop awaiting the human. A **blocked feature or hard rail stops, reports the committed-but-unpushed features, and asks** — never pushes on its own. Step 3.8 review and the commit stay per feature; only the push moves. See `templates/agents.md` → **Approval mode** → Autopilot completion sequence.
+
+---
+
 ## Related Reading
 
 - [Memory Persistence Pattern](memory-persistence-pattern.md) — Gotchas #1, #3, #4, #15

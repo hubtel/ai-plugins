@@ -1061,6 +1061,8 @@ export function scoreHarness(files, options = {}) {
       textHas(agents, ['Feature review (independent rail'], 'Feature review rail (step 3.8) documented'),
       textHas(agents, ['featureBaseSha'], 'featureBaseSha recorded at feature start'),
       textHas(agents, ['reviewVerdict'], 'Feature review verdict marker documented'),
+      textHas(agents, ['The queue runs off `committed`, never off `delivered`'], 'Batched push state model documented'),
+      textHas(agents, ['BATCH_CHECKPOINT_FEATURES'], 'Batch checkpoint default documented'),
       textHas(agents, ['Every `observed` line states what you did'], 'Reviewer trail requires evidence on observed rows'),
       textHas(agents, ['link_to_pull_request'], 'Later features link work items to the open PR (P.12b)'),
       textHas(agents, ['Closing report', 'evidence: commit'], 'Closing report status line documented'),

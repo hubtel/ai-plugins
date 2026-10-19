@@ -964,6 +964,41 @@ try {
     throw new Error('fast tier should contain the lint (static) command');
   }
 
+  // --- Batched push: the queue runs off `committed`; pushes happen per invocation ---
+  {
+    const template = await readFile(path.join(skillRoot, 'templates', 'agents.md'), 'utf8');
+    const skillDoc = await readFile(path.join(skillRoot, 'SKILL.md'), 'utf8');
+    const mustExist = [
+      'State model — `committed` vs `delivered`', 'The queue runs off `committed`, never off `delivered`',
+      'BATCH_CHECKPOINT_FEATURES = 4', 'When a push-gate invocation runs',
+      'stop, report, ask — do not push', 'Attributing a late failure (batched pushes)',
+      'the PR ends documented', 'P.0 (documentation) runs only at the run\'s final invocation',
+      'no Cycle feedback, no P.13', 'Never at a checkpoint invocation',
+      'never** offers P.13', 'most recently committed feature'
+    ];
+    // Per-feature work must survive batching: only the push moves.
+    const mustRemain = [
+      'Feature review (step 3.8) — before the commit, not after',
+      '**`feature-done` is appended and shipped now, at commit**',
+      'Feature <featId>: committed — evidence: commit <hash>', 'reviewVerdict'
+    ];
+    for (const anchor of [...mustExist, ...mustRemain]) {
+      if (!template.includes(anchor)) throw new Error(`templates/agents.md is missing "${anchor}" - batched push or per-feature review/commit regressed`);
+    }
+    // Any of these brings back push-per-feature (or a queue that waits on a push).
+    const stale = [
+      'After that feature is `delivered`', 'after each `delivered`', 'after each feature `delivered`',
+      'committed — running push gate', 'Autopilot completion step 6',
+      'After the commit, continue straight into P.1–P.7'
+    ];
+    for (const phrase of stale) {
+      if (template.includes(phrase)) throw new Error(`templates/agents.md still has "${phrase}" - it keys the queue off a per-feature push`);
+      if (skillDoc.includes(phrase)) throw new Error(`SKILL.md still has "${phrase}" - it keys the queue off a per-feature push`);
+    }
+    if (skillDoc.includes('After each feature is `delivered`')) throw new Error('SKILL.md still continues the queue only after each feature is delivered');
+    if (!skillDoc.includes('### Batched push (multi-feature runs)')) throw new Error('SKILL.md is missing the Batched push section');
+  }
+
   // --- Step 3.7 retired: a verified UI row no longer needs a ui-runtime artifact ---
   // Behaviour is verified once per feature by the step-3.8 review (reviewVerdict on the
   // rows), not per task by a self-graded artifact. Existing .harness/ui-runtime/ files in
@@ -1095,7 +1130,9 @@ try {
     'Reviewer independent behaviour verification documented',
     'Feature review rail (step 3.8) documented',
     'featureBaseSha recorded at feature start',
-    'Feature review verdict marker documented'
+    'Feature review verdict marker documented',
+    'Batched push state model documented',
+    'Batch checkpoint default documented'
   ]) {
     if (!checkPasses(qaCheck)) {
       throw new Error(`scoreHarness should pass "${qaCheck}" after scaffold`);
