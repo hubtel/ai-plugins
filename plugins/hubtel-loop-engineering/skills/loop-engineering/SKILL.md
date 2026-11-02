@@ -1,6 +1,6 @@
 ---
 name: loop-capability-operation
-description: Operates Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP. Use when the user mentions Loop, a Case ID (CASE-XXXXXXXX or GUID), Production Investigation, Release Assurance, Pipeline Remediation, PipelineFailure, CompleteInvestigationPlanning, MarkNoRemediation, CancelRemediation, InvestigationPlanning, Fix review, ApproveFix, ApprovePlanning, AwaitingPlanningAuthorization, ReleaseReview, CompleteReleaseReview, RequestRollback, AcceptReleaseRisk, RequestEvidenceRecollection, CreateProductionInvestigation, capability stage, AcceptAssignment, RejectAssignment, CompleteInvestigation, CompleteDiagnosis, CompleteRecommendation, ReturnToInvestigation, AcceptNoAction, PlanCodeRemediation, CompleteRemediationPlan, ApprovePlan, RequestPlanRevision, ApproveExecution, ApproveImplementation, CompleteExecution, RequestRevision, Recommendation, RemediationPlanning, PlanReview, Execution, AwaitingExecutionApproval, human decision, AwaitingHumanDecision, assignment acceptance, RequestHumanInput, ProvideHumanInput, AwaitingHumanInput, RequestMoreEvidence, interactionDirective, or asks to work on an engineering case. Drive continuation from interactionDirective — Autonomous may chain RHC=false actions; RequiresHumanConfirmation is the stop signal (except approved Execute→ApprovePlan+ApproveExecution).
+description: Operates Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP. Use when the user mentions Loop, a Case ID (CASE-XXXXXXXX or GUID), Production Investigation, Release Assurance, Pipeline Remediation, PipelineFailure, Engineering Trigger Response, EngineeringTriggerResponse, ETR, Engineering Event, Trigger Team, CompleteDisposition, BeginEngineeringResponse, ApproveRemediationExecution, CompleteRemediationExecution, CompleteDirectedAction, BeginFinalLifecycle, CompleteVerification, ConfirmDirectedActionCompleted, AcceptEngineeringOutcome, CodeRemediation, DirectedAction, InvestigationDisposition, AwaitingNextLifecycleStep, AwaitingFinalLifecycleStep, CompleteInvestigationPlanning, MarkNoRemediation, CancelRemediation, InvestigationPlanning, Fix review, ApproveFix, ApprovePlanning, AwaitingPlanningAuthorization, ReleaseReview, CompleteReleaseReview, RequestRollback, AcceptReleaseRisk, RequestEvidenceRecollection, CreateProductionInvestigation, capability stage, AcceptAssignment, RejectAssignment, CompleteInvestigation, CompleteDiagnosis, CompleteRecommendation, ReturnToInvestigation, AcceptNoAction, PlanCodeRemediation, CompleteRemediationPlan, ApprovePlan, RequestPlanRevision, ApproveExecution, ApproveImplementation, CompleteExecution, RequestRevision, Recommendation, RemediationPlanning, PlanReview, Execution, AwaitingExecutionApproval, human decision, AwaitingHumanDecision, assignment acceptance, RequestHumanInput, ProvideHumanInput, AwaitingHumanInput, RequestMoreEvidence, interactionDirective, or asks to work on an engineering case. Drive continuation from interactionDirective — Autonomous may chain RHC=false actions; RequiresHumanConfirmation is the stop signal (except approved Execute→ApprovePlan+ApproveExecution).
 ---
 
 # Loop Capability Operation
@@ -90,7 +90,7 @@ First-touch protects against **unauthorized** mutation (RHC=true). It must **not
 7. If the stage is `Recommendation`, formulate an evidence-backed disposition recommendation. Submit **CompleteRecommendation** when autonomous; never auto-select a human disposition.
 8. If the stage is `AwaitingHumanDecision` / RA `HumanDecision`, present dispositions — never auto-select even when confidence is high. For PI, when `ApproveFix` (**Fix it**) is offered, show `humanDecision.activeRecommendation.proposedFixPlan` with it; it appears only when that plan is `complete`.
 8b. If RA `ReleaseReview`, ownership is Accepted, and `continuation` is Autonomous: surface deployment + host evidence in plain words, then produce and submit **Finish review** (`CompleteReleaseReview`) without asking the engineer to authorize the submit; then stop at HumanDecision and present disposition options by `displayLabel` (Roll back / Accept risk / Re-collect evidence).
-9. If `requiresHarness` is true (**Planning or Execution on a code-change capability** — Production Investigation, and Pipeline Remediation after Plan in detail; Pipeline Execution reached through Fix it projects `requiresHarness: false`, so implement directly without scaffolding a Harness): resolve the target repo; resume the Engineering Harness or invoke `hbtl-harness-creator` (skill command **scaffold** if missing). **Planning:** follow that skill (overall plan, breakdown, **engineer approval of the breakdown**, Azure/task rows) then submit Loop `CompletePlanning` / `CompleteRemediationPlan`. **Execution:** implement through the same harness, stop for chat review, then Gate B / push. Never use the legacy Worker coding harness. Reuse one harness for Planning and Execution unless evidence requires otherwise. Release Assurance has no code Planning/Execution and does not set `requiresHarness`.
+9. If `requiresHarness` is true (**Planning or Execution on a code-change capability** — Production Investigation; Pipeline Remediation after Plan in detail; **Engineering Trigger Response** `RemediationPlanning` / `RemediationExecution` / `FinalVerification`; Pipeline Execution reached through Fix it projects `requiresHarness: false`, so implement directly without scaffolding a Harness): resolve the target repo; resume the Engineering Harness or invoke `hbtl-harness-creator` (skill command **scaffold** if missing). **Planning:** follow that skill (overall plan, breakdown, **engineer approval of the breakdown**, Azure/task rows) then submit Loop `CompletePlanning` / `CompleteRemediationPlan`. **Execution (PI/PF):** implement through the same harness, stop for chat review, then Gate B / push. **Execution (ETR):** honor `ApproveRemediationExecution` before mutation recording; bind `ExecutionAttemptId` / `PlanReference`; do **not** import PI Gate B (`ApproveImplementation`) or PF `CompleteExecution` close-at-push — ETR terminal close is `AcceptEngineeringOutcome`. Never use the legacy Worker coding harness. Reuse one harness for Planning and Execution unless evidence requires otherwise. Release Assurance has no code Planning/Execution and does not set `requiresHarness`.
 10. Treat Loop evidence as production facts, not automatically as conclusions.
 11. Use repository/internal tooling to satisfy the current stage objective.
 12. Do not transition merely because work was attempted or a draft exists in chat.
@@ -157,6 +157,7 @@ After platform wait clears, continue Autonomous work until **that capability's**
 - **Pipeline Remediation** — stop at **Fix review** (`AwaitingPlanningAuthorization`); present Fix it / Change plan / Plan in detail / No fix needed. Do **not** auto-select.
 - **Production Investigation** — continue Brief → Diagnosis → Recommendation; stop at **AwaitingHumanDecision** disposition. Do **not** import PF Fix review or an extra ApprovePlanning step; Plan in detail (`PlanCodeRemediation`) already authorizes planning under PI's contract.
 - **Release Assurance** — may use this same observation protocol after Accept / PendingSettlement; **Finish review** and **HumanDecision** contracts remain unchanged (never auto-pick dispositions).
+- **Engineering Trigger Response (ETR)** — stop at Accept/Decline; after disposition at **Begin engineering response** (`BeginEngineeringResponse`); for CodeRemediation at **Approve remediation** (`ApproveRemediationExecution`); then **Begin final verification** (`BeginFinalLifecycle`) and **Accept outcome and close** (`AcceptEngineeringOutcome`). Do **not** import PI HumanDecision / Fix it / Gate B onto ETR. Full reference: [references/engineering-trigger-response.md](references/engineering-trigger-response.md).
 
 ## Human confirmation
 
@@ -700,6 +701,26 @@ Full Release Assurance escalated-path reference: [references/release-assurance.m
 
 Full Pipeline Remediation Cursor-native reference: [references/pipeline-remediation.md](references/pipeline-remediation.md)
 
+Full Engineering Trigger Response reference: [references/engineering-trigger-response.md](references/engineering-trigger-response.md)
+
+## Engineering Trigger Response (ETR) scope
+
+ETR Cases use capability type **EngineeringTriggerResponse**. Trigger Team already judged actionability — do not re-decide it. Read workspace **`engineeringTrigger`** for trigger context and lifecycle evidence. Dispositions are Cursor-selected via **`CompleteDisposition`** only: `CodeRemediation` | `DirectedAction` | `NoAction` (never Escalate/Blocked).
+
+| Stage / gate | Completion / review actions | Required outputs |
+| ----- | --------------------------- | ---------------- |
+| Assignment / Platform init | Accept / Decline; observe until Investigation | none (Decline needs reason) |
+| `InvestigationBrief` | `CompleteInvestigation`, `RequestMoreEvidence` | `InvestigationSummary`, `EvidenceReferences` (read-only) |
+| `InvestigationDisposition` | `CompleteDisposition` | disposition + summary + rationale |
+| `AwaitingNextLifecycleStep` | `BeginEngineeringResponse` (RHC) | none |
+| CodeRemediation planning → auth → execution | `CompleteRemediationPlan` → `ApproveRemediationExecution` (RHC) → `CompleteRemediationExecution` | plan artifacts; execution needs `PlanReference` + **`ExecutionAttemptId`** |
+| DirectedAction pending | `CompleteDirectedAction` | recommendation only (`Recommended` / `Pending` / `pendingExternalCompletion: true`) |
+| `AwaitingFinalLifecycleStep` | `BeginFinalLifecycle` (RHC) | none — Temporal `ContinueFinalLifecycle` is not an MCP action |
+| Final verification / DA completion | `CompleteVerification` or `ConfirmDirectedActionCompleted` | status+summary+attempt id, or correlated completion evidence |
+| `AwaitingOutcomeAcceptance` | `AcceptEngineeringOutcome` (RHC) | closes Case — never invent closure |
+
+Pilot flag gates initiation only. Preserve PI/PF/RA paths unchanged when the Case is not ETR.
+
 ## Pipeline Remediation Cursor-native scope
 
 Interactive agent stages (CapabilityExecution). Assignment Accept/Reject is **not** a CE stage, but is **projected onto** `EvidenceCollection` while `assignment.assignmentStatus=AwaitingAcceptance`:
@@ -773,6 +794,8 @@ Inspect and present the factual result/status; do not invent actions or assume s
 
 **Pipeline Remediation:** documented lifecycle is Platform EvidenceCollection → Competitive Offers → Accept → Assignment Reconciliation/PendingSettlement → InvestigationPlanning → Plan Review → Execution → Resolution. When assignment offer is active (`continuation` RHC), surface `pipelineRemediation.evidence` as needed and offer only `AcceptAssignment` / `RejectAssignment` from `availableActions` (projected onto EvidenceCollection — not a separate CE stage). After Accept, follow `interactionDirective` — do **not** repeat `AcceptAssignment`. See `references/pipeline-remediation.md`.
 
+**Engineering Trigger Response:** Platform evidence/eligibility → Accept → local init (Platform-wait) → InvestigationBrief → CompleteDisposition → RHC BeginEngineeringResponse → disposition-specific path → RHC BeginFinalLifecycle → verification/completion → RHC AcceptEngineeringOutcome. Surface `engineeringTrigger` briefly at RHC gates. See `references/engineering-trigger-response.md`.
+
 ## Engineer-facing summary template
 
 After each accepted transition:
@@ -796,4 +819,4 @@ Do **not** list raw `actionName`s in this summary. Resolve any engineer reply to
 | `Investigate Loop case …` / `What's the current stage for CASE-…?` | Load and report only unless directive is Autonomous and work is in scope |
 | `Submit CompleteRemediationPlan for …` / `approve the plan` | Prior workspace load required; RHC=true submits **only** after confirmation |
 
-Saying "Work on Loop …" is **never** permission to submit RHC=true actions (Accept, ApprovePlanning, Plan*, Execute, HumanDecision dispositions, etc.). It **does** allow Cursor to perform Loop-projected Autonomous work in the same turn.
+Saying "Work on Loop …" is **never** permission to submit RHC=true actions (Accept, ApprovePlanning, Plan*, Execute, HumanDecision dispositions, ETR `BeginEngineeringResponse` / `ApproveRemediationExecution` / `BeginFinalLifecycle` / `AcceptEngineeringOutcome`, etc.). It **does** allow Cursor to perform Loop-projected Autonomous work in the same turn. Electron's `Loop engineering case CASE-…` bootstrap is equivalent first-touch — load workspace via MCP; no Case-field payload is embedded in the prompt.
