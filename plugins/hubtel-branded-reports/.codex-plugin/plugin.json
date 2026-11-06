@@ -1,0 +1,25 @@
+{
+  "name": "hubtel-branded-reports",
+  "version": "1.0.0",
+  "description": "Produce Hubtel-branded PDF reports and PowerPoint decks using the Hubtel visual language.",
+  "author": {
+    "name": "Hubtel Enablement Team",
+    "email": "engineering@hubtel.com"
+  },
+  "keywords": [
+    "hubtel",
+    "pdf",
+    "pptx",
+    "reports",
+    "brand",
+    "weasyprint",
+    "python-pptx"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Hubtel Branded Reports",
+    "category": "Engineering",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
+  }
+}

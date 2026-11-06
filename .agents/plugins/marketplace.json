@@ -45,6 +45,20 @@
       "category": "Engineering",
       "description": "Operate Hubtel Loop Engineering Cases through governed capability actions via the loop-engineering MCP.",
       "version": "1.0.2"
+    },
+    {
+      "name": "hubtel-branded-reports",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hubtel-branded-reports"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering",
+      "description": "Produce Hubtel-branded PDF reports and PowerPoint decks using the Hubtel visual language.",
+      "version": "1.0.0"
     }
   ]
 }
