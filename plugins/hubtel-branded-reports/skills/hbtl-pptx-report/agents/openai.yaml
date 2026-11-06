@@ -2,4 +2,4 @@ version: 1
 interface:
   display_name: Hubtel PPTX Report
   short_description: Produce Hubtel-branded PowerPoint decks with python-pptx helpers, Sora, and Hubtel layouts.
-  default_prompt: Create a Hubtel-branded PowerPoint deck for this content using /hbtl-pptx-report.
+  default_prompt: Create a Hubtel-branded PowerPoint deck for this content.

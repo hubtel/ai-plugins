@@ -1,9 +1,9 @@
 ---
 name: hbtl-pptx-report
-description: "Use this skill whenever the user asks for a Hubtel-branded PowerPoint presentation, slide deck, pitch deck, exec deck, board deck, or any deliverable rendered as a .pptx file that must look and feel like Hubtel. Covers only the visual/design layer: the palette, Sora typography, spacing, the wave motif, logo/icon usage, chart palette, and a set of slide layouts. Does NOT prescribe the deck's analytical voice, argument, section order, or depth — that stays with the caller or whichever content skill drives the deck."
+description: "Use this skill whenever the user asks for a Hubtel-branded PowerPoint presentation or slides — including phrases like hubtel powerpoint, hubtel power point, hubtel slides, hubtel slide, hubtel presentation, hubtel slides presentation, hubtel slide presentation, Hubtel-branded PPTX, slide deck, pitch deck, exec deck, board deck, or any deliverable rendered as a .pptx that must look and feel like Hubtel. Covers only the visual/design layer: the palette, Sora typography, spacing, the wave motif, logo/icon usage, chart palette, and a set of slide layouts. Does NOT prescribe the deck's analytical voice, argument, section order, or depth — that stays with the caller or whichever content skill drives the deck."
 metadata:
   author: "Hubtel Enablement Team"
-  version: "1.0.0"
+  version: "1.1.0"
   date_added: 2026-11-06
   last_updated: 2026-11-06
 compatibility: Requires Python with python-pptx, Pillow, cairosvg, and fonttools. Designed for Hubtel engineering projects.
@@ -17,7 +17,9 @@ compatibility: Requires Python with python-pptx, Pillow, cairosvg, and fonttools
 /hbtl-pptx-report
 ```
 
-Dresses a PowerPoint deck in Hubtel's brand.Design layer only — the argument, section order, and depth come from the caller. This skill is self-contained for that: the helper module below covers everything needed to build every layout in this file. It does not re-teach general python-pptx mechanics (masters, layouts, placeholders, runs, shapes, charts) — those are out of scope here because the helpers are built specifically to avoid them (see Non-negotiables: never a built-in layout, never a placeholder).
+Slash is optional. Also activate this skill when the user asks in natural language for Hubtel slides or a PowerPoint deliverable — for example: hubtel powerpoint, hubtel power point, hubtel slides, hubtel slide, hubtel presentation, hubtel slides presentation, hubtel slide presentation, Hubtel-branded PPTX, pitch deck, exec deck, or board deck.
+
+Dresses a PowerPoint deck in Hubtel's brand. Design layer only — the argument, section order, and depth come from the caller. This skill is self-contained for that: the helper module below covers everything needed to build every layout in this file. It does not re-teach general python-pptx mechanics (masters, layouts, placeholders, runs, shapes, charts) — those are out of scope here because the helpers are built specifically to avoid them (see Non-negotiables: never a built-in layout, never a placeholder).
 
 **Scope.** One editable `.pptx`. Not HTML (`hbtl-html-report`), not PDF (`hbtl-pdf-report`), not Word (`docx`), not spreadsheet (`xlsx`).
 

@@ -1,12 +1,12 @@
 ---
 name: hbtl-pdf-report
-description: "Use this skill whenever the user asks for a Hubtel-branded PDF report, analysis document, one-pager, HOD brief, board pack, or any deliverable rendered as a .pdf file that must look and feel like Hubtel. Self-contained: carries the full Hubtel visual language (palette, Sora typography, wave motif, layouts, section patterns, chart palette) plus the PDF-specific mechanics (A4, print CSS, WeasyPrint render, running footer with page number, cover page). Does NOT prescribe the report's analytical voice, structure of findings, or depth of analysis — that stays with the caller or whichever content skill drives the report."
+description: "Use this skill whenever the user asks for a Hubtel-branded PDF report or document — including phrases like hubtel pdf report, hubtel pdf, hubtel document, hubtel document report, hubtel doc, hubtel doc report, hubtel report, Hubtel-branded PDF, analysis document, one-pager, HOD brief, board pack, or any deliverable rendered as a .pdf that must look and feel like Hubtel. Self-contained: full Hubtel visual language (palette, Sora typography, wave motif, layouts, section patterns, chart palette) plus PDF mechanics (A4, print CSS, Chromium render via Playwright, running footer with page number, cover page). Does NOT prescribe analytical voice, structure of findings, or depth — that stays with the caller or whichever content skill drives the report."
 metadata:
   author: "Hubtel Enablement Team"
-  version: "1.0.0"
+  version: "1.1.0"
   date_added: 2026-11-06
   last_updated: 2026-11-06
-compatibility: Requires Python with weasyprint and beautifulsoup4. Designed for Hubtel engineering projects.
+compatibility: Requires Python with playwright and pypdf, plus Chromium via `playwright install chromium`. Designed for Hubtel engineering projects.
 ---
 
 # Hubtel PDF report (`/hbtl-pdf-report`)
@@ -17,34 +17,33 @@ compatibility: Requires Python with weasyprint and beautifulsoup4. Designed for 
 /hbtl-pdf-report
 ```
 
-Produces `.pdf` deliverables that carry the Hubtel brand. This skill is **self-contained** — the whole design system lives inside it, plus the PDF-specific mechanics. Build the report as HTML using the rules below, then render it to PDF with the WeasyPrint recipe at the end.
+Slash is optional. Also activate this skill when the user asks in natural language for a Hubtel PDF or document deliverable — for example: hubtel pdf report, hubtel pdf, hubtel document, hubtel document report, hubtel doc, hubtel doc report, hubtel report, Hubtel-branded PDF, one-pager, HOD brief, or board pack.
+
+
+Produces `.pdf` deliverables that carry the Hubtel brand. This skill is **self-contained** — the whole design system lives inside it, plus the PDF-specific mechanics. Build the report as HTML using the rules below, then render it to PDF with the headless-Chromium recipe at the end.
 
 **Scope.** One `.pdf`. For HTML use `hbtl-html-report`, slides `hbtl-pptx-report`, Word `docx`, spreadsheet `xlsx`.
 
 ## Renderer constraints — read first
 
-**WeasyPrint is the only renderer.** No browser, no Chromium, no JavaScript. Every rule in this file assumes it. These seven constraints are referenced throughout as **R1**–**R7**; each is stated once, here, and pointed at from wherever it bites. They are not bugs to fight — design within them.
+**The renderer is headless Chromium via Playwright** — `page.pdf()` against real HTML. A real browser engine resolves `var()` inside SVG, supports `:has()`, and applies `gap` consistently, so design normally. Five real differences from an ordinary web page:
 
-**R1 — No JavaScript, at all.** Mermaid, D3, Recharts, Chart.js and anything else that renders after page load produce an empty container, or ship into the PDF as raw source text. Diagrams are `.process-grid` (HTML/CSS) or hand-drawn inline SVG. Charts are inline SVG or a server-rendered image (matplotlib, plotly static export) embedded as a data URI. Never leave a `<pre class="mermaid">` block in the HTML — the adapter halts on one.
+**C1 — No CSS `@page` margin-box footer.** Chromium ignores `@page { @bottom-center { … } }`. The running footer comes from Playwright's own mechanism instead: `page.pdf(display_header_footer=True, header_template=…, footer_template=…)`. See **Running footer** below for the template.
 
-**R2 — No `:has()`.** Any "stick this to the next block" rule needs an explicit class on the element (`.keep-with-next`, `.lead-in`). Never write a selector that depends on what follows.
+**C2 — Header/footer templates don't inherit the page's styles.** Only inline styles inside the template string itself apply — no Sora, no `<style>` block. Keep the footer plain (inline colour/size, system font). A data-URI `<img>` does render inside a template — the logo could go in the footer now — but this skill still keeps it out by default (see **Logo → Placement and sizing**); that's a design choice, not a limitation.
 
-**R3 — CSS Grid support is partial; `gap` support is version-dependent.** Simple grids (3-up framing cards, 3-up colour panels, 3–4-up KPI row) work; nested grid children can render inconsistently — replace a broken block with `display: flex` + `flex: 1` on children, visually equivalent for these layouts. On `gap`: current WeasyPrint honours it (measured on 70), older builds ignore it. **Author with `gap` and leave the fallback to the adapter**, which probes the running build and only mirrors gaps onto margins if they were ignored. Do not add "defensive" margins by hand alongside a `gap` — where `gap` does work, a hand-added `margin-right` is subtracted from each grid track and every tile shrinks (measured: 187.3 px → 171.3 px).
+**C3 — Backgrounds are opt-in.** Pass `print_background=True`, or every background, wash, and wave motif renders white.
 
-**R4 — No CSS custom properties inside SVG.** Every `fill`, `stroke`, `stop-color`, `flood-color`, and inline `style` on an `<svg>` or any of its children uses a literal colour — `rgb(0,153,153)`, `#082E4D` — never `var(--hub-teal)`. WeasyPrint's SVG rasterizer parses paint attributes directly and never resolves custom properties; an unparseable paint falls back to SVG's initial value, which is **solid black**. This is what turns a wave divider into a black bar, and it hits chart geometry, gradient stops and badge shapes the same way. `currentColor` is the one exception — it resolves from the inherited `color` property, so line icons keep `stroke="currentColor"`.
+**C4 — Wait for rendering to finish before calling `page.pdf()`.** Load with `page.set_content(html, wait_until="networkidle")` so fonts and images are decoded first. A JS chart/diagram library works here (unlike the old WeasyPrint renderer) if the build waits for its completion signal first — but default to static inline SVG / server-rendered images unless the caller already has one wired up.
 
-**R5 — No `<img>` in a `@page` margin box.** The wordmark therefore cannot appear in the running footer. The masthead on page 1 (and the cover, if used) carries it instead. Known, accepted limitation — do not burn time working around it; disclose it on delivery.
+**C5 — Page size and margins come from the Playwright API, not CSS.** Pass `format="A4"` and `margin={...}` to `page.pdf()`. Don't also declare `@page { size; margin }` in the CSS — the two can disagree across Chromium versions.
 
-**R6 — SVG reads element attributes, not inherited CSS.** Render attributes sit on the element itself, not only in a stylesheet rule. Icons carry `fill`, `stroke`, `stroke-width`, `stroke-linecap`, `stroke-linejoin` as attributes — a bare `<svg viewBox="…"><circle …/></svg>` renders as a solid black filled shape however the surrounding CSS is written. `<text>` carries its own `font-family="Sora, sans-serif"` and `font-size="13"`; typography does not reliably inherit into SVG and the fallback is a serif default.
-
-**R7 — Never rely on browser defaults for `<ul>` or `<ol>`.** Every list sets `list-style`, `padding` and `margin` explicitly, including one-off lists that aren't the standard Hubtel bullet — otherwise a black disc attaches to the first character with no gap.
-
-**What does work, so you don't second-guess it:** backgrounds print by default (no `print_background` equivalent to remember), `preserveAspectRatio="none"` stretches the wave correctly, full-bleed sections, `@page` backgrounds, repeating `<thead>` on split tables, and base64 `@font-face`.
+**Not a renderer quirk, just still true:** style `<ul>`/`<ol>` explicitly wherever the Hubtel bullet is wanted — an unstyled list is plain browser default, same as anywhere else.
 
 ## Non-negotiables
 
-- **Self-contained HTML input — zero external files.** One file, all CSS inlined, the Hubtel wordmark inlined as a data URI (see Logo). **No relative paths survive into the final HTML.** `HTML(string=…)` has no base URL by default, so a relative `src` resolves to nothing and the image silently renders blank.
-- **Sora embedded as base64 `@font-face`** (see the build recipe). WeasyPrint does not reliably fetch Google Fonts in a sandbox, and a Hubtel PDF without Sora is not Hubtel-branded. Keep a full fallback stack on `font-family` anyway.
+- **Self-contained HTML input — zero external files.** One file, all CSS inlined, the Hubtel wordmark inlined as a data URI (see Logo) — same as `hbtl-html-report`, and simplest regardless of renderer.
+- **Sora embedded as base64 `@font-face`** in the report's own `<style>` (see the build recipe). A system or Google Font substitution is not Hubtel-branded. Keep a full fallback stack on `font-family` anyway.
 - **Sentence case** for headings, labels, buttons. UPPERCASE only for the eyebrow kicker.
 - **Money format: `GHS 1,240.50`** for Hubtel figures — `GHS` prefix, grouped thousands, two decimals. Never `₵`, `GH¢`, `Ghc`. **Only Hubtel figures** get this treatment: vendor pricing, third-party invoices, and any non-GHS numbers stay in their source currency (`USD 800.00` for Anthropic / Cursor bills, `EUR`/`GBP` as issued). Never restamp `$800` as `GHS 800.00`.
 - **No emoji, anywhere.** Meaning is carried by iconography and colour.
@@ -153,9 +152,9 @@ Only sanctioned logo source. Do not draw a placeholder, do not fetch from a URL,
 | Cover page (opt-in) | Top-left | 48 px |
 | Masthead (first content page) | Top-left | 32 px |
 | Full-bleed section band | **Never** | — |
-| Running footer | **Never** (**R5**) | — |
+| Running footer | **Not by default** | — |
 
-These are the only placements. There is no per-page logo, because that needs a `@page` margin box and those cannot hold an image (**R5**) — do not fake it with fixed-position or repeated absolute blocks; disclose the limitation on delivery. And no logo on a reversed section band: the band carries a topic change through its own colour and reversed type, and a corner mark there would need a second, white asset to be legible at all. (`hbtl-pptx-report` puts a `logo.br` on every slide; slides are pages, a flowing report is not. Don't import the deck's rule.)
+These are the only placements. A logo in the running footer is no longer technically blocked (**C2**) — Chromium renders a data-URI `<img>` inside a footer template fine — but this skill keeps it out of the footer by default anyway: it's the same one-wordmark-per-document-flow discipline `hbtl-html-report` uses, and a corner mark repeating on every single page reads as noisier than the brand needs. If a caller explicitly wants it in the footer, that's a one-line addition to the footer template below — don't default to it. No logo on a reversed section band either: the band carries a topic change through its own colour and reversed type, and a corner mark there would need a second, white asset to be legible at all. (`hbtl-pptx-report` puts a `logo.br` on every slide; slides are pages, a flowing report is not. Don't import the deck's rule.)
 
 Never stretch, filter, or crop. Source art is 301 × 200 px, enough for 300 dpi at every height above; scaled past ~300 px of layout width it upscales and goes soft.
 
@@ -176,7 +175,7 @@ Three independent mechanisms stretch the wordmark and all three look identical �
 | Global `img { width: 100% }`: both axes set, stretched to 642 × 32 (aspect 20:1 vs 1.51:1) | `width: auto` |
 | **Flex or grid container**: cross-axis stretch — a column-flex masthead fills the width, grid stretches both axes | `align-self: flex-start`, `justify-self: start` |
 
-The third needs no reset to fire and `width: auto` does not stop it, which is what makes it hard to find. Tested across 15 container × reset combinations: all four properties pass everywhere, any three do not. The adapter also injects the last three guards for `img.hubtel-logo`, so a report that used the class but omitted them is corrected rather than shipped stretched — use that class name.
+The third needs no reset to fire and `width: auto` does not stop it, which is what makes it hard to find. Put all four properties directly in the report's own CSS under the `.hubtel-logo` class — there's no adapter step patching this in afterwards, so get it right in the authored HTML.
 
 ### Using the embedded wordmarks
 
@@ -190,7 +189,7 @@ The text to the left of the parentheses is a caption, not a filename. If what yo
 
 ## The report template
 
-Every report opens with a **masthead** (title + meta row + wordmark), a required **executive summary**, then a series of **sections**. There is no in-page footer element — the `@page` running footer carries the report title and page number on every page (see PDF-specific rules). No cover page by default; opt-in for formal briefs.
+Every report opens with a **masthead** (title + meta row + wordmark), a required **executive summary**, then a series of **sections**. There is no in-page footer element — the running footer carries the report title and page number on every page (see PDF-specific rules). No cover page by default; opt-in for formal briefs.
 
 ### Page shell
 
@@ -261,9 +260,9 @@ A tile row is a row, not three independent cards. Resolve these rules from the a
 
 Count everything that renders (`~100%` is 5; `GHS 1,240.50` is 12). A row of `7,979+` (6) and `48%` (3) renders both at 32 px — matched weight across the row beats maximum size on one tile. A four-up tile cannot carry 40 px at all.
 
-**2. The value never wraps, and an over-long one will not tell you.** A value is one unbroken token, so it has no break opportunity: WeasyPrint does not wrap it, it **overflows** — a 12-digit value at 40 px lays out 325 px wide in a 172 px tile, printing across the next card, with no error and nothing that looks wrapped. Demote per rule 4; never shrink past the last rung.
+**2. The value never wraps, and an over-long one will not tell you.** A value is one unbroken token, so it has no break opportunity: Chromium does not wrap it, it **overflows** — a 12-digit value at 40 px lays out 325 px wide in a 172 px tile, printing across the next card, with no error and nothing that looks wrapped. Demote per rule 4; never shrink past the last rung.
 
-**3. Slots share baselines across the row.** Take the largest eyebrow line-count in the row and set it as an explicit `min-height` on every eyebrow; same for the support row. Otherwise a one-line label lifts its value above its neighbours'. Subgrid would express this, but grid support is partial (**R3**) — set the min-heights.
+**3. Slots share baselines across the row.** Take the largest eyebrow line-count in the row and set it as an explicit `min-height` on every eyebrow; same for the support row. Otherwise a one-line label lifts its value above its neighbours'. Subgrid is the cleaner way to express this in a browser that supports it — `min-height` is the safe default that works everywhere.
 
 Eyebrows are uppercase at 0.18em tracking, so they run wide: **17 characters per line three-up, 12 four-up**. Plan line counts from those, not from how short the string looks. Unlike the value, an eyebrow breaks at spaces and wraps rather than overflows.
 
@@ -281,7 +280,7 @@ Eyebrows are uppercase at 0.18em tracking, so they run wide: **17 characters per
 
 One column, `max-width: var(--page-max)`, `--fs-body` / `--lh-body`, `--text-primary`. Lead paragraphs use `--fs-lead`. Blockquotes: 3 px teal left border, `--text-secondary` italic — reserve for direct source quotes, not pull-quotes.
 
-**Bulleted lists.** Never the browser default disc (**R7**). Bullet is a small 11 × 11 px `--hub-teal` square, 3 px radius, to the left of each item. `--space-2` between items, `--space-5` left padding.
+**Bulleted lists.** Never the browser default disc. Bullet is a small 11 × 11 px `--hub-teal` square, 3 px radius, to the left of each item. `--space-2` between items, `--space-5` left padding.
 
 ```css
 ul.hubtel { list-style: none; padding: 0; margin: var(--space-3) 0 var(--space-4); }
@@ -404,11 +403,11 @@ Any custom layout where a header row sits above a row of columns — process dia
 </style>
 ```
 
-Pair the `gap` values with equivalent child margins (**R3**). If a header spans more than one column, use `grid-column: span 2` — don't leave it to accidental flex/auto sizing.
+If a header spans more than one column, use `grid-column: span 2` — don't leave it to accidental flex/auto sizing.
 
 ### Diagrams — inventory the source, then pick the substrate
 
-Two substrates exist; no diagram library is available (**R1**):
+Two substrates, for consistency with `hbtl-html-report` and build determinism:
 
 - **`.process-grid`** (HTML + CSS) — use when every row has the same number of cells and every arrow runs between adjacent cells: role-vs-stage matrix, two-column comparison, swim-lane, linear process.
 - **Inline SVG** — everything else.
@@ -427,7 +426,7 @@ When recreating an existing diagram — from a PDF, image, whiteboard photo or p
 - **Width `100%`, never fixed pixels.** Author every `<svg>` as `<svg viewBox="0 0 W H" width="100%" style="max-width: 100%; height: auto;">`. `viewBox` carries aspect; `width: 100%` fills the ~170 mm content column at A4 20 mm margins. A `width="600"` diagram renders at ~60% of the column with labels below the `--fs-small` minimum.
 - **No bounding-box overlaps.** Walk the node list before shipping; no two `<rect>` (or `<foreignObject>`) rectangles intersect, no arrow path crosses a label. Minimum clearance between nodes is `--space-4` (16 px) horizontally and vertically, edge-to-edge.
 - **Sketch a positional grid before drawing.** Which nodes on row 1, row 2, row 3; which columns; where forks and rejoins happen. Assign coordinates from the grid. Free-hand placement without this is why SVG diagrams overlap.
-- **Literal colours on every paint attribute, and typography as attributes on `<text>`** — see **R4** and **R6**.
+- **`var()` and inherited CSS both work fine on paint attributes and `<text>` here** — use whichever is more convenient.
 
 ### Custom diagrams — minimum sizes and legends
 
@@ -476,8 +475,6 @@ When recreating an existing diagram — from a PDF, image, whiteboard photo or p
 </style>
 ```
 
-The swatches above are HTML `<span>`s, not SVG, so `var()` is fine here — inside an `<svg>` it is not (**R4**).
-
 **Figure caption goes below the legend, not above.** Use `<figcaption>` for accessibility. Format: `Figure C.` in `--fw-bold` `--text-primary`, then a one-sentence description in `--text-secondary`. Never inside the diagram itself.
 
 ## The wave motif
@@ -505,7 +502,7 @@ Signature soft undulation, not a quarter-circle. Same shape as the deck template
 | `style="width:100%;height:150px"` | 153.8 px |
 | `.wave { display:block; width:100% }` + `height:150px` | **150.0 px** |
 
-Recolour `fill` per accent — `rgb(0,153,153)` teal (default), `rgb(8,46,77)` navy, `rgb(255,204,8)` saffron, `rgb(239,73,35)` red. **Literal values only** (**R4**) — `fill="var(--hub-teal)"` renders the wave as a solid black bar. Never modify the path, rotate, or skew.
+Recolour `fill` per accent — `rgb(0,153,153)` teal (default), `rgb(8,46,77)` navy, `rgb(255,204,8)` saffron, `rgb(239,73,35)` red, or `fill="var(--hub-teal)"` etc. — both work under this renderer. Never modify the path, rotate, or skew.
 
 **One placement: `wave--band`, 140–170 px**, full-width behind a full-bleed section header. The range is not free choice. Below it the motif stops reading: `preserveAspectRatio="none"` squashes the undulation with the box, so a 150 px band shows 10.8 px of curve across 642 px, a 96 px band shows 6.9 px — visually a rectangle. Above it the band eats the page: 150 px is 15% of A4's 971 px content height.
 
@@ -515,7 +512,7 @@ Recolour `fill` per accent — `rgb(0,153,153)` teal (default), `rgb(8,46,77)` n
 
 Line icons from Untitled UI. Inline as SVG; do not link to icon fonts. Common ones: **wallet / credit-card** (payments), **line-chart-up / bar-chart** (growth, KPIs), **users** (customers), **globe** (reach), **shield** (trust, compliance), **zap** (speed), **settings** (operations), **send** (outbound), **gift** (rewards), **star** (highlights).
 
-Default spec, as attributes on the element (**R6**): `width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`. If you don't have the exact glyph, draw a clean geometric version at that spec — never an emoji or filled shape.
+Default spec: `width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"` — as attributes, as CSS, or a mix of both; this renderer honours either. If you don't have the exact glyph, draw a clean geometric version at that spec — never an emoji or filled shape.
 
 ## Charts
 
@@ -553,7 +550,7 @@ When two chart types would work, pick the simpler one. A stacked area over three
 6  --slate-600         rgb(129,149,166) sixth / catch-all
 ```
 
-Six categories ceiling; group rest into "Other". Feed these literal values into whichever renderer draws the chart — never a library's default palette, and never `var()` inside the SVG (**R4**).
+Six categories ceiling; group rest into "Other". Feed these literal values (or the matching CSS variable — either works here) into whichever renderer draws the chart — never a library's default palette.
 
 **Sequential (single-hue).** Teal ramp `teal-50 → teal-100 → teal-200 → teal-500 → teal-600 → teal-700`. Navy ramp: mix `--hub-blue` with white at 90/70/50/30/10%.
 
@@ -577,9 +574,9 @@ Six categories ceiling; group rest into "Other". Feed these literal values into 
 
 ### Static rendering, and the hover defaults that survive it
 
-Charts must be static (**R1**): hand-author as inline SVG (fine for bar, line, and simple scatter), or render with a server-side library to PNG/SVG and embed as a data URI `<img>`.
+Default to static charts — hand-authored inline SVG (fine for bar, line, and simple scatter), or a server-side library rendered to PNG/SVG and embedded as a data URI `<img>`. A JS charting library works here if the caller already has one wired up (**C4**).
 
-Tooltips never fire in a PDF, but the visual defaults still apply if a chart is drawn with a static "highlighted" state: tooltip is `--surface-inverse` (navy) fill, `--text-on-brand` text, `--radius-md`, `--shadow-md`, `--space-3` padding. Keyboard focus rings and click-to-drill-down are HTML-only concerns — ignore them here.
+Tooltips never fire in a static PDF render, but the visual defaults still apply if a chart is drawn with a static "highlighted" state: tooltip is `--surface-inverse` (navy) fill, `--text-on-brand` text, `--radius-md`, `--shadow-md`, `--space-3` padding. Keyboard focus rings and click-to-drill-down are HTML-only concerns — ignore them here.
 
 ---
 
@@ -587,13 +584,11 @@ Tooltips never fire in a PDF, but the visual defaults still apply if a chart is 
 
 ### Page size — A4, 20 mm margins
 
-A4 portrait (210 × 297 mm), **20 mm on all sides** → 170 mm content width, 257 mm content height. Matches `--print-pad: 20mm` in the token block. US Letter only if the caller explicitly asks for a US audience.
+A4 portrait (210 × 297 mm), **20 mm on all sides** → 170 mm content width, 257 mm content height. Matches `--print-pad: 20mm` in the token block. Set via the Playwright API (**C5**), not `@page` CSS. US Letter only if the caller explicitly asks for a US audience.
 
 ### Page breaks — print CSS
 
 Add this block near the end of the report's `<style>`. **Tables split across pages with the `<thead>` repeating** — that stops the "section heading alone on a mostly-empty page above a table" symptom.
-
-Both the legacy `page-break-*` and modern `break-*` properties are set throughout: WeasyPrint reads `break-inside`, older builds only `page-break-inside`. Cheap to set both.
 
 ```css
 @media print {
@@ -604,54 +599,54 @@ Both the legacy `page-break-*` and modern `break-*` properties are set throughou
   .summary-panel, .horizon-tile, .target-tile, .callout, .zoom-banner,
   .evidence-strip, .statement, .framing-card, .colour-panel, .pillar, .two-track,
   .diagram, .kpi-row, .kpi-tile {
-    page-break-inside: avoid;
     break-inside: avoid;
     break-inside: avoid-page;
   }
 
   /* Long tables split with a repeating <thead>. */
-  table.hubtel        { page-break-inside: auto; break-inside: auto; }
+  table.hubtel        { break-inside: auto; }
   table.hubtel thead  { display: table-header-group; }
   table.hubtel tfoot  { display: table-footer-group; }
-  table.hubtel tr     { page-break-inside: avoid; break-inside: avoid; }
+  table.hubtel tr     { break-inside: avoid; }
 
   /* Headings and section-intro banners stick to what follows. Include the      */
   /* banner itself, not just its inner eyebrow/title: break-after on a child     */
   /* only binds to its next sibling inside the same parent, so a banner block    */
   /* needs its own rule to stick to the paragraph beneath it. Anything else      */
-  /* that must stick to the block after it gets .keep-with-next by hand (R2) —   */
+  /* that must stick to the block after it gets .keep-with-next by hand —        */
   /* likewise .lead-in on a paragraph introducing a list, diagram or table.      */
   h1, h2, h3, .section__title,
   .zoom-banner, .zoom-banner__eyebrow, .zoom-banner__title,
   .section-header, .section-header__eyebrow, .section-header__title,
   [class*="eyebrow"],
   .keep-with-next, .lead-in {
-    page-break-after: avoid;
     break-after: avoid;
   }
   h1, h2, h3 { orphans: 3; widows: 3; }
 
-  ul, ol { page-break-inside: auto; break-inside: auto; }
-  li     { page-break-inside: avoid; break-inside: avoid; }
+  ul, ol { break-inside: auto; }
+  li     { break-inside: avoid; }
 
-  .section { page-break-before: auto; break-before: auto; }
+  .section { break-before: auto; }
 }
 ```
 
+Chromium's print engine reads the modern `break-*` properties natively and consistently, so there's no need to double them up with the legacy `page-break-*` aliases the way the old WeasyPrint version of this skill did.
+
 **If a focus box still splits**, the culprit is almost always a nested flex/grid child that fragments separately. Two mitigations:
 
-1. Wrap in `<div style="break-inside: avoid; page-break-inside: avoid;">` — the wrapper becomes a block-level fragment container.
+1. Wrap in `<div style="break-inside: avoid;">` — the wrapper becomes a block-level fragment container.
 2. Last resort: hard `break-before: page;` on the element when you know exactly where it should land. Manual override, not the default.
 
-**If a banner or lead-in still orphans** (usually a very long first paragraph), wrap it and the first content block in a `<div class="keep-together">` with both break properties. Use sparingly.
+**If a banner or lead-in still orphans** (usually a very long first paragraph), wrap it and the first content block in a `<div class="keep-together">` with `break-inside: avoid;`. Use sparingly.
 
 ### Content-to-footer clearance
 
 The 20 mm bottom margin holds both the running footer and any spillover from the page's last block.
 
-**Footer ≤ 12 mm.** Text at 9 pt plus ~2 mm padding either side puts the footer at ~12 mm; the remaining ~8 mm is the visible gap between the last line of content and the footer. Do not add taller text or extra lines — they eat the gap.
+**Footer ≤ 12 mm.** Text at 9 pt plus ~2 mm padding either side puts the footer at ~12 mm; the remaining ~8 mm is the visible gap between the last line of content and the footer. Do not add taller text or extra lines in the footer template — they eat the gap.
 
-**No single diagram, table, or focus box exceeds one page's content area (257 mm).** When WeasyPrint finds a `break-inside: avoid` block taller than the remaining page, it pushes the whole block to the next page — and if the block is taller than a full page it overflows the bottom margin and clips.
+**No single diagram, table, or focus box exceeds one page's content area (257 mm).** When Chromium finds a `break-inside: avoid` block taller than the remaining page, it pushes the whole block to the next page — and if the block is taller than a full page it overflows the bottom margin and clips.
 
 ```css
 @media print {
@@ -667,15 +662,25 @@ If a diagram or table would exceed 240 mm, restructure — split into two smalle
 
 ### Running footer
 
-The running footer is the only element that repeats on every page. It lives in `@page` margin boxes (the CSS standard, and what WeasyPrint implements). Content:
+The running footer is the only element that repeats on every page. It is produced by Playwright's header/footer templates (**C1**), not CSS — pass both to `page.pdf()`:
 
-- **Left:** report title, 9 pt, `#819AA6`.
-- **Centre:** `Page N` — plain, not zero-padded, not "Page N of M".
-- **Right:** empty — no wordmark (**R5**).
+```python
+FOOTER_TEMPLATE = """
+<div style="width:100%; font-size:9px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+            color:#819AA6; padding:0 20mm; display:flex; justify-content:space-between;">
+  <span>{report_title}</span>
+  <span>Page <span class="pageNumber"></span></span>
+</div>
+"""
+```
 
-There is no in-page `.report-footer` element to suppress: the report body ends with its last section, and the running footer does the whole job. (`hbtl-html-report` does carry an in-page footer with a 24 px wordmark — that belongs to a document read on screen, and has no equivalent here.)
+- **Left:** report title, interpolated into the template string at build time — not the template's special `title` class, which pulls from the document's `<title>` tag instead and can drift from what's wanted on the page.
+- **Centre:** `Page N`, via the template's built-in `<span class="pageNumber"></span>` — plain, not zero-padded, not "of M" unless asked.
+- **Right:** empty by default (see **Placement and sizing** above).
 
-The CSS is in the build recipe below and injected by the adapter, with `{report_title}` interpolated at build time. Do not hand-write a second copy in the report's own `<style>`.
+`header_template` is required even when empty — pass `"<div></div>"`, or Chromium shows its own default header (URL and date).
+
+No in-page `.report-footer` element to suppress — the running footer does the whole job. (`hbtl-html-report`'s in-page footer with a 24 px wordmark belongs to a document read on screen; no equivalent here.)
 
 ### Cover page — opt-in
 
@@ -690,366 +695,158 @@ By default the PDF opens with the masthead on page 1. Add a dedicated cover only
 </section>
 ```
 
-Full-bleed (`min-height: calc(100vh - 48mm)`), centred vertically, `background: var(--surface)` (white) or `var(--surface-wash)` (teal-50). Title uses `--fs-cover` `--fw-extrabold` navy. Wordmark top-left at 48 px. `page-break-after: always` so the masthead lands on page 2.
+Full-bleed (`min-height: calc(100vh - 48mm)`), centred vertically, `background: var(--surface)` (white) or `var(--surface-wash)` (teal-50). Title uses `--fs-cover` `--fw-extrabold` navy. Wordmark top-left at 48 px.
 
-**Suppressing the footer on the cover** needs nothing from you beyond the class: the adapter already injects a named `@page cover` with blank margin boxes and binds `.pdf-cover` to it. Put `class="pdf-cover"` on the section and the running footer disappears from page 1 only.
+**Suppressing the footer on the cover needs a second render pass, not a CSS class.** `display_header_footer` applies to a whole `page.pdf()` call, not to one section — no "no footer on page 1 only" switch exists. Instead:
 
-`min-height: calc(100vh - 48mm)` resolves against the page box under WeasyPrint, which is what you want. If the cover spills to a second blank page, the content is taller than the box — reduce it rather than chasing the units.
+1. Render the cover alone, as its own one-page document, with `display_header_footer=False`.
+2. Render the masthead-onward body as its own document, with `display_header_footer=True` and the footer template above.
+3. Merge the two PDFs into one file, cover first (`pypdf.PdfWriter`).
+
+Side effect, for free: the body's `pageNumber` counter starts at 1 on its own first page, so the cover is naturally unnumbered. See the build recipe below.
+
+`min-height: calc(100vh - 48mm)` resolves against the page box as in any browser print preview. If the cover spills to a second page, reduce the content rather than chasing the units.
 
 ## The build recipe
 
-Python-native: no browser, no root, no shared-library install to fail. Install with `pip install weasyprint` (already present in many containers).
+Requires Playwright with its bundled Chromium and `pypdf` for the cover/body merge. Same two commands on macOS and Windows — Playwright's own installer downloads a matching Chromium build for whichever OS it's run on, so there's no platform branching to write:
 
-Three steps: write the HTML, run it through the adapter, render. The adapter is not optional — it injects the `@page` and font rules and patches the render-safety issues that otherwise ship as visible defects.
-
-```python
-from weasyprint import HTML
-
-def build_pdf(html_string, output_path, report_title):
-    # adapt_html_for_weasyprint() injects @page / @font-face and patches the
-    # known render failures. Never call write_pdf on raw authored HTML.
-    html_ready = adapt_html_for_weasyprint(html_string, report_title)
-    HTML(string=html_ready).write_pdf(output_path)
+```
+pip install playwright pypdf
+playwright install chromium
 ```
 
-### What the adapter injects
+Skip the second line if Chromium is already present (it is in most dev-machine setups where Playwright has been used before) — `playwright install chromium` is a no-op if the matching build is already cached, so it's harmless to run anyway when unsure.
 
-Two things the authored HTML must not carry itself, because the adapter writes them and a second copy would drift:
-
-- **`@page`** — A4, 20 mm margins, report title bottom-left and `Page N` bottom-centre at 9 pt `#819AA6`, nothing bottom-right (**R5**). Plus a named `@page cover` with blank margin boxes for the opt-in cover.
-- **`@font-face`** — Sora at weights 400/600/700/800, each embedded as a base64 TTF. The adapter fetches them from the upstream repo on first use and caches to `/tmp/sora-cache`, so only the first build of a session touches the network. A truncated download raises rather than shipping a fontless PDF.
-
-Both are appended last, after the report's own `<style>`, so nothing overrides them. The exact CSS is in `page_and_font_css()` below — read it there rather than duplicating it in the report.
-
-### The adapter — `adapt_html_for_weasyprint()`
-
-Everything the renderer needs that the authored HTML can't carry, plus a design-neutral safety net for **R1**–**R7** whenever the HTML forgot them. Design the report however fits the content; the adapter patches the specific things that break.
-
-**This is the implementation, not a description of one — paste it in and call it.** It has been run against a real report and every step verified in the rendered PDF. Do not rewrite it from the step list, and do not hand-roll an equivalent: the value of the adapter is that it behaves identically on every run.
-
-The steps, in execution order:
-
-| # | Step | Enforces |
-|---|---|---|
-| 2 | Halt if any Mermaid block is present | R1 |
-| 0 | Resolve every `var()` inside every `<svg>` to a literal colour | R4 |
-| 3 | Strip `<script>` tags | — |
-| 4 | Give bare icon SVGs their stroke attributes | R6 |
-| 5 | Mirror `gap` onto child margins **only if this build ignores `gap`** | R3 |
-| 6 | Give unstyled `<ul>`/`<ol>` the Hubtel bullet | R7 |
-| 1 | Inject `@page` + `@font-face`, last so nothing overrides them | — |
-
-Step 0 runs before step 4 deliberately: the icon test is "carries no `fill` or `stroke`", and an unresolved `var()` would make a decorative SVG look bare and get stroked. Step 4 skips anything whose children already carry paint — the wave, chart geometry, gradient shapes — because adding `stroke="currentColor"` to a filled shape outlines its silhouette in black.
-
-**Step 5 probes rather than assumes.** Current WeasyPrint honours `gap`; older builds ignore it. Applying the fallback unconditionally is worse than not having it — measured on WeasyPrint 70, a spurious `margin-right` is subtracted from each grid track and every tile shrinks from 187.3 px to 171.3 px, and a spurious `margin-bottom` leaves the last tile in a row taller than its neighbours. So the adapter renders a two-column probe once, measures where the second child lands, and only patches if `gap` was ignored. Grids are never patched: track direction can't be inferred from CSS text, and guessing wrong is destructive. Flex only.
+Three steps: write the HTML (one document if there's no cover, two if there is), render each with Playwright, merge if there were two.
 
 ```python
-"""adapt_html_for_weasyprint() — complete reference implementation."""
-import base64, os, re, urllib.request
-from bs4 import BeautifulSoup
+import os
+from playwright.sync_api import sync_playwright
+from pypdf import PdfWriter, PdfReader
 
-SORA_URL = ("https://raw.githubusercontent.com/sora-xor/sora-font/"
-            "master/fonts/ttf/Sora-{}.ttf")
-SORA_WEIGHTS = {400: "Regular", 600: "SemiBold", 700: "Bold", 800: "ExtraBold"}
-CACHE = "/tmp/sora-cache"
+PAGE_OPTS = dict(
+    format="A4",
+    margin={"top": "20mm", "bottom": "20mm", "left": "20mm", "right": "20mm"},
+    print_background=True,   # C3 — without this every background is white
+)
 
-VAR_RE = re.compile(r"var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*?)\s*)?\)")
-PAINT_ATTRS = ("fill", "stroke", "stop-color", "flood-color",
-               "lighting-color", "color", "style")
-ICON_DEFAULTS = {"fill": "none", "stroke": "currentColor", "stroke-width": "2",
-                 "stroke-linecap": "round", "stroke-linejoin": "round"}
-HUBTEL_FALLBACK = {
-    "--hub-teal": "rgb(0,153,153)", "--hub-teal-accent": "rgb(1,199,177)",
-    "--hub-blue": "rgb(8,46,77)", "--hub-red": "rgb(239,73,35)",
-    "--hub-saffron": "rgb(255,204,8)", "--white": "#FFFFFF",
-}
+def footer_template(report_title):
+    safe = (report_title or "").replace("<", "&lt;").replace(">", "&gt;")
+    return f"""
+    <div style="width:100%; font-size:9px; font-family:-apple-system,BlinkMacSystemFont,
+                'Segoe UI',sans-serif; color:#819AA6; padding:0 20mm;
+                display:flex; justify-content:space-between;">
+      <span>{safe}</span>
+      <span>Page <span class="pageNumber"></span></span>
+    </div>
+    """
 
+def render_pdf(page, html_string, out_path, *, header_footer, report_title=None):
+    page.set_content(html_string, wait_until="networkidle")
+    # C4 — belt-and-braces wait for web fonts before the render.
+    page.evaluate("document.fonts.ready")
+    kwargs = dict(PAGE_OPTS)
+    if header_footer:
+        kwargs.update(
+            display_header_footer=True,
+            header_template="<div></div>",
+            footer_template=footer_template(report_title),
+        )
+    else:
+        kwargs["display_header_footer"] = False
+    page.pdf(path=out_path, **kwargs)
 
-# ---------- fonts -------------------------------------------------------
-def sora_base64():
-    """Fetch the four Sora TTFs once, cache them, return {weight: base64}."""
-    os.makedirs(CACHE, exist_ok=True)
-    out = {}
-    for weight, name in SORA_WEIGHTS.items():
-        path = os.path.join(CACHE, f"Sora-{name}.ttf")
+def build_pdf(body_html, output_path, report_title, cover_html=None):
+    cwd = os.getcwd()
+    body_path = os.path.join(cwd, "_hubtel_pdf_body_tmp.pdf")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+
+        render_pdf(page, body_html, body_path, header_footer=True, report_title=report_title)
+
+        if cover_html:
+            cover_path = os.path.join(cwd, "_hubtel_pdf_cover_tmp.pdf")
+            cover_page = browser.new_page()
+            render_pdf(cover_page, cover_html, cover_path, header_footer=False)
+            cover_page.close()
+        browser.close()
+
+    if cover_html:
+        writer = PdfWriter()
+        for path in (cover_path, body_path):
+            reader = PdfReader(path)
+            for pg in reader.pages:
+                writer.add_page(pg)
+        with open(output_path, "wb") as f:
+            writer.write(f)
+        os.remove(cover_path)
+        os.remove(body_path)
+    else:
+        os.replace(body_path, output_path)
+
+    print("wrote:", output_path, os.path.getsize(output_path), "bytes")
+```
+
+Call it from the build:
+
+```python
+build_pdf(
+    body_html=html_ready,          # masthead onward, including the token <style> block
+    output_path=os.path.join(os.getcwd(), "hubtel-q3-review.pdf"),
+    report_title="Q3 operating review",
+    cover_html=cover_html_or_None, # pass the cover section's own full HTML doc, or omit
+)
+```
+
+This replaces the old WeasyPrint adapter entirely — no safety-net pass for `var()`, icon defaults, or `gap`, because the renderer doesn't need one (see renderer constraints, above). One thing still worth checking before calling `build_pdf()`: no unrendered diagram-library placeholder (e.g. `<pre class="mermaid">`) survives into the HTML unless the build actually waited for it to finish (**C4**).
+
+```python
+def sora_face_css():
+    """Embed Sora as base64 @font-face. Same four weights as before — just no
+    longer wrapped in a WeasyPrint-specific adapter step; paste this CSS
+    directly into the report's own <style> block."""
+    import base64, urllib.request
+    SORA_URL = ("https://raw.githubusercontent.com/sora-xor/sora-font/"
+                "master/fonts/ttf/Sora-{}.ttf")
+    WEIGHTS = {400: "Regular", 600: "SemiBold", 700: "Bold", 800: "ExtraBold"}
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "hubtel-sora")
+    os.makedirs(cache, exist_ok=True)
+    faces = []
+    for weight, name in WEIGHTS.items():
+        path = os.path.join(cache, f"Sora-{name}.ttf")
         if not os.path.exists(path):
             with urllib.request.urlopen(SORA_URL.format(name), timeout=30) as r:
                 data = r.read()
             if len(data) < 10_000:
                 raise RuntimeError(f"Sora-{name}.ttf download looks truncated")
             open(path, "wb").write(data)
-        out[weight] = base64.b64encode(open(path, "rb").read()).decode()
-    return out
-
-
-def page_and_font_css(report_title):
-    faces = "\n".join(
-        f'@font-face{{font-family:"Sora";font-weight:{w};'
-        f'src:url(data:font/ttf;base64,{b}) format("truetype");}}'
-        for w, b in sora_base64().items())
-    safe = (report_title or "").replace('"', '\\"')
-    return f"""
-{faces}
-@page {{
-  size: A4;
-  margin: 20mm;
-  @bottom-left   {{ content: "{safe}"; font-family: "Sora"; font-size: 9pt; color: #819AA6; }}
-  @bottom-center {{ content: "Page " counter(page); font-family: "Sora"; font-size: 9pt; color: #819AA6; }}
-}}
-@page cover {{ @bottom-left {{ content: ""; }} @bottom-center {{ content: ""; }} }}
-.pdf-cover {{ page: cover; }}
-"""
-
-
-# ---------- step 0: resolve var() inside SVG ----------------------------
-def build_token_map(soup):
-    decls = {}
-    for style in soup.find_all("style"):
-        css = style.string or ""
-        for block in re.findall(r":root\s*\{([^}]*)\}", css, re.S):
-            for name, value in re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", block):
-                decls[name] = value.strip()
-    for k, v in HUBTEL_FALLBACK.items():
-        decls.setdefault(k, v)
-    for _ in range(5):
-        changed = False
-        for k, v in list(decls.items()):
-            new = VAR_RE.sub(lambda m: decls.get(m.group(1), m.group(2) or m.group(0)), v)
-            if new != v:
-                decls[k], changed = new, True
-        if not changed:
-            break
-    return decls
-
-
-def resolve_svg_vars(soup):
-    tokens, unresolved = build_token_map(soup), set()
-
-    def sub(m):
-        val = tokens.get(m.group(1))
-        if val and "var(" not in val:
-            return val
-        if m.group(2):
-            return m.group(2)
-        unresolved.add(m.group(1))
-        return "rgb(0,153,153)"          # visible teal, never black
-
-    for svg in soup.find_all("svg"):
-        for el in [svg, *svg.find_all(True)]:
-            for attr in PAINT_ATTRS:
-                val = el.get(attr)
-                if val and "var(" in val:
-                    el[attr] = VAR_RE.sub(sub, val)
-    return sorted(unresolved)
-
-
-# ---------- step 4: icon defaults ---------------------------------------
-def is_icon_svg(svg):
-    return not any(el.has_attr("fill") or el.has_attr("stroke")
-                   for el in [svg, *svg.find_all(True)])
-
-
-def apply_icon_defaults(soup):
-    n = 0
-    for svg in soup.find_all("svg"):
-        if not is_icon_svg(svg):
-            continue                      # decorative / data SVG — leave alone
-        for attr, val in ICON_DEFAULTS.items():
-            svg.attrs.setdefault(attr, val)
-        n += 1
-    return n
-
-
-# ---------- steps 5 & 6: CSS-rule driven fallbacks ----------------------
-def _rules(soup):
-    """[(selector, declaration-text)] from every <style> in the document."""
-    out = []
-    for style in soup.find_all("style"):
-        css = re.sub(r"/\*.*?\*/", "", style.string or "", flags=re.S)
-        css = re.sub(r"@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", css, flags=re.S)
-        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
-            sel = sel.strip()
-            if sel and not sel.startswith("@"):
-                out.append((sel, body))
-    return out
-
-
-def _select(soup, selector):
-    try:
-        return soup.select(selector)
-    except Exception:
-        return []
-
-
-_GAP_OK = None
-
-
-def gap_is_supported():
-    """Probe this WeasyPrint build once: does it honour `gap`?
-
-    Two 1fr columns in a 200px grid with a 40px gap put the second child at
-    x+120 if gap is applied, x+100 if it is ignored.
-    """
-    global _GAP_OK
-    if _GAP_OK is None:
-        from weasyprint import HTML
-        from weasyprint.formatting_structure import boxes as B
-        html = ('<style>.p{display:grid;grid-template-columns:1fr 1fr;'
-                'gap:40px;width:200px}</style>'
-                '<div class="p"><div>a</div><div>b</div></div>')
-        grids = []
-
-        def walk(b):
-            # Read the grid container's DIRECT children only. Every descendant
-            # box (LineBox, TextBox) inherits element_tag, so matching on the
-            # tag alone counts each element several times and the probe lies.
-            if type(b).__name__ == "GridBox":
-                grids.append([c.position_x for c in b.children])
-            if isinstance(b, B.ParentBox):
-                for c in b.children:
-                    walk(c)
-
-        for page in HTML(string=html).render().pages:
-            walk(page._page_box)
-        xs = grids[0] if grids else []
-        _GAP_OK = len(xs) >= 2 and (xs[1] - xs[0]) > 110
-    return _GAP_OK
-
-
-def gap_to_margin(soup):
-    """Last-resort fallback for builds that ignore `gap` (R3).
-
-    Only flex containers are patched. A grid's track direction cannot be
-    inferred from CSS text, and guessing wrong is destructive: on this build
-    a spurious `margin-right` is subtracted from each track, shrinking every
-    tile (measured 187.3px -> 171.3px). Grids are left to the renderer.
-    """
-    if gap_is_supported():
-        return 0
-    touched = 0
-    for sel, body in _rules(soup):
-        if "gap" not in body or not re.search(r"display\s*:\s*flex", body):
-            continue
-        gap = re.search(r"(?<!row-)(?<!column-)\bgap\s*:\s*([^;]+)", body)
-        if not gap:
-            continue
-        value = gap.group(1).split()[0].strip()
-        column = re.search(r"flex-direction\s*:\s*column", body)
-        prop = "margin-bottom" if column else "margin-right"
-        for parent in _select(soup, sel):
-            kids = parent.find_all(recursive=False)
-            for kid in kids[:-1]:
-                if prop not in (kid.get("style") or ""):
-                    kid["style"] = f"{(kid.get('style') or '').rstrip('; ')};{prop}:{value}".lstrip(";")
-                    touched += 1
-    return touched
-
-
-HUBTEL_LOGO_CSS = """
-/* Sizing guards for the wordmark. Height is contextual (48 cover / 32 masthead
-   / 28 band) and stays with the author; these three are universal and stop the
-   three ways the logo gets stretched: a global `img{width:100%}` reset, flex
-   cross-axis stretch, and grid stretch on both axes. Inert outside flex/grid. */
-img.hubtel-logo { width: auto; align-self: flex-start; justify-self: start; }
-"""
-
-HUBTEL_LIST_CSS = """
-ul[data-hubtel-default], ol[data-hubtel-default] {
-  list-style: none; padding-left: var(--space-5); margin: var(--space-3) 0 var(--space-4);
-}
-ul[data-hubtel-default] > li, ol[data-hubtel-default] > li {
-  position: relative; padding-left: var(--space-5); margin-bottom: var(--space-2);
-}
-ul[data-hubtel-default] > li::before {
-  content: ""; position: absolute; left: 0; top: 9px;
-  width: 11px; height: 11px; border-radius: 3px; background: var(--hub-teal);
-}
-"""
-
-
-def default_lists(soup):
-    """Any <ul>/<ol> with no list-style anywhere gets the Hubtel treatment."""
-    styled = set()
-    for sel, body in _rules(soup):
-        if "list-style" in body:
-            for el in _select(soup, sel):
-                styled.add(id(el))
-    n = 0
-    for lst in soup.find_all(["ul", "ol"]):
-        if id(lst) in styled or "list-style" in (lst.get("style") or ""):
-            continue
-        lst["data-hubtel-default"] = "1"
-        n += 1
-    return n
-
-
-# ---------- orchestrator -------------------------------------------------
-def adapt_html_for_weasyprint(html_string, report_title):
-    soup = BeautifulSoup(html_string, "html.parser")
-
-    # 2. halt on Mermaid — no renderer can draw it (R1)
-    if soup.select("pre.mermaid, .mermaid"):
-        raise ValueError("Mermaid block in WeasyPrint HTML — draw it as inline SVG (R1)")
-
-    # 0. var() inside SVG -> literal colours (R4). Must precede the icon walk.
-    unresolved = resolve_svg_vars(soup)
-
-    # 3. dead weight; a CDN <script> can stall the render
-    for tag in soup.find_all("script"):
-        tag.decompose()
-
-    icons = apply_icon_defaults(soup)      # 4 (R6)
-    gaps = gap_to_margin(soup)             # 5 (R3)
-    lists = default_lists(soup)            # 7 -> R7
-
-    # 1. @page + @font-face, injected last so nothing overrides them
-    head = soup.head or soup
-    style = soup.new_tag("style")
-    style.string = page_and_font_css(report_title) + HUBTEL_LOGO_CSS + HUBTEL_LIST_CSS
-    head.append(style)
-
-    out = str(soup)
-
-    # pre-render assertions
-    for svg in soup.find_all("svg"):
-        assert "var(" not in str(svg), f"unresolved var() in SVG: {str(svg)[:120]}"
-    assert not soup.select("pre.mermaid, .mermaid"), "Mermaid survived adaptation"
-
-    if unresolved:
-        print(f"WARNING - unresolved CSS vars in SVG, defaulted to teal: {unresolved}")
-    print(f"adapter: {icons} icon(s) defaulted, {gaps} gap margin(s) added, "
-          f"{lists} list(s) restyled")
-    return out
+        b64 = base64.b64encode(open(path, "rb").read()).decode()
+        faces.append(
+            f'@font-face{{font-family:"Sora";font-weight:{weight};'
+            f'src:url(data:font/ttf;base64,{b64}) format("truetype");}}'
+        )
+    return "\n".join(faces)
 ```
 
-Call it from the build:
-
-```python
-from weasyprint import HTML
-
-html_ready = adapt_html_for_weasyprint(html_string, "Q3 operating review")
-HTML(string=html_ready).write_pdf(out_path)
-```
-
-It prints a one-line summary of what it changed (`adapter: 1 icon(s) defaulted, 0 gap margin(s) added, 1 list(s) restyled`) and names any CSS variable it could not resolve. Both belong in the delivery note.
+Paste the returned CSS into the report's `<style>` block alongside the token block, before calling `build_pdf()`. The cache path uses `os.path.expanduser("~")`, which resolves correctly on both macOS and Windows — don't hardcode either form. No network on this machine? Drop the four TTFs into that resolved folder once and the function picks them up without touching the network again.
 
 ## Delivery
 
-**Write the PDF once, into the working directory, and never move it.** Copying or relocating it can break the hand-off to the user. Resolve the path at runtime (os.getcwd()) rather than hardcoding one:
-```python
-import os
+**Write the PDF once, into the current working directory, and never move it.** Copying or relocating can break the hand-off to the user. Resolve the path at runtime (`os.getcwd()`) rather than hardcoding one:
 
+```python
 filename = "hubtel-q3-review"          # kebab-case slug of the report title
 out_path = os.path.join(os.getcwd(), f"{filename}.pdf")
-HTML(string=html_ready).write_pdf(out_path)
-print("wrote:", out_path, os.path.getsize(out_path), "bytes")
+build_pdf(html_ready, out_path, "Q3 operating review", cover_html=cover_html_or_None)
 ```
 
-The slug takes no spaces, no dates unless the title has one, no version suffix, and no subdirectory. The `print` is required: under ~20 KB means the render half-failed.
+The slug takes no spaces, no dates unless the title has one, no version suffix, and no subdirectory. Under ~20 KB usually means the render half-failed.
 
-**The final step is handing the finished PDF back to the user through whatever this environment’s file-delivery tool is**. That tool is the whole delivery mechanism — preview and hand-off in one — so there is no separate send step, and pasting the path into the reply delivers nothing. Nothing runs after it. Do not display the intermediate HTML; WeasyPrint takes a string, so no `.html` need exist.
+**The final step is handing the finished PDF back to the user through whatever this environment's file-delivery mechanism is.** Nothing runs after it. Don't display the intermediate HTML separately — it's an implementation detail.
 
-**Disclosure — required.** One line: *"Rendered with WeasyPrint. Flowcharts are inline SVG; the wordmark appears on the masthead rather than the running footer."* Add any CSS variable the adapter could not resolve — a shape silently defaulted to teal is still the wrong colour.
+**Disclosure — required.** One line: *"Rendered with headless Chromium (Playwright). Flowcharts are inline SVG; the wordmark appears on the masthead rather than the running footer."*
 
 ## What this skill does not do
 

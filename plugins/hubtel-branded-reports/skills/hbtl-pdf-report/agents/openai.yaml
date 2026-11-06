@@ -1,5 +1,5 @@
 version: 1
 interface:
   display_name: Hubtel PDF Report
-  short_description: Produce Hubtel-branded A4 PDF reports with WeasyPrint, Sora, and the Hubtel visual language.
-  default_prompt: Create a Hubtel-branded PDF report for this content using /hbtl-pdf-report.
+  short_description: Produce Hubtel-branded A4 PDF reports with Playwright Chromium, Sora, and the Hubtel visual language.
+  default_prompt: Create a Hubtel-branded PDF report for this content.

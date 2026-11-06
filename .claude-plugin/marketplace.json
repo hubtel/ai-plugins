@@ -133,7 +133,7 @@
       "displayName": "Hubtel Branded Reports",
       "source": "./plugins/hubtel-branded-reports",
       "description": "Produce Hubtel-branded PDF reports and PowerPoint decks using the Hubtel visual language.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "Hubtel Enablement Team",
         "email": "engineering@hubtel.com"
