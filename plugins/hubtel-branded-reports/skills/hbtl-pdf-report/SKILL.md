@@ -1,6 +1,6 @@
 ---
 name: hbtl-pdf-report
-description: "Use this skill whenever the user asks for a Hubtel-branded PDF report or document — including phrases like hubtel pdf report, hubtel pdf, hubtel document, hubtel document report, hubtel doc, hubtel doc report, hubtel report, Hubtel-branded PDF, analysis document, one-pager, HOD brief, board pack, or any deliverable rendered as a .pdf that must look and feel like Hubtel. Self-contained: full Hubtel visual language (palette, Sora typography, wave motif, layouts, section patterns, chart palette) plus PDF mechanics (A4, print CSS, Chromium render via Playwright, running footer with page number, cover page). Does NOT prescribe analytical voice, structure of findings, or depth — that stays with the caller or whichever content skill drives the report."
+description: "Use this skill whenever the user asks for a Hubtel-branded PDF report or document — including phrases like hubtel pdf report, hubtel pdf, hubtel report pdf, hubtel branded pdf, hubtel branded report, hubtel branded report pdf, hubtel branded pdf report, hubtel pdf doc, hubtel pdf doc report, hubtel HOD report, hubtel hod report, hubtel HOD pdf report, hubtel hod pdf report, hubtel HOD report pdf, hubtel hod report pdf, hubtel document, hubtel document report, hubtel doc, hubtel doc report, hubtel report, Hubtel-branded PDF, analysis document, one-pager, HOD brief, board pack, or any deliverable rendered as a .pdf that must look and feel like Hubtel. Self-contained: full Hubtel visual language (palette, Sora typography, wave motif, layouts, section patterns, chart palette) plus PDF mechanics (A4, print CSS, Chromium render via Playwright, running footer with page number, cover page). Does NOT prescribe analytical voice, structure of findings, or depth — that stays with the caller or whichever content skill drives the report."
 metadata:
   author: "Hubtel Enablement Team"
   version: "1.1.0"
@@ -17,7 +17,7 @@ compatibility: Requires Python with playwright and pypdf, plus Chromium via `pla
 /hbtl-pdf-report
 ```
 
-Slash is optional. Also activate this skill when the user asks in natural language for a Hubtel PDF or document deliverable — for example: hubtel pdf report, hubtel pdf, hubtel document, hubtel document report, hubtel doc, hubtel doc report, hubtel report, Hubtel-branded PDF, one-pager, HOD brief, or board pack.
+Slash is optional. Also activate this skill when the user asks in natural language for a Hubtel PDF or document deliverable — for example: hubtel pdf report, hubtel pdf, hubtel report pdf, hubtel branded pdf, hubtel branded report, hubtel branded report pdf, hubtel branded pdf report, hubtel pdf doc, hubtel pdf doc report, hubtel HOD report, hubtel hod report, hubtel HOD pdf report, hubtel hod pdf report, hubtel HOD report pdf, hubtel hod report pdf, hubtel document, hubtel document report, hubtel doc, hubtel doc report, hubtel report, Hubtel-branded PDF, one-pager, HOD brief, or board pack.
 
 
 Produces `.pdf` deliverables that carry the Hubtel brand. This skill is **self-contained** — the whole design system lives inside it, plus the PDF-specific mechanics. Build the report as HTML using the rules below, then render it to PDF with the headless-Chromium recipe at the end.
