@@ -1,0 +1,5 @@
+version: 1
+interface:
+  display_name: Hubtel Frontend Session Management
+  short_description: Move Next.js/Nuxt frontends to a BFF session model — audit, decide, and fix sign-in, sessions, origin checks, and CSP.
+  default_prompt: Audit this frontend's session handling against the BFF session invariants (tokens in browser storage, client-side auth headers, Turnstile/OTP, renewal, sign-out, origin checks, CORS, CSP, framing). Write the facts sheet and findings, work out the decisions with me, propose the staged plan, and wait for my approval before changing anything.

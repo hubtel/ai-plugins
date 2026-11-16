@@ -59,6 +59,20 @@
       "category": "Engineering",
       "description": "Produce Hubtel-branded PDF reports and PowerPoint decks using the Hubtel visual language.",
       "version": "1.1.0"
+    },
+    {
+      "name": "hubtel-security",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hubtel-security"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering",
+      "description": "Security skills for Hubtel apps. Includes frontend session management: move Next.js and Nuxt frontends to a BFF session model, then plan and apply approved fixes for sign-in, renewal, sign-out, origin checks, CORS, and CSP.",
+      "version": "0.1.0"
     }
   ]
 }

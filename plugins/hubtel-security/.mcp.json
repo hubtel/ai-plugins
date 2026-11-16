@@ -1,0 +1,9 @@
+{
+  "hubtel-engineering": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@hubtel/engineering-mcp@latest"
+    ]
+  }
+}
