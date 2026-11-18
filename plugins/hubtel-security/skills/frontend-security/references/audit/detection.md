@@ -53,6 +53,29 @@ Table: **backend → base URL → client → env var → called from browser/ser
 
 Also mark per backend: **uploads/downloads** (multipart, blobs, large bodies), which means streaming in the BFF.
 
+For each backend, also list the **method and path pairs the app calls** (from the call sites, with IDs turned
+into `:param`, e.g. `GET /orders/:id`). This list becomes the BFF path allowlist (R-24, INV-13).
+
+## Server entry points (INV-13)
+
+List every server entry point in a table: **path → method(s) → kind → current check → intended access →
+returns or changes**.
+- **Kinds:** route handler, API route, Server Action, page server loader, BFF, auth library route.
+- **Where to look:**
+  - Next: `app/**/route.ts`, `pages/api/**`, `'use server'` files and inline actions, `proxy.ts`/`middleware.ts`
+    and its `matcher`
+  - Nuxt: `server/api/**`, `server/routes/**`, `server/middleware/**`
+  - everything: catch-all proxies and `rewrites()`/`routeRules` `proxy`
+- **Intended access:** `public` (give the reason), `session`, or `role:<name>`. Infer it from what the route
+  returns. When that's unclear, ask (workflow step 4).
+- **Confirm live** when a server is running: request each entry point with no cookie and record the status.
+
+## Secrets (INV-14)
+
+Run R-25's scan. Record a table: **file:line → kind → redacted fingerprint → in history? → likely live?**.
+Never record the value. Note whether `.gitignore` covers `.env*` and which `.env*` files are tracked
+(`git ls-files '*.env*'`).
+
 ## Realtime (D5)
 
 `new WebSocket`, `EventSource`, `@microsoft/signalr`, `socket.io-client`, `graphql-ws`. Record how each one

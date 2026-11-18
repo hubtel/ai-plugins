@@ -157,8 +157,8 @@
       "name": "hubtel-security",
       "displayName": "Hubtel Security",
       "source": "./plugins/hubtel-security",
-      "description": "Security skills for Hubtel apps. Includes frontend session management: move Next.js and Nuxt frontends to a BFF session model, then plan and apply approved fixes for sign-in, renewal, sign-out, origin checks, CORS, and CSP.",
-      "version": "0.1.0",
+      "description": "Security skills for Hubtel apps. Includes frontend security: move Next.js and Nuxt frontends to a BFF session model, then plan and apply approved fixes for sign-in, renewal, sign-out, origin checks, CORS, CSP, unauthenticated routes, and hardcoded credentials.",
+      "version": "0.2.0",
       "author": {
         "name": "Hubtel Enablement Team",
         "email": "engineering@hubtel.com"
@@ -175,7 +175,7 @@
         "turnstile"
       ],
       "skills": [
-        "./skills/frontend-session-management"
+        "./skills/frontend-security"
       ],
       "mcpServers": {
         "hubtel-engineering": {

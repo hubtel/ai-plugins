@@ -13,7 +13,8 @@ first, then [sources.md](../sources.md).
 | BackendAccess | `server/utils/backend-access.ts`: limits + renewal (D2) + `replaceUserSession` to persist. Server routes can always set cookies |
 | BffProxy | `server/api/bff/[service]/[...path].ts` |
 | ProvenanceGuard | `server/middleware/00.provenance.ts` (covers every `/api/**` route, including the nuxt-auth-utils built-ins) |
-| ServerRouteGuard | `requireUserSession` / `getBackendAccess` in every server route. `middleware/auth.global.ts` only redirects for UX |
+| ServerRouteGuard | `requireUserSession` / `getBackendAccess` in every server route, at the access level the route inventory records (INV-13). `middleware/auth.global.ts` only redirects for UX |
+| ServerConfig | Private `runtimeConfig` keys (never `public`), set by `NUXT_*` env vars. A Nitro plugin checks at startup that each required key is non-empty |
 | ClientSessionWatcher | 401 handler in the API wrapper + `sessionHooks` `fetch` validation |
 | SecurityHeaders | `nuxt-security` (nonce, `contentSecurityPolicyReportOnly`) |
 
@@ -71,6 +72,27 @@ export default defineEventHandler((event) => {
 
 Store mode only: create the store in `server/utils/store.ts` and call `store.assertReady()` from a Nitro
 plugin when `import.meta.dev` is false.
+
+**Exposure (INV-13, INV-14).**
+- **Debug routes:** remove debug, test, and config-dumping routes from the inventory, or limit them to
+  development (`if (!import.meta.dev) throw createError({ statusCode: 404 })`). Session enforcement for the
+  remaining routes comes in S2 (2.3), once the session exists.
+- **Secrets:** move each R-25 finding into a private `runtimeConfig` key, set by its `NUXT_*` env var, and never
+  under `public`. Fail fast in production:
+  ```ts
+  // server/plugins/00.config-check.ts
+  export default defineNitroPlugin(() => {
+    if (import.meta.dev) return;
+    const c = useRuntimeConfig();
+    const missing = Object.entries({ turnstileSecretKey: c.turnstileSecretKey /* , … one per secret */ })
+      .filter(([, v]) => !v).map(([k]) => k);
+    if (missing.length) throw new Error(`missing ${missing.join(", ")}`);
+  });
+  ```
+  Add each env name to `.env.example` with an empty value, and make sure `.gitignore` has `.env*` and
+  `!.env.example`.
+- **Tracked env files:** if a real env file is tracked, `git rm --cached` it in this stage's commit, and list its
+  secrets for rotation.
 
 ## S2 — Cutover
 
@@ -197,18 +219,24 @@ middleware for `/api/_auth/session` instead.
 const FORWARD_REQ = ["accept", "content-type", "accept-language", "x-request-id", "idempotency-key", "last-event-id"];
 const DROP_RES = new Set(["set-cookie", "content-encoding", "content-length", "transfer-encoding", "connection"]);
 const STREAMING = new Set<string>([/* services with uploads/downloads/SSE (D5) */]);
+// isAllowedUpstream / AllowRule: server/utils/upstream-allowlist.ts (portable module, auto-imported like buildUpstreamUrl)
+const ALLOW: Record<string, readonly AllowRule[]> = {                // from the detection call-site list
+  orders: [["GET", "/orders"], ["GET", "/orders/:id"], ["POST", "/orders"]],
+};
 
 export default defineEventHandler(async (event) => {
   // ProvenanceGuard already ran in server/middleware/00.provenance.ts for this /api route.
   const service = getRouterParam(event, "service")!;               // allowlist key only
   const base = (useRuntimeConfig(event).services as Record<string, string | undefined>)[service];
   if (!base) throw createError({ statusCode: 404 });
+  const url = getRequestURL(event);                                 // raw encoded path, NOT getRouterParam("path")
+  if (!isAllowedUpstream(ALLOW[service], event.method, url.pathname, `/api/bff/${service}/`))
+    throw createError({ statusCode: 404 });                         // INV-13: never reaches the backend
 
   await requireUserSession(event);
   const token = await getBackendAccess(event);
   if (!token) throw createError({ statusCode: 401 });
 
-  const url = getRequestURL(event);                                 // raw encoded path, NOT getRouterParam("path")
   const target = buildUpstreamUrl(base, url.pathname, `/api/bff/${service}/`, url.search);
   if (!target) throw createError({ statusCode: 400 });
 

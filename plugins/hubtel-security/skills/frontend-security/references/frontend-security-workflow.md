@@ -14,11 +14,14 @@ framework. The framework only enters at step 6, through an adapter.
 
 ## 1. Preflight
 
-1. If `.hbtl/frontend-session-management/plan.md` exists, read it. Offer to resume the first stage that is
+1. If `.hbtl/frontend-security/plan.md` exists, read it. Offer to resume the first stage that is
    `approved` or `in-progress`.
-2. Run `git status --porcelain`. If the tree is dirty, warn the user: this skill edits in place and doesn't
-   create branches or commits, so they should commit or stash their own work first. Continue only if they say yes.
-3. Note the package manager (from the lockfile) and the `build` / `typecheck` / `lint` / `test` commands.
+2. Run `git status --porcelain`. If the tree is dirty, warn the user: this skill commits each completed
+   stage, and uncommitted work of theirs would be mixed into those commits. They should commit or stash it
+   first. Continue only if they say yes.
+3. Read the current branch (`git rev-parse --abbrev-ref HEAD`) and note it for the branch gate (step 6).
+   Steps 1–5 are read-only, so they don't need a feature branch.
+4. Note the package manager (from the lockfile) and the `build` / `typecheck` / `lint` / `test` commands.
 
 ## 2. Detect
 
@@ -32,7 +35,7 @@ existing infrastructure (Redis/KV). Choose the adapter: [impl/nextjs-authjs.md](
 Run [audit/rules.md](audit/rules.md). Each rule detects a violation of one or more invariants. Read every hit
 in context before recording it. Where a server is running, confirm with the matching V-test from
 [verification.md](verification.md), because live evidence outranks static guesses. Write
-`.hbtl/frontend-session-management/audit.md` ([audit/report-format.md](audit/report-format.md)), including the
+`.hbtl/frontend-security/audit.md` ([audit/report-format.md](audit/report-format.md)), including the
 **invariant status table**. Show the user the summary and the top findings, not the whole report.
 
 ## 4. Decide
@@ -54,6 +57,8 @@ sheet. Ask the user only for inputs the code can't answer, **in one batch**:
 | Session limits (idle / absolute) | INV-6 |
 | Cutover in one go, or does it need a bridge? (recommend Atomic) | D3 |
 | CSP cost acceptable (dynamic rendering)? | D4 |
+| Server entry points whose intended access is unclear: `public`, `session`, or which role? | INV-13 |
+| Each credential found: is it live? who owns rotating it? Are any intentional test values? | INV-14 |
 
 If the user doesn't know an answer, choose the safe option, record it as an **assumption**, and point it
 out at approval time.
@@ -64,10 +69,22 @@ Build `plan.md`: decisions, the component map from the chosen adapter, and the s
 nothing to do, but keep the order. Each stage lists the invariants it closes, the files it touches, any new
 dependencies, the assumptions it relies on, and its hard checks.
 
+Add the **diagrams** from [audit/report-format.md](audit/report-format.md) to `plan.md`, filled in for this
+app:
+
+- **Stage flow:** only the stages that remain, with the current one highlighted.
+- **Target architecture:** browser → BFF → each detected backend, by name.
+- **S2 checkpoints:** with one node per backend in 2.4.
+
+Use Mermaid, which Azure DevOps, GitHub, and VS Code all render. The tables stay the source of truth: a diagram
+summarizes them and never holds information found nowhere else. Update the stage-flow highlight whenever a
+stage status changes. When presenting the plan, show the stage flow and target architecture diagrams with
+the summary.
+
 | Stage | Closes | Contents | Why the app keeps working |
 |-------|--------|----------|---------------------------|
-| **S1 Foundation & guards** | INV-8 | Server-only config. Session library installed (not yet used). ProvenanceGuard on **every** existing state-changing server route. RedirectGuard module. Store client only if D1 = Store. | The guard only rejects cross-site requests. Same-origin UI flows pass. |
-| **S2 Cutover** (D3 = Atomic) | INV-1, 2, 3, 4, 5, 7, 11, 12 | Server sign-in (+HumanVerifier, OTP request/verify), SessionMechanism, BackendAccess with renewal, BffProxy, ServerRouteGuard, client switched to BFF, ClientSessionWatcher, POST sign-out with revoke, realtime per D5, backend URLs out of public config, legacy storage removed + LegacyCleanup. | Everything switches together and is verified together. |
+| **S1 Foundation & guards** | INV-8, INV-14, INV-13 (partial) | ServerConfig: hardcoded credentials moved to server-only env, `.env.example` updated, real env files untracked, and rotation follow-ups listed. Debug, test, and config routes removed or limited to development. Session library installed (not yet used). ProvenanceGuard on **every** existing state-changing server route. RedirectGuard module. Store client only if D1 = Store. | The guard only rejects cross-site requests, and secrets keep the same values, now read from env. Same-origin UI flows pass. |
+| **S2 Cutover** (D3 = Atomic) | INV-1, 2, 3, 4, 5, 7, 11, 12, 13 | Server sign-in (+HumanVerifier, OTP request/verify), SessionMechanism, BackendAccess with renewal, BffProxy with path allowlist, ServerRouteGuard at each route's inventory access level, client switched to BFF, ClientSessionWatcher, POST sign-out with revoke, realtime per D5, backend URLs out of public config, legacy storage removed + LegacyCleanup. | Everything switches together and is verified together. |
 | **S2a / S2b** (D3 = Bridge only) | S2a: INV-3, 4, 5, 7, 11, 12 · S2b: INV-1, 2 | S2a: everything in S2 except the client switch and legacy removal, plus the marked bridge (**access token only**). S2b: migrate clients per backend, then delete the bridge and the legacy storage. | The bridge keeps unmigrated calls working. **INV-1/2 stay Critical until S2b**: say so at approval, and schedule S2b immediately. |
 | **S3 Session limits** | INV-6 | Agreed idle/absolute limits configured and verified. | Transparent to active users. |
 | **S4 Cross-origin lockdown** | INV-9 | CORS removed from session-bearing routes, or exact allowlist. Remaining cookie attributes. | Confirmed callers are allowlisted. |
@@ -83,7 +100,7 @@ as it completes, so `--resume` continues from the right point and nothing is ski
 |---|-----------|-----------|
 | 2.1 | SessionMechanism + AuthBackendAdapter + sign-in (+HumanVerifier, OTP steps) | V-3 (incl. **cookie size**), V-4, V-11 pass |
 | 2.2 | BackendAccess (renewal) | The adapter's renewal hard checks pass; V-5 |
-| 2.3 | BffProxy + ServerRouteGuard | V-12(a); one backend reachable through `/api/bff/<service>` |
+| 2.3 | BffProxy (with path allowlist) + ServerRouteGuard on every inventory row | V-12(a); V-13(a) for every non-public row and V-13(b); one backend reachable through `/api/bff/<service>` |
 | 2.4 | Client switch, **one backend at a time** (a row per backend in `plan.md`) | Each row shows V-2 passing for that backend |
 | 2.5 | ClientSessionWatcher + POST sign-out with revoke | V-7, V-12(b)(c) |
 | 2.6 | Realtime per D5 (if any) | Channel works; residual recorded |
@@ -100,6 +117,18 @@ assumptions. Ask which stages to approve. Record the approval (and each residual
 
 ## 6. Execute a stage
 
+**Branch gate** (once per run, before the first edit). This follows Hubtel's Branch Discipline convention
+from `hbtl-harness-creator`:
+
+1. If the current branch matches `^users/[^/]+/feature/.+`, stay on it.
+2. Otherwise run `git checkout -b users/<username>/feature/<short-desc>`.
+   - `<username>`: the local part of `git config user.email`, lowercased. If it isn't set, ask the user.
+   - `<short-desc>`: kebab-case, defaulting to `frontend-security`.
+3. Never edit, commit, or push on `main`, `master`, or `development`.
+4. Record the branch in `plan.md`. One branch covers the whole run, so don't create a new one per stage.
+
+Then, for each stage:
+
 1. Mark the stage `in-progress`.
 2. **Gate dependencies:** call `audit_packages` (Hubtel Engineering MCP) before any install. Stop on
    untrusted/vulnerable/unsafe versions. If the MCP is unavailable, say so.
@@ -115,7 +144,11 @@ assumptions. Ask which stages to approve. Record the approval (and each residual
 7. **Impact flows:** build the map and give the user the checklist ([verification.md](verification.md) Part 2).
 8. Mark the stage `done` with files changed, V-test results, residuals, and follow-ups. Update the invariant
    status table in `audit.md`.
-9. **Pause.** Summarise what changed, what was verified (with evidence), what the user must test, and any
+9. **Commit the stage locally.** Stage only this stage's files and the `.hbtl/frontend-security/`
+   files (skip those if the repo ignores `.hbtl/`). Use one commit with the message
+   `feat(session): <stage id> <stage name>` and a body listing the invariants it closes. Record the short SHA
+   under the stage in `plan.md`. Don't push.
+10. **Pause.** Summarise what changed, what was verified (with evidence), what the user must test, and any
    backend follow-ups. Wait for the user's flow results before starting the next stage.
 
 If a stage is blocked (e.g. the backend has no refresh endpoint), mark it `blocked` with a reason and owner,
@@ -128,3 +161,6 @@ and continue only with stages that don't depend on it.
 3. Give the user: a before/after invariant table; the deduplicated full regression flow list; backend
    follow-ups (revoke endpoint, rotation grace window, network rules so backends accept only BFF traffic); and
    an offer to generate Playwright specs via `hbtl-frontend-e2e-testing`.
+4. Give the branch name, the list of stage commits, and the suggested PR target. That is the repo's
+   integration branch: look among `dev`, `develop`, `development`, and `staging` on the remote, and ask if
+   there's none or more than one. Never suggest `main` or `master`. Push and open the PR only if the user asks.

@@ -128,6 +128,46 @@ Tested: normal paths pass through single-encoded. `..%2F`, `%2e%2e`, `%2F`, `%5C
 and malformed `%` are all rejected. A backend that genuinely needs encoded slashes inside a segment gets an
 explicit, per-service exception, and only after you ask the user.
 
+## upstream-allowlist.ts — BffProxy path allowlist (INV-13)
+
+```ts
+/** [method, pattern]. Pattern segments are literal, or `:name` for exactly one non-empty segment. No wildcards. */
+export type AllowRule = readonly [method: string, pattern: string];
+
+/**
+ * True only when method + raw path tail match a rule for this service. HEAD is treated as GET.
+ * Run it BEFORE loading credentials. A miss → 404, and the backend is never contacted.
+ */
+export function isAllowedUpstream(
+  rules: readonly AllowRule[] | undefined, method: string, rawPath: string, prefix: string,
+): boolean {
+  if (!rules || !rawPath.startsWith(prefix)) return false;
+  let tail = rawPath.slice(prefix.length);
+  if (tail.endsWith("/")) tail = tail.slice(0, -1);
+  let segs: string[];
+  try { segs = tail.split("/").map(decodeURIComponent); } catch { return false; }
+  if (tail !== "" && segs.some((s) => s === "" || s === "." || s === ".." || s.includes("/") || s.includes("\\"))) return false;
+  const m = method.toUpperCase();
+  const want = m === "HEAD" ? "GET" : m;
+  return rules.some(([rm, pattern]) => {
+    if (rm.toUpperCase() !== want) return false;
+    const p = pattern.replace(/^\/+|\/+$/g, "").split("/");
+    if (p.length !== segs.length) return false;
+    return p.every((seg, i) => (seg.startsWith(":") ? segs[i].length > 0 : seg === segs[i]));
+  });
+}
+
+// Example, built from the detection call-site list:
+// export const ALLOW: Record<string, readonly AllowRule[]> = {
+//   orders: [["GET", "/orders"], ["GET", "/orders/:id"], ["POST", "/orders"]],
+// };
+```
+
+Tested on 18 cases:
+- **Accepted:** exact and `:param` matches, one trailing slash, HEAD treated as GET, lowercase method names.
+- **Rejected:** wrong method, unknown paths, extra segments, `%2e%2e`, `%2F`, `%5C`, empty segments, malformed
+  `%`, a different service prefix, case changes in literal segments, and a missing rule set.
+
 ## auth-backend.ts — AuthBackendAdapter (INV-4/5/7)
 
 Fill this in from the existing client login/refresh/logout calls found during detection. Implement only the

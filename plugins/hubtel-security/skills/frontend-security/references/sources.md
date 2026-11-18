@@ -10,7 +10,7 @@ How to use them:
 - **No web access** (some Cursor/Codex setups): use `node_modules/<pkg>/` (`README.md`, `*.d.ts`) and the
   snippets, and say in the stage summary that you could not check the docs.
 
-URLs verified 2026-11-16.
+URLs verified 2026-11-16 (OWASP Authorization and Secrets Management: 2026-11-18).
 
 ---
 
@@ -22,6 +22,8 @@ URLs verified 2026-11-16.
 | Session lifecycle, logout invalidation, cookie attributes, why not Web Storage | [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) ("Cookies", "HTML5 Web Storage API", "Session Expiration") | INV-1, INV-3, INV-6, INV-7 |
 | CSRF defences: Fetch Metadata, origin verification | [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html) ("Fetch Metadata headers", "Using Standard Headers to Verify Origin") | INV-8 |
 | `Sec-Fetch-Site` values | [MDN — Sec-Fetch-Site](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site) | INV-8 |
+| Server-side access checks, deny by default, BFF path allowlist | [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) ("Deny by Default", "Validate the Permissions on Every Request", "Verify that Authorization Checks are Performed in the Right Location") | INV-13 |
+| Secrets out of code, detection, rotation after exposure | [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) ("8 Detection", "9.2 Remediation", "3.5 Rotation vs Dynamic Creation") | INV-14 |
 | Framing control | [MDN — CSP frame-ancestors](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/frame-ancestors) | INV-10 (D7) |
 
 ## Next.js

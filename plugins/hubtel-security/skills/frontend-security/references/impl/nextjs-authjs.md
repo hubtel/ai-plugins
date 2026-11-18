@@ -13,7 +13,8 @@ check every Auth.js/Next API below against `node_modules/next-auth` and `node_mo
 | BackendAccess | `jwt` callback (renewal per D2) + `getBackendAccess()`, which captures the token through `AsyncLocalStorage` while `auth()` runs |
 | BffProxy | Route Handler `app/api/bff/[service]/[...path]/route.ts` |
 | ProvenanceGuard | Route Handlers: call it in the handler. Server Actions: Next's built-in Origin-vs-Host check (keep `serverActions.allowedOrigins` tight). Also in `proxy.ts` for `/api/*` |
-| ServerRouteGuard | `getBackendAccess()` / `auth()` + an `error` check inside every Server Action, Route Handler, and server data fetch. `proxy.ts` only redirects for UX |
+| ServerRouteGuard | `getBackendAccess()` / `auth()` + an `error` check inside every Server Action, Route Handler, and server data fetch, at the access level the route inventory records (INV-13). `proxy.ts` only redirects for UX |
+| ServerConfig | `src/server/config.ts` with `import "server-only"`: reads each secret from `process.env`, throws `missing <NAME>` at import. No `NEXT_PUBLIC_` secrets |
 | ClientSessionWatcher | `useSession()` error watcher + a 401 handler in the HTTP client |
 | SecurityHeaders | `proxy.ts` (nonce CSP) + `next.config` `headers()` (static headers) |
 | Request file | `proxy.ts` on Next ≥ 16 (always Node.js; `runtime` config not allowed). `middleware.ts` before that |
@@ -50,6 +51,25 @@ export const isTrusted = createProvenanceGuard({
 Call `isTrusted(req.method, req.headers, req.nextUrl.pathname)` at the top of **every existing** state-changing
 Route Handler (return `new Response(null, { status: 403 })`), and add it in `proxy.ts` for `/api/:path*`.
 Server Actions are already covered by Next's built-in check.
+
+**Exposure (INV-13, INV-14).**
+- **Debug routes:** remove debug, test, and config-dumping routes from the inventory, or limit them to
+  development builds (`if (process.env.NODE_ENV !== "development") notFound()`). Session enforcement for the
+  remaining routes comes in S2 (2.3), once the session exists.
+- **Secrets:** move each R-25 finding into `src/server/config.ts`:
+  ```ts
+  import "server-only";
+  function need(name: string): string {
+    const v = process.env[name];
+    if (!v) throw new Error(`missing ${name}`);
+    return v;
+  }
+  export const config = { turnstileSecret: need("TURNSTILE_SECRET_KEY") /* , … one entry per secret */ };
+  ```
+  Add each name to `.env.example` with an empty value, and make sure `.gitignore` has `.env*` and
+  `!.env.example`.
+- **Tracked env files:** if a real env file is tracked, `git rm --cached` it in this stage's commit, and list its
+  secrets for rotation.
 
 Store mode only: create the store in `src/server/store.ts` with `createSessionStore({ url: process.env.REDIS_URL,
 ttlSeconds: <absolute limit> })`, and call `store.assertReady()` from `instrumentation.ts` `register()` when
@@ -219,8 +239,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { isTrusted } from "@/server/guards";
 import { getBackendAccess } from "@/server/backend-access";
 import { buildUpstreamUrl } from "@/server/upstream-url";
+import { isAllowedUpstream, type AllowRule } from "@/server/upstream-allowlist";
 
 const SERVICES: Record<string, string | undefined> = { orders: process.env.ORDERS_API_URL }; // from detection
+const ALLOW: Record<string, readonly AllowRule[]> = {                // from the detection call-site list
+  orders: [["GET", "/orders"], ["GET", "/orders/:id"], ["POST", "/orders"]],
+};
 const STREAMING = new Set<string>([/* services with uploads/downloads/SSE (D5) */]);
 const FORWARD_REQ = ["accept", "content-type", "accept-language", "x-request-id", "idempotency-key", "last-event-id"];
 const DROP_RES = new Set(["set-cookie", "content-encoding", "content-length", "transfer-encoding", "connection"]);
@@ -230,6 +254,8 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ service: strin
   const { service } = await ctx.params;
   const base = SERVICES[service];
   if (!base) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  if (!isAllowedUpstream(ALLOW[service], req.method, req.nextUrl.pathname, `/api/bff/${service}/`))
+    return NextResponse.json({ error: "not_found" }, { status: 404 });  // INV-13: never reaches the backend
 
   const token = await getBackendAccess();
   if (!token) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });

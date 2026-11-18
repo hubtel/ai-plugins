@@ -10,7 +10,9 @@ broken control) · **Medium** (defence-in-depth gap) · **Low** (hygiene).
 When reporting, cite the standard behind the invariant (links in [sources.md](../sources.md)): INV-1/2 → RFC
 10017 §6.1 and the OWASP Session Management "HTML5 Web Storage API" section; INV-3/6/7 → OWASP Session
 Management "Cookies"/"Session Expiration"; INV-4 → Cloudflare's "server-side validation is mandatory";
-INV-8 → OWASP CSRF "Fetch Metadata headers" / "Using Standard Headers to Verify Origin".
+INV-8 → OWASP CSRF "Fetch Metadata headers" / "Using Standard Headers to Verify Origin"; INV-13 → OWASP
+Authorization "Deny by Default" / "Validate the Permissions on Every Request"; INV-14 → OWASP Secrets Management
+"Detection" / "Remediation".
 
 Read every hit in context. A regex hit is not a finding until confirmed. Theme, locale, and UI flags in
 storage are not credentials.
@@ -108,3 +110,48 @@ Signals: no `frame-ancestors` and no `X-Frame-Options`.
 
 **R-22 Missing baseline headers** — INV-10 — Low — S5
 Signals: no HSTS, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP.
+
+## Exposure
+
+**R-23 Server entry point without enforced access** — INV-13, INV-12 — High (Critical when it returns
+user data or changes state) — S1 (remove or lock down debug routes) + S2 checkpoint 2.3 (session enforcement)
+Signals: the route inventory (detection, "Server entry points"), checked for:
+- Next: `route.ts` and `pages/api/**` handlers with no `auth()`/session check.
+- Next: Server Actions with no session check. Every exported action is a public POST endpoint.
+- Next: a `proxy.ts`/`middleware.ts` matcher that skips `/api`.
+- Nuxt: `server/api/**` and `server/routes/**` with no `requireUserSession`.
+- Server data loaders that fetch with a server credential but never read the session.
+- Debug, test, health, or `env`/`config` routes that expose configuration.
+Confirm: a request with **no cookie** returns non-public data or performs an action. Intentionally public
+entry points are recorded as `public` with a reason: health, the CSP report endpoint, sign-in, OTP request,
+and the auth library's own routes. Ask the user about any route whose intent isn't clear (workflow step 4).
+
+**R-24 BFF or proxy forwards arbitrary backend paths** — INV-13 — High — S2 checkpoint 2.3
+Signals:
+- a catch-all proxy (`[...path]`, `[...]`, `**`) that forwards any path tail
+- `rewrites()` in `next.config` to backend hosts
+- Nitro `routeRules` `proxy`
+- `http-proxy-middleware`
+Confirm: a request for a backend path the app never calls (e.g. `/admin/users`), or with an unused method,
+reaches the backend. Fix: a per-backend allowlist of `[method, pattern]` pairs built from the detection call-site
+list, checked with the portable `isAllowedUpstream`.
+
+**R-25 Hardcoded credential** — INV-14 — Critical (live credential) · High (likely real) · Low (test or
+placeholder) — S1
+Signals:
+- **Scan:** run Snyk's secret scan on the repo when it's available. Otherwise search source, config, tests, CI,
+  and container files for:
+  - assignments like `api[_-]?key`, `secret`, `password`, `passwd`, `token`, `client[_-]?secret`,
+    `private[_-]?key`, or `connection[_-]?string` with a literal string value of 8 or more characters
+  - `-----BEGIN [A-Z ]*PRIVATE KEY-----`, `AKIA[0-9A-Z]{16}`, `sk_live_`
+  - JWT-shaped literals (`eyJ…\.eyJ…`) and credentials in URLs (`https?://user:pass@`)
+- **Files:** committed `.env*` files other than `.env.example`/`.env.sample`, `appsettings*.json`,
+  `docker-compose*.yml`, pipeline YAML.
+- **History:** `git log --all --diff-filter=A --name-only -- '*.env*'`, and for each value found, whether it is
+  in older commits (`git log --all -S '<first 6 chars>' --oneline`).
+Confirm: the value is real, not a placeholder or a key meant to be public (a Turnstile **site** key or a
+publishable key). Never write the value into `audit.md`. Record the file, line, kind, and a redacted
+fingerprint (first 4 characters plus the length).
+Fix: move it to a server-only environment variable, add the name with an empty value to `.env.example`, and
+make sure `.gitignore` covers `.env*`. List **rotation** as a follow-up for the secret's owner, because
+deleting a value from code doesn't revoke it and it stays in history. Never rewrite history.

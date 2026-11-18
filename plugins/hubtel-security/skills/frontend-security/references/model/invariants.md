@@ -40,6 +40,16 @@ exposure of any tokens to the browser.
 | **INV-9** | **Cross-origin read restriction.** Session-bearing endpoints send no CORS headers, unless an exact-match origin allowlist applies. Credentials are never allowed with a wildcard or a reflected origin. | Preflight and actual responses to a foreign `Origin` carry no `Access-Control-Allow-Origin`. |
 | **INV-10** | **Content & framing restriction.** The CSP blocks unapproved script (nonce, hash, or allowlist; no `'unsafe-inline'`/`'unsafe-eval'` for scripts in production), sets `object-src 'none'` and `base-uri`, and restricts framing with `frame-ancestors` (decision D7). Baseline headers are present. | The live headers match the policy, and an attacker page can't frame the app. |
 
+## Exposure (supports C1 and C2)
+
+These keep the session model from being bypassed: through a server entry point that never checks the
+session, through a BFF that forwards anything, or through a credential sitting in the repository.
+
+| ID | Invariant | Holds when… |
+|----|-----------|-------------|
+| **INV-13** | **Explicit route access.** Every server entry point has a declared access level: `public` (with a reason), `session`, or `role:<name>`. Entry points include route handlers, API routes, Server Actions, server data loaders for pages, and the BFF. Each one enforces that level itself, on the server. The BFF forwards only the method and path pairs the app actually uses, per backend. | The route inventory in `audit.md` covers every entry point. A request with no cookie to each non-public entry point gets 401 or a redirect, and returns no data. A BFF request for a method or path not on the allowlist gets 404 and never reaches the backend. |
+| **INV-14** | **Secret containment.** No credential is hardcoded in source, committed config, tests, CI or container files. Credentials include API keys, client secrets, passwords, private keys, connection strings, the session password, and the Turnstile secret. Server secrets come only from server-side environment variables or a secret store. Every credential that was ever committed is reported for rotation. | A secret scan of the working tree is clean, apart from test values the user accepted. `.env*` files other than examples are untracked and ignored. Each credential found in history has a rotation owner recorded. |
+
 INV-7 belongs to C1, but its "POST + provenance" half depends on INV-8. Wherever sign-out exists, INV-8 must
 be in place before or with it. This is why the provenance guard ships in the first stage.
 
@@ -47,3 +57,7 @@ be in place before or with it. This is why the provenance guard ships in the fir
 
 XSS sinks (`v-html`, `dangerouslySetInnerHTML`), open redirects outside the auth flows, dependency risk,
 backend authorization, infrastructure/WAF. The audit may note these as observations but never plans them.
+
+INV-13 checks that each entry point **enforces** its declared level. Whether a role's business rules are correct
+stays out of scope, and so does whether the backends authorize requests themselves. INV-14 never rewrites git
+history and never rotates secrets: rotation belongs to the secret's owner.

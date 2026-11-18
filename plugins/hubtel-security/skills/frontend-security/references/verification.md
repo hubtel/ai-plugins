@@ -31,6 +31,9 @@ BFF route.
 | **V-11** | INV-11 | Sign in via `/login?callbackUrl=` (or `redirect=`) set to each of: `https://evil.example`, `//evil.example`, `/%2f%2fevil.example`, `/%5Cevil.example`, `/%09/evil.example`. | Each lands on a local page. A legitimate `/orders?x=1` deep link is preserved. |
 | **V-12** | INV-12 | (a) Call a Server Action / server route / BFF with no session → rejected. (b) Revoke the session server-side (Store: delete the record; Cookie: force a renewal failure in dev) while a page is open, then act. (c) Sign out in tab A, then act in tab B. | (a) 401/redirect. (b) and (c): the UI moves to sign-in with the return path. No signed-in UI over a dead session. |
 
+| **V-13** | INV-13 | (a) For **every** inventory row that isn't `public`: `curl -i -X <method> $APP/<path>` with no cookie. For Server Actions, trigger the action from a signed-out page, or replay its POST with no cookie. (b) Through the BFF with a valid `$COOKIE`: an unused path (`$APP/api/bff/$SVC/admin/users`), an allowed path with an unused method, and an allowed path. Watch the backend or BFF logs. | (a) 401, 403, or a redirect to sign-in, with no data in the body and no state change. Record the result **per row**: a missing row means not verified. (b) The unused path and method get 404 with no backend request logged. The allowed path works. |
+| **V-14** | INV-14 | Re-run R-25's scan on the working tree. `git ls-files '*.env*'`. `git check-ignore .env .env.local`. Start the app with each moved secret unset. | The scan finds nothing beyond accepted test values. Only example env files are tracked, and real ones are ignored. The app fails fast with a clear "missing <NAME>" error rather than running without the secret. Every history finding has a rotation owner in `plan.md`. |
+
 The V-tests also work as Playwright assertions. Offer that at close-out (Part 3).
 
 ## Part 2 — Impact flows
@@ -58,8 +61,8 @@ Include, per stage:
 
 | Stage | Always include |
 |-------|---------------|
-| S1 | The app behaves exactly as before. Existing forms and actions still submit (same-origin passes ProvenanceGuard). |
-| S2 | Sign-in (each method), wrong code/password, deep-link return, every impacted data flow (load/create/update/delete), hard refresh on data pages (SSR), uploads/downloads/realtime if present, sign-out, a user who still has a legacy token in storage (set it manually first). |
+| S1 | The app behaves exactly as before. Existing forms and actions still submit (same-origin passes ProvenanceGuard). Every feature that uses a moved secret still works (payments, maps, email, Turnstile…), in each environment whose env vars were updated. A start with one secret unset fails clearly. Removed debug routes return 404. |
+| S2 | Sign-in (each method), wrong code/password, deep-link return, every impacted data flow (load/create/update/delete), **every screen that calls a backend** (a missing allowlist entry shows up as a 404), hard refresh on data pages (SSR), public pages and routes still reachable signed out, uploads/downloads/realtime if present, sign-out, a user who still has a legacy token in storage (set it manually first). |
 | S3 | Idle-out and absolute-out (shortened dev limits). |
 | S4 | Any confirmed cross-origin caller still works. Everything else is unchanged. |
 | S5 | Click through every page and collect `[Report Only]` violations, then send the list back to the agent, which adjusts the allowlist or removes inline scripts. |

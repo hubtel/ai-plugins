@@ -1,17 +1,17 @@
 ---
-name: hbtl-frontend-session-management
-description: "Opinionated remediation skill that moves Hubtel web frontends to a BFF session model: the browser holds only an httpOnly session cookie, and a same-origin server layer owns sign-in, credential renewal, sign-out, and proxying to backends. Audits against a framework-agnostic set of invariants (tokens in localStorage or JS-readable cookies, client-side Authorization headers, exposed backend URLs, unverified Turnstile or OTP requests, client-side token refresh, sign-out that doesn't invalidate, missing origin checks, permissive CORS, missing CSP/framing), records the decisions the app's backend dictates, then plans and executes staged fixes on approval through adapters (Next.js + Auth.js, Nuxt + nuxt-auth-utils, or a guided adapter for other stacks) and lists the user flows to test after each stage. Use when asked to audit or fix frontend session/auth handling, move tokens out of local storage, add a BFF, secure sign-in/OTP/sign-out, add origin checks, or add CSP and anti-framing headers. Not a general frontend security scanner."
+name: hbtl-frontend-security
+description: "Opinionated remediation skill that moves Hubtel web frontends to a BFF session model: the browser holds only an httpOnly session cookie, and a same-origin server layer owns sign-in, credential renewal, sign-out, and proxying to backends. Audits against a framework-agnostic set of invariants (tokens in localStorage or JS-readable cookies, client-side Authorization headers, exposed backend URLs, unverified Turnstile or OTP requests, client-side token refresh, sign-out that doesn't invalidate, missing origin checks, permissive CORS, missing CSP/framing, server routes reachable without a session, a BFF that forwards any backend path, hardcoded credentials), records the decisions the app's backend dictates, then plans and executes staged fixes on approval through adapters (Next.js + Auth.js, Nuxt + nuxt-auth-utils, or a guided adapter for other stacks) and lists the user flows to test after each stage. Use when asked to audit or fix frontend session/auth handling, move tokens out of local storage, add a BFF, secure sign-in/OTP/sign-out, add origin checks, add CSP and anti-framing headers, find unauthenticated server endpoints, or find hardcoded credentials in a frontend repo. Not a general frontend security scanner."
 metadata:
   author: "Hubtel Enablement Team"
-  version: "1.0.0"
+  version: "1.1.0"
   date_added: 16-11-2026
-  last_updated: 16-11-2026
+  last_updated: 18-11-2026
 compatibility: Requires git and Node.js. Shipped adapters for Next.js (App/Pages Router) with Auth.js v5 and Nuxt 3/4 with nuxt-auth-utils; other stacks via the adapter guide. Designed for Hubtel frontend projects.
 ---
 
-# Frontend Session Management (`/hbtl-frontend-session-management`)
+# Frontend Security (`/hbtl-frontend-security`)
 
-Follow [references/frontend-session-management-workflow.md](references/frontend-session-management-workflow.md).
+Follow [references/frontend-security-workflow.md](references/frontend-security-workflow.md).
 
 ## Before writing any code: must-do checklist
 
@@ -23,6 +23,7 @@ Do not edit application code until **all** of these are true:
 - [ ] Every residual stated to the user **in plain words** and accepted. This matters most for D1 = Cookie under rotation (see the workflow, Plan).
 - [ ] Adapter chosen, and its component map filled in `plan.md`.
 - [ ] The user approved the specific stage you're about to run.
+- [ ] You're on a compliant feature branch, `users/<username>/feature/<short-desc>` (workflow step 6, branch gate).
 
 ## What this skill is
 
@@ -56,6 +57,7 @@ on any stack.
 |---------|-----------|
 | **C1 Sign-in & sessions**: Auth.js / nuxt-auth-utils, server-side Turnstile, server-side renewal, sign-out invalidation, BFF | INV-1–7, INV-11, INV-12 |
 | **C2 Browser request integrity**: origin verification (incl. sign-out), cross-origin restriction, CSP and framing | INV-8, INV-9, INV-10 |
+| **Exposure** (supports C1 and C2): no unauthenticated server entry points, a BFF that forwards only used paths, no hardcoded credentials | INV-13, INV-14 |
 
 **Out of scope** (noted as observations only, never planned): XSS sinks, non-auth open redirects, dependency
 risk, backend authorization, infrastructure/WAF.
@@ -65,12 +67,12 @@ risk, backend authorization, infrastructure/WAF.
 These are conventions that describe intent to the agent. They are not a CLI binary.
 
 ```
-/hbtl-frontend-session-management              # Full run: detect → audit → decide → plan → stages on approval
-/hbtl-frontend-session-management --audit      # Detect + audit only (read-only)
-/hbtl-frontend-session-management --plan       # Audit + decisions + staged plan (read-only)
-/hbtl-frontend-session-management --resume     # Continue from .hbtl/frontend-session-management/plan.md
-/hbtl-frontend-session-management --stage S2   # Execute one approved stage
-/hbtl-frontend-session-management --verify     # Re-run the V-tests and report invariant status
+/hbtl-frontend-security              # Full run: detect → audit → decide → plan → stages on approval
+/hbtl-frontend-security --audit      # Detect + audit only (read-only)
+/hbtl-frontend-security --plan       # Audit + decisions + staged plan (read-only)
+/hbtl-frontend-security --resume     # Continue from .hbtl/frontend-security/plan.md
+/hbtl-frontend-security --stage S2   # Execute one approved stage
+/hbtl-frontend-security --verify     # Re-run the V-tests and report invariant status
 ```
 
 ## Operating rules
@@ -86,7 +88,10 @@ These are conventions that describe intent to the agent. They are not a CLI bina
    explicitly agrees to add one.
 4. **Nothing changes without approval.** Steps 1–5 are read-only. Each stage runs only after approval and
    pauses afterwards.
-5. **No branches, commits, or PRs.** Edit the working tree. Warn first if it's dirty.
+5. **Work on a Hubtel feature branch.** Before the first edit, make sure you're on
+   `users/<username>/feature/<short-desc>`. Never edit on `main`, `master`, or `development`. Use one branch for
+   the whole run, and make one local commit per completed stage. Don't push or open a PR unless the user asks.
+   See workflow step 6, branch gate.
 6. **Ask what the code can't tell you**, in one batch (workflow step 4).
 7. **The app keeps working after every stage.** The default cutover is atomic. A bridge exists only by explicit
    decision (D3), with its Critical residual stated.
@@ -103,8 +108,8 @@ These are conventions that describe intent to the agent. They are not a CLI bina
 
 | File | Purpose |
 |------|---------|
-| `.hbtl/frontend-session-management/audit.md` | Facts sheet, invariant status, findings |
-| `.hbtl/frontend-session-management/plan.md` | Decisions, component map, stages with evidence (enables `--resume`) |
+| `.hbtl/frontend-security/audit.md` | Facts sheet, invariant status, findings |
+| `.hbtl/frontend-security/plan.md` | Branch, decisions, component map, Mermaid diagrams (stage flow, target architecture, S2 checkpoints), stages with evidence and commits (enables `--resume`) |
 
 ## Sources
 

@@ -12,10 +12,11 @@ A component is done when its contract holds **and** the verification tests for i
 | AuthBackendAdapter | INV-4, 5, 7 | Yes (per backend) |
 | HumanVerifier | INV-4 | Yes |
 | BackendAccess | INV-5, 12 | Partly |
-| BffProxy | INV-1, 2 | Partly (URL builder is portable) |
+| BffProxy | INV-1, 2, 13 | Partly (URL builder and path allowlist are portable) |
 | ProvenanceGuard | INV-8 | Yes |
 | RedirectGuard | INV-11 | Yes |
-| ServerRouteGuard | INV-12 | No |
+| ServerRouteGuard | INV-12, 13 | No |
+| ServerConfig | INV-14 | Partly (the pattern is portable) |
 | ClientSessionWatcher | INV-12 | No |
 | CorsPolicy | INV-9 | No (config) |
 | SecurityHeaders | INV-10 | Policy portable, wiring not |
@@ -61,6 +62,10 @@ token is spent.
   the query.
 - The target URL is built from the **raw encoded request path** with the portable `buildUpstreamUrl` (blocks
   traversal and encoded-slash/backslash tricks, never double-encodes).
+- **Path allowlist (INV-13).** Each service has a server-side list of `[method, pattern]` pairs (`:param`
+  matches one segment). It's built from the methods and paths the app calls, as listed in detection. The
+  portable `isAllowedUpstream` checks it **before** credentials are loaded. A miss returns 404 without
+  contacting the backend. There are no catch-all patterns: a new call site means a new entry.
 - Forwards an allowlist of request headers. Never forwards browser cookies. Adds
   `Authorization` from BackendAccess. Strips `set-cookie` and hop-by-hop headers from the response.
 - Streams request and response bodies when the route carries uploads, downloads, or SSE (D5). Otherwise
@@ -86,6 +91,19 @@ and client.
 Every server entry point that returns protected data or performs an action checks the session itself: pages'
 server data loading, server actions, route handlers, the BFF. Edge or route middleware may redirect for UX,
 but it isn't the boundary.
+
+The check matches the access level recorded for that entry point in the route inventory (INV-13):
+- `public`: no check, and the inventory gives the reason.
+- `session`: a valid session is required.
+- `role:<name>`: a valid session, plus the role taken from the **server-side** session, never from the
+  request.
+Debug, test, and config-dumping routes are removed, or limited to development builds.
+
+### ServerConfig
+A single server-only module reads every secret from the environment (or the secret store), and fails at
+startup with `missing <NAME>` if one is absent. Client code can't import it (Next: `import "server-only"`;
+Nuxt: private `runtimeConfig` keys, never `public`). No secret has a literal fallback value. Each name is
+listed with an empty value in `.env.example`.
 
 ### ClientSessionWatcher
 - On a BFF 401: clear client auth state, then navigate to sign-in with `redirect=<current path>` (passed
