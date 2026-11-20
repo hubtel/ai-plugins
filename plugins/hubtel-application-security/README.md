@@ -1,24 +1,25 @@
-# Hubtel Security
+# Hubtel Application Security
 
-Plugin for security skills that audit and remediate Hubtel applications. Each skill covers specific security
-controls, applies changes only with your approval, and tells you what to test afterwards. Skills work on a
-Hubtel feature branch (`users/<username>/feature/<short-desc>`) with one local commit per stage. They never push
-or open PRs unless you ask.
+Plugin for security skills that review and remediate Hubtel applications. Review skills are read-only by
+default. Remediation skills cover specific security controls, apply changes only with your approval, and tell
+you what to test afterwards. They work on a Hubtel feature branch (`users/<username>/feature/<short-desc>`)
+with one local commit per stage, and never push or open PRs unless you ask.
 
-> **Status: pilot.** The `security` skill pack is `readyForGeneralUse: false`. Start with each skill's
-> read-only modes and review its plan before approving any change.
+> **Status: pilot.** The `application-security` skill pack is `readyForGeneralUse: false`. Start with each
+> skill's read-only modes and review its plan before approving any change.
 
 ## Contents
 
 | Kind | Name | Pack | Covers |
 |------|------|------|--------|
-| Skill | `hbtl-frontend-security` | `security` | C1 Sign-in & sessions · C2 Browser request integrity · Exposure (routes, secrets) |
+| Skill | `hbtl-project-security-review` | `application-security` | Read-only review: identity and sessions, authorization and tenancy, money flows, abuse and logic bugs |
+| Skill | `hbtl-frontend-security` | `application-security` | C1 Sign-in & sessions · C2 Browser request integrity · Exposure (routes, secrets) |
 | MCP server | `hubtel-engineering` (`npx -y @hubtel/engineering-mcp@latest`) | — | `audit_packages`, used before any dependency install |
 
 ## Install
 
 ```shell
-aqua add-plugin --plugin hubtel-security --agent cursor claude-code codex \
+aqua add-plugin --plugin hubtel-application-security --agent cursor claude-code codex \
   --source /absolute/path/to/Hubtel-Agent-Repo
 ```
 
@@ -28,6 +29,25 @@ After the marketplace is published, omit `--source` to install from the org cata
 
 - Node.js and git in the target app.
 - Optional: the Snyk MCP for code scans of changed files. Skills use it when it's available.
+
+---
+
+## Skill: `hbtl-project-security-review`
+
+A defensive source and configuration review of a project, service, or pull request. It's read-only unless you
+ask for changes, and it never probes live targets or makes real transactions.
+
+- Maps entry points and trust boundaries: browser and BFF code, APIs, workers, queues, webhooks, admin tools.
+- Traces identity, sessions, and permissions end to end, including tenant isolation.
+- Inventories every path that changes money or financial state: server authority over amounts, idempotency
+  and retries, webhooks, ledgers, and reconciliation.
+- Looks for abuse cases and logic bugs, including control gaps that compound across services.
+
+It reports findings by severity with file and line evidence, coverage per flow or control, and a remediation
+order.
+
+**Triggers (examples):** security review of this repo or PR, vulnerability audit, release review, review
+login / MFA / passkeys, check tenant isolation, review payments, payouts, refunds, wallets, or settlement.
 
 ---
 
@@ -71,6 +91,7 @@ endpoints, find hardcoded credentials.
 
 ## Adding a skill to this plugin
 
-Put the skill in `skill-packs/security/skills/<skill>/`, add its name to this plugin's `skills.json`, add a
+Put the skill in `skill-packs/application-security/skills/<skill>/` (name the folder after the skill, since
+agents use the folder name as the command), add its name to this plugin's `skills.json`, add a
 row to the Contents table and a section above, bump the plugin `version` in `hubtel-marketplace.json`, and run
 `node marketplace/scripts/validate-marketplace.mjs`.

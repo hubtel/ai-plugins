@@ -1,0 +1,29 @@
+{
+  "name": "hubtel-application-security",
+  "version": "0.3.0",
+  "description": "Application security skills for Hubtel apps. Project security review: a read-only review of sessions, permissions, tenancy, and money flows. Frontend security: move Next.js and Nuxt frontends to a BFF session model, then plan and apply approved fixes for sign-in, renewal, sign-out, origin checks, CORS, CSP, unauthenticated routes, and hardcoded credentials.",
+  "author": {
+    "name": "Hubtel Enablement Team",
+    "email": "engineering@hubtel.com"
+  },
+  "keywords": [
+    "hubtel",
+    "security",
+    "security-review",
+    "payments",
+    "session",
+    "bff",
+    "nextauth",
+    "nuxt-auth-utils",
+    "csp",
+    "turnstile"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Hubtel Application Security",
+    "category": "Engineering",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
+  }
+}

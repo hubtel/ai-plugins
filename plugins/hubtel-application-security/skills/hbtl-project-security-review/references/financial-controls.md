@@ -1,0 +1,13 @@
+# Financial controls
+
+Cover checkout, charges, captures, transfers, payouts, refunds, reversals, disputes, wallet credits and debits, credit limits, fees, taxes, discounts, FX, subscriptions, settlement, reconciliation, and manual adjustments where present. Include provider callbacks, browser redirects, admin tools, batch jobs, and migration or backfill paths.
+
+| Control | Evidence to inspect |
+| --- | --- |
+| Server authority | Trace amount, currency, pricing, fees, and discounts to authoritative records or server calculations. Bind the order, merchant, customer, funding source, beneficiary, and provider account to the operation. Check exact arithmetic, rounding, allowed currency precision, bounds, and currency consistency. |
+| Transaction authorization | Check ownership and permissions at initiation, approval, and execution. Review step-up authentication for high-risk changes, beneficiary verification, separation of duties, and limits across user, tenant, and time window. Bind approval to the exact details being executed. |
+| State transitions | Identify permitted transitions and who can authorize each. Verify payment status against authenticated provider evidence and correlate provider account, amount, currency, and reference with the internal record. Review partial payments, reversals, out-of-order notifications, and late success after timeout or cancellation. |
+| Retries and concurrency | Inspect atomic writes, uniqueness constraints, balance reservations, optimistic locks or isolation, provider idempotency, and durable processing state. Verify keys bind to operation, tenant, and request semantics. Trace duplicate delivery, simultaneous operations, failures between writes and side effects, and workers restarting mid-operation. |
+| Webhooks and settlement | Review signature validation over the provider-required message, key scope and rotation, freshness where supported, and durable deduplication. Trace acknowledgement, asynchronous processing, event correlation, and recovery of unmatched or missing events. |
+| Ledger and balances | Verify atomic balance updates, immutable audit history, balanced postings where double-entry applies, available versus pending balances, and consistent links to authoritative transactions. Review negative balances, over-refunds, and whether compensating entries preserve history. |
+| Reconciliation and operations | Compare internal records, provider records, and bank or settlement reports where available. Inspect discrepancy alerts, exception ownership, refunds and disputes, adjustment approvals, and audit events recording actor, approval, operation, and correlation IDs without sensitive credentials. |

@@ -61,18 +61,18 @@
       "version": "1.1.0"
     },
     {
-      "name": "hubtel-security",
+      "name": "hubtel-application-security",
       "source": {
         "source": "local",
-        "path": "./plugins/hubtel-security"
+        "path": "./plugins/hubtel-application-security"
       },
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
       "category": "Engineering",
-      "description": "Security skills for Hubtel apps. Includes frontend security: move Next.js and Nuxt frontends to a BFF session model, then plan and apply approved fixes for sign-in, renewal, sign-out, origin checks, CORS, CSP, unauthenticated routes, and hardcoded credentials.",
-      "version": "0.2.0"
+      "description": "Application security skills for Hubtel apps. Project security review: a read-only review of sessions, permissions, tenancy, and money flows. Frontend security: move Next.js and Nuxt frontends to a BFF session model, then plan and apply approved fixes for sign-in, renewal, sign-out, origin checks, CORS, CSP, unauthenticated routes, and hardcoded credentials.",
+      "version": "0.3.0"
     }
   ]
 }

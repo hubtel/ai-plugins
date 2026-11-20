@@ -1,0 +1,14 @@
+interface:
+  display_name: Hubtel Project Security Review
+  short_description: Review sessions, permissions, and money flows
+  default_prompt: Use $hbtl-project-security-review to audit this project, prioritizing
+    account security and money movement.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
